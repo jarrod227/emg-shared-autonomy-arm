@@ -14,7 +14,7 @@ setup(
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="Jiayu Yang",
-    maintainer_email="jiayu@example.com",
+    maintainer_email="jarrodyang227@gmail.com",
     description="Minimal ROS 2 package for the first assistive robot object-reaching demo.",
     license="Apache-2.0",
     tests_require=["pytest"],

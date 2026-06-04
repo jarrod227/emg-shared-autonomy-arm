@@ -4,12 +4,13 @@
   <name>object1_demo</name>
   <version>0.0.1</version>
   <description>Minimal ROS 2 package for the first assistive robot object-reaching demo.</description>
-  <maintainer email="jiayu@example.com">Jiayu Yang</maintainer>
+  <maintainer email="jarrodyang227@gmail.com">Jiayu Yang</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
 
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 

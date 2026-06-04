@@ -1,6 +1,8 @@
 """Move a simulated robot arm toward a fixed object pose."""
 
 import rclpy
+from moveit_msgs.action import MoveGroup
+from rclpy.action import ActionClient
 from rclpy.node import Node
 
 
@@ -22,6 +24,8 @@ class MoveToObjectNode(Node):
         self.end_effector_frame = self.get_parameter("end_effector_frame").value
         self.home_state = self.get_parameter("home_state").value
 
+        self.move_group_client = ActionClient(self, MoveGroup, "move_action")
+
         # TODO: Define object1's fixed pose.
         # TODO: Connect to the MoveIt 2 planning interface.
         # TODO: Request motion to object1 and then return home.
@@ -34,6 +38,17 @@ class MoveToObjectNode(Node):
             f"end_effector_frame={self.end_effector_frame}, "
             f"home_state={self.home_state}"
         )
+        self._log_move_group_server_status()
+
+    def _log_move_group_server_status(self) -> None:
+        """Log whether the MoveIt move_group action server is available."""
+        if self.move_group_client.wait_for_server(timeout_sec=2.0):
+            self.get_logger().info("Connected to MoveIt move_group action server.")
+        else:
+            self.get_logger().warn(
+                "MoveIt move_group action server not available. "
+                "Start the Panda MoveIt demo first."
+            )
 
 
 def main(args=None) -> None:
