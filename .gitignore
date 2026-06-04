@@ -1,0 +1,15 @@
+# ROS 2 generated directories
+build/
+install/
+log/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
