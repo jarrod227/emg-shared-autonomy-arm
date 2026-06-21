@@ -1,8 +1,10 @@
 """Move a simulated robot arm toward a fixed object pose."""
 
+import time
+
 import rclpy
 from moveit_msgs.action import MoveGroup
-from moveit_msgs.msg import Constraints, JointConstraint
+from moveit_msgs.msg import Constraints, JointConstraint, MoveItErrorCodes
 from rclpy.action import ActionClient
 from rclpy.node import Node
 
@@ -10,11 +12,11 @@ from rclpy.node import Node
 class MoveToObjectNode(Node):
     """Starting point for the object1 fixed-pose demo."""
 
-    READY_JOINT_POSITIONS = (
+    EXTENDED_JOINT_POSITIONS = (
         ("panda_joint1", 0.0),
-        ("panda_joint2", -0.785),
+        ("panda_joint2", 0.0),
         ("panda_joint3", 0.0),
-        ("panda_joint4", -2.356),
+        ("panda_joint4", 0.0),
         ("panda_joint5", 0.0),
         ("panda_joint6", 1.571),
         ("panda_joint7", 0.785),
@@ -54,27 +56,27 @@ class MoveToObjectNode(Node):
             f"end_effector_frame={self.end_effector_frame}, "
             f"home_state={self.home_state}"
         )
-        self._log_move_group_server_status()
         self._log_plan_only_goal()
+        self._send_plan_only_goal()
 
     def _build_plan_only_goal(self) -> MoveGroup.Goal:
-        """Create a local MoveIt goal skeleton without sending it."""
+        """Create a local plan-only goal for Panda's extended state."""
         goal = MoveGroup.Goal()
         goal.request.group_name = self.planning_group
         goal.request.allowed_planning_time = float(self.allowed_planning_time)
         goal.request.num_planning_attempts = int(self.num_planning_attempts)
         goal.planning_options.plan_only = True
 
-        ready_constraints = Constraints()
-        for joint_name, position in self.READY_JOINT_POSITIONS:
+        extended_constraints = Constraints()
+        for joint_name, position in self.EXTENDED_JOINT_POSITIONS:
             joint_constraint = JointConstraint()
             joint_constraint.joint_name = joint_name
             joint_constraint.position = position
             joint_constraint.tolerance_above = 0.001
             joint_constraint.tolerance_below = 0.001
             joint_constraint.weight = 1.0
-            ready_constraints.joint_constraints.append(joint_constraint)
-        goal.request.goal_constraints.append(ready_constraints)
+            extended_constraints.joint_constraints.append(joint_constraint)
+        goal.request.goal_constraints.append(extended_constraints)
 
         return goal
 
@@ -90,18 +92,93 @@ class MoveToObjectNode(Node):
         )
         for constraint in self.plan_only_goal.request.goal_constraints[0].joint_constraints:
             self.get_logger().info(
-                f"Ready constraint: {constraint.joint_name}={constraint.position} rad"
+                f"Extended constraint: {constraint.joint_name}={constraint.position} rad"
             )
 
-    def _log_move_group_server_status(self) -> None:
-        """Log whether the MoveIt move_group action server is available."""
+    def _send_plan_only_goal(self) -> None:
+        """Send the extended-state goal to MoveIt without executing a trajectory."""
+        if not self._wait_for_move_group_server():
+            return
+
+        self._plan_request_start_time = time.monotonic()
+        send_goal_future = self.move_group_client.send_goal_async(self.plan_only_goal)
+        send_goal_future.add_done_callback(self._on_goal_response)
+        self.get_logger().info("Sent plan-only goal to MoveIt.")
+
+    def _wait_for_move_group_server(self) -> bool:
+        """Return whether the MoveIt move_group action server is available."""
         if self.move_group_client.wait_for_server(timeout_sec=2.0):
             self.get_logger().info("Connected to MoveIt move_group action server.")
-        else:
-            self.get_logger().warn(
-                "MoveIt move_group action server not available. "
-                "Start the Panda MoveIt demo first."
+            return True
+
+        self.get_logger().warn(
+            "MoveIt move_group action server not available. "
+            "Start the Panda MoveIt demo first."
+        )
+        return False
+
+    def _on_goal_response(self, future) -> None:
+        """Handle MoveIt's response to the plan-only goal request."""
+        try:
+            goal_handle = future.result()
+        except Exception as error:
+            self.get_logger().error(f"Failed to send MoveIt goal: {error}")
+            return
+
+        if not goal_handle.accepted:
+            self.get_logger().error("MoveIt rejected the plan-only goal.")
+            return
+
+        self.get_logger().info("MoveIt accepted the plan-only goal.")
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self._on_plan_result)
+
+    def _log_planned_trajectory(self, result) -> None:
+        """Log the joint trajectory returned by a successful plan-only request."""
+        trajectory = result.planned_trajectory.joint_trajectory
+        if not trajectory.points:
+            self.get_logger().warn("Planning succeeded but returned no joint trajectory points.")
+            return
+
+        first_point = trajectory.points[0]
+        final_point = trajectory.points[-1]
+        self.get_logger().info(
+            "Planned trajectory: "
+            f"joint_names={list(trajectory.joint_names)}, "
+            f"point_count={len(trajectory.points)}"
+        )
+        self.get_logger().info(
+            f"First point positions={list(first_point.positions)}"
+        )
+        self.get_logger().info(
+            f"Final point positions={list(final_point.positions)}"
+        )
+
+    def _on_plan_result(self, future) -> None:
+        """Log the result of the plan-only request."""
+        try:
+            action_result = future.result()
+        except Exception as error:
+            self.get_logger().error(f"Failed to receive MoveIt result: {error}")
+            return
+
+        result = action_result.result
+        wall_time = time.monotonic() - self._plan_request_start_time
+        if result.error_code.val == MoveItErrorCodes.SUCCESS:
+            self.get_logger().info(
+                "Planning succeeded: "
+                f"planning_time={result.planning_time:.3f}s, "
+                f"wall_time={wall_time:.3f}s"
             )
+            self._log_planned_trajectory(result)
+            return
+
+        self.get_logger().error(
+            "Planning failed: "
+            f"error_code={result.error_code.val}, "
+            f"message={result.error_code.message or 'no message'}, "
+            f"wall_time={wall_time:.3f}s"
+        )
 
 
 def main(args=None) -> None:
