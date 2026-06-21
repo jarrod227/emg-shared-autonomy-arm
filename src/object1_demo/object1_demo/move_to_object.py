@@ -2,12 +2,23 @@
 
 import rclpy
 from moveit_msgs.action import MoveGroup
+from moveit_msgs.msg import Constraints, JointConstraint
 from rclpy.action import ActionClient
 from rclpy.node import Node
 
 
 class MoveToObjectNode(Node):
     """Starting point for the object1 fixed-pose demo."""
+
+    READY_JOINT_POSITIONS = (
+        ("panda_joint1", 0.0),
+        ("panda_joint2", -0.785),
+        ("panda_joint3", 0.0),
+        ("panda_joint4", -2.356),
+        ("panda_joint5", 0.0),
+        ("panda_joint6", 1.571),
+        ("panda_joint7", 0.785),
+    )
 
     def __init__(self) -> None:
         super().__init__("move_to_object")
@@ -53,6 +64,18 @@ class MoveToObjectNode(Node):
         goal.request.allowed_planning_time = float(self.allowed_planning_time)
         goal.request.num_planning_attempts = int(self.num_planning_attempts)
         goal.planning_options.plan_only = True
+
+        ready_constraints = Constraints()
+        for joint_name, position in self.READY_JOINT_POSITIONS:
+            joint_constraint = JointConstraint()
+            joint_constraint.joint_name = joint_name
+            joint_constraint.position = position
+            joint_constraint.tolerance_above = 0.001
+            joint_constraint.tolerance_below = 0.001
+            joint_constraint.weight = 1.0
+            ready_constraints.joint_constraints.append(joint_constraint)
+        goal.request.goal_constraints.append(ready_constraints)
+
         return goal
 
     def _log_plan_only_goal(self) -> None:
@@ -62,8 +85,13 @@ class MoveToObjectNode(Node):
             f"group_name={self.plan_only_goal.request.group_name}, "
             f"allowed_planning_time={self.plan_only_goal.request.allowed_planning_time}, "
             f"num_planning_attempts={self.plan_only_goal.request.num_planning_attempts}, "
-            f"plan_only={self.plan_only_goal.planning_options.plan_only}"
+            f"plan_only={self.plan_only_goal.planning_options.plan_only}, "
+            f"joint_constraints={len(self.plan_only_goal.request.goal_constraints[0].joint_constraints)}"
         )
+        for constraint in self.plan_only_goal.request.goal_constraints[0].joint_constraints:
+            self.get_logger().info(
+                f"Ready constraint: {constraint.joint_name}={constraint.position} rad"
+            )
 
     def _log_move_group_server_status(self) -> None:
         """Log whether the MoveIt move_group action server is available."""
