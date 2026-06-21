@@ -136,7 +136,7 @@ class MoveToObjectNode(Node):
             self.get_logger().error("MoveIt rejected the plan-only goal.")
             return
 
-        self.get_logger().info("MoveIt accepted the plan-only goal.")
+        self.get_logger().info("MoveIt accepted the goal.")
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self._on_plan_result)
 
