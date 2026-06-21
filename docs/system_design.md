@@ -85,6 +85,20 @@ Objective 1 component. It should use MoveIt 2 with a supported simulated arm.
 The robot description, planning group, planning frame, and end-effector frame
 must be confirmed before implementation.
 
+The backend should sit behind a robot-command abstraction so the same reaching
+coordinator can target either platform:
+
+```text
+robot command abstraction
+-> backend A: MoveIt 2 Panda simulation (Objective 1)
+-> backend B: LeRobot SO-ARM101 real arm (Objective 5)
+```
+
+Backend B controls a real SO-ARM101 (5-DOF arm + gripper, 6 Feetech servos)
+through LeRobot, optionally bridged from a ROS 2 command node. The 5-DOF arm
+cannot reach arbitrary 6-DOF poses, so joint-space goals are often more reliable
+than full Cartesian pose goals.
+
 ### RViz Visualization
 
 Objective 1 component. It should display the simulated arm, target pose, planned
@@ -129,13 +143,16 @@ responsibilities are:
 
 | Responsibility | Current status |
 | --- | --- |
-| `object1_demo`: Objective 1 reaching orchestration | existing scaffold |
-| robot description and simulated arm setup | Objective 1 package or integration |
-| MoveIt 2 configuration | Objective 1 package or integration |
-| fixed target-pose publisher | Objective 1 node |
-| marker-based object-pose provider | future extension |
-| constrained target selector | future extension |
-| handoff controller | future extension |
+| `object1_demo`: Objective 1 reaching orchestration | implemented (MoveIt plan-and-execute) |
+| robot description and simulated arm setup | integrated (`moveit_resources_panda_*`) |
+| MoveIt 2 configuration | integrated (`moveit_resources_panda_moveit_config`) |
+| fixed target-pose publisher | Objective 1 node (pending) |
+| unified `/target_object_pose` interface | Objective 2 |
+| marker-based object-pose provider | Objective 3 |
+| constrained target selector | Objective 3 |
+| delivery / handoff controller | Objective 4 |
+| SO-ARM101 LeRobot backend (backend B) | Objective 5 |
+| LeRobot imitation-learning policy | Objective 6 (optional) |
 | evaluation tooling | incremental scripts or package |
 
 Avoid creating these packages until their milestone begins and their interfaces
