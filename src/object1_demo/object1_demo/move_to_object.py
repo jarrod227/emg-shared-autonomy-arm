@@ -48,8 +48,8 @@ class MoveToObjectNode(Node):
         ("panda_joint7", 0.785),
     )
 
-    def __init__(self) -> None:
-        super().__init__("move_to_object")
+    def __init__(self, **kwargs) -> None:
+        super().__init__("move_to_object", **kwargs)
 
         self.declare_parameter("planning_group", "panda_arm")
         self.declare_parameter("planning_frame", "world")
@@ -59,6 +59,7 @@ class MoveToObjectNode(Node):
         self.declare_parameter("allowed_planning_time", 5.0)
         self.declare_parameter("num_planning_attempts", 1)
         self.declare_parameter("execute", True)
+        self.declare_parameter("auto_start", True)
 
         self.planning_group = self.get_parameter("planning_group").value
         self.planning_frame = self.get_parameter("planning_frame").value
@@ -68,6 +69,7 @@ class MoveToObjectNode(Node):
         self.allowed_planning_time = self.get_parameter("allowed_planning_time").value
         self.num_planning_attempts = self.get_parameter("num_planning_attempts").value
         self.execute = self.get_parameter("execute").value
+        self.auto_start = self.get_parameter("auto_start").value
 
         self.move_group_client = ActionClient(self, MoveGroup, "move_action")
         self.state = self.IDLE
@@ -83,7 +85,8 @@ class MoveToObjectNode(Node):
             f"end_effector_frame={self.end_effector_frame}, "
             f"home_state={self.home_state}"
         )
-        self._start_sequence()
+        if self.auto_start:
+            self._start_sequence()
 
     def _transition(self, new_state: str) -> None:
         """Record a state-machine transition."""
