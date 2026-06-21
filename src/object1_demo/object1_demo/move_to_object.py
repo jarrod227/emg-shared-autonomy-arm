@@ -32,6 +32,7 @@ class MoveToObjectNode(Node):
         self.declare_parameter("home_state", "ready")
         self.declare_parameter("allowed_planning_time", 5.0)
         self.declare_parameter("num_planning_attempts", 1)
+        self.declare_parameter("execute", True)
 
         self.planning_group = self.get_parameter("planning_group").value
         self.planning_frame = self.get_parameter("planning_frame").value
@@ -40,6 +41,7 @@ class MoveToObjectNode(Node):
         self.home_state = self.get_parameter("home_state").value
         self.allowed_planning_time = self.get_parameter("allowed_planning_time").value
         self.num_planning_attempts = self.get_parameter("num_planning_attempts").value
+        self.execute = self.get_parameter("execute").value
 
         self.move_group_client = ActionClient(self, MoveGroup, "move_action")
         self.plan_only_goal = self._build_plan_only_goal()
@@ -60,12 +62,16 @@ class MoveToObjectNode(Node):
         self._send_plan_only_goal()
 
     def _build_plan_only_goal(self) -> MoveGroup.Goal:
-        """Create a local plan-only goal for Panda's extended state."""
+        """Create a MoveIt goal for Panda's extended state.
+
+        When ``execute`` is True the goal plans and runs the trajectory;
+        otherwise MoveIt only returns the plan without moving the arm.
+        """
         goal = MoveGroup.Goal()
         goal.request.group_name = self.planning_group
         goal.request.allowed_planning_time = float(self.allowed_planning_time)
         goal.request.num_planning_attempts = int(self.num_planning_attempts)
-        goal.planning_options.plan_only = True
+        goal.planning_options.plan_only = not self.execute
 
         extended_constraints = Constraints()
         for joint_name, position in self.EXTENDED_JOINT_POSITIONS:
@@ -103,7 +109,8 @@ class MoveToObjectNode(Node):
         self._plan_request_start_time = time.monotonic()
         send_goal_future = self.move_group_client.send_goal_async(self.plan_only_goal)
         send_goal_future.add_done_callback(self._on_goal_response)
-        self.get_logger().info("Sent plan-only goal to MoveIt.")
+        mode = "plan-and-execute" if self.execute else "plan-only"
+        self.get_logger().info(f"Sent {mode} goal to MoveIt.")
 
     def _wait_for_move_group_server(self) -> bool:
         """Return whether the MoveIt move_group action server is available."""
@@ -164,17 +171,19 @@ class MoveToObjectNode(Node):
 
         result = action_result.result
         wall_time = time.monotonic() - self._plan_request_start_time
+        phase = "Motion" if self.execute else "Planning"
         if result.error_code.val == MoveItErrorCodes.SUCCESS:
             self.get_logger().info(
-                "Planning succeeded: "
+                f"{phase} succeeded: "
                 f"planning_time={result.planning_time:.3f}s, "
                 f"wall_time={wall_time:.3f}s"
             )
             self._log_planned_trajectory(result)
             return
 
+        # On failure MoveIt returns no executable trajectory, so the arm stays put.
         self.get_logger().error(
-            "Planning failed: "
+            f"{phase} failed: "
             f"error_code={result.error_code.val}, "
             f"message={result.error_code.message or 'no message'}, "
             f"wall_time={wall_time:.3f}s"
