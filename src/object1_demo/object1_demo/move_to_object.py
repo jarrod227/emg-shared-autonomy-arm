@@ -60,6 +60,8 @@ class MoveToObjectNode(Node):
         self.declare_parameter("num_planning_attempts", 1)
         self.declare_parameter("execute", True)
         self.declare_parameter("auto_start", True)
+        self.declare_parameter("velocity_scaling", 0.2)
+        self.declare_parameter("acceleration_scaling", 0.2)
 
         self.planning_group = self.get_parameter("planning_group").value
         self.planning_frame = self.get_parameter("planning_frame").value
@@ -70,6 +72,12 @@ class MoveToObjectNode(Node):
         self.num_planning_attempts = self.get_parameter("num_planning_attempts").value
         self.execute = self.get_parameter("execute").value
         self.auto_start = self.get_parameter("auto_start").value
+        self.velocity_scaling = float(
+            self.get_parameter("velocity_scaling").value
+        )
+        self.acceleration_scaling = float(
+            self.get_parameter("acceleration_scaling").value
+        )
 
         self.move_group_client = ActionClient(self, MoveGroup, "move_action")
         self.state = self.IDLE
@@ -124,6 +132,8 @@ class MoveToObjectNode(Node):
         goal.request.group_name = self.planning_group
         goal.request.allowed_planning_time = float(self.allowed_planning_time)
         goal.request.num_planning_attempts = int(self.num_planning_attempts)
+        goal.request.max_velocity_scaling_factor = self.velocity_scaling
+        goal.request.max_acceleration_scaling_factor = self.acceleration_scaling
         goal.planning_options.plan_only = not self.execute
 
         constraints = Constraints()

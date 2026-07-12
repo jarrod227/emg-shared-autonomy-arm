@@ -52,6 +52,8 @@ def test_build_joint_goal_plan_and_execute():
         goal = node._build_joint_goal(node.OBJECT1_JOINT_POSITIONS)
 
         assert goal.request.group_name == "panda_arm"
+        assert goal.request.max_velocity_scaling_factor == pytest.approx(0.2)
+        assert goal.request.max_acceleration_scaling_factor == pytest.approx(0.2)
         assert goal.planning_options.plan_only is False
 
         constraints = goal.request.goal_constraints[0].joint_constraints
