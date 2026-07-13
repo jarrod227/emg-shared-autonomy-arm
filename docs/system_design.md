@@ -1,5 +1,10 @@
 # System Design
 
+## Current Verified Status (2026-07-13)
+
+This section supersedes older scaffold descriptions below. The current MoveToObjectNode is a reaching coordinator: it sends a Cartesian object1 pose goal for panda_link8 in world to MoveIt, then sends a joint-space ready home goal. The fixed pose is configured inside the coordinator; a separate topic publisher is deferred to Objective 2. RViz execution is verified, while a dedicated visual target marker remains pending.
+
+
 ## Design Status
 
 This document distinguishes the current ROS 2 scaffold, the Objective 1 target,
