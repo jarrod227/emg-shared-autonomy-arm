@@ -14,7 +14,9 @@ from moveit_msgs.msg import (
 )
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from shape_msgs.msg import SolidPrimitive
+from visualization_msgs.msg import Marker
 
 
 class MoveToObjectNode(Node):
@@ -91,6 +93,15 @@ class MoveToObjectNode(Node):
             for name in ("object1_qx", "object1_qy", "object1_qz", "object1_qw")
         )
 
+        marker_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.object1_marker_publisher = self.create_publisher(
+            Marker,
+            "object1_target",
+            marker_qos,
+        )
         self.move_group_client = ActionClient(self, MoveGroup, "move_action")
         self.state = self.IDLE
         self._current_target = ""
@@ -105,8 +116,43 @@ class MoveToObjectNode(Node):
             f"end_effector_frame={self.end_effector_frame}, "
             f"home_state={self.home_state}"
         )
+        self._publish_object1_marker()
         if self.auto_start:
             self._start_sequence()
+
+    def _build_object1_marker(self) -> Marker:
+        """Create the RViz marker for the fixed object1 target pose."""
+        marker = Marker()
+        marker.header.frame_id = self.planning_frame
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "object1"
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        (
+            marker.pose.position.x,
+            marker.pose.position.y,
+            marker.pose.position.z,
+        ) = self.object1_position
+        (
+            marker.pose.orientation.x,
+            marker.pose.orientation.y,
+            marker.pose.orientation.z,
+            marker.pose.orientation.w,
+        ) = self.object1_orientation
+        marker.scale.x = 0.10
+        marker.scale.y = 0.10
+        marker.scale.z = 0.10
+        marker.color.r = 1.0
+        marker.color.g = 0.1
+        marker.color.b = 0.1
+        marker.color.a = 0.8
+        return marker
+
+    def _publish_object1_marker(self) -> None:
+        """Publish the fixed target marker for RViz."""
+        self.object1_marker_publisher.publish(self._build_object1_marker())
+        self.get_logger().info("Published object1 target marker on /object1_target.")
 
     def _transition(self, new_state: str) -> None:
         """Record a state-machine transition."""

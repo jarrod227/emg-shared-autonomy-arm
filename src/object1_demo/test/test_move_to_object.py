@@ -11,6 +11,7 @@ import rclpy
 from rclpy.parameter import Parameter
 
 from moveit_msgs.msg import MoveItErrorCodes
+from visualization_msgs.msg import Marker
 
 from object1_demo.move_to_object import MoveToObjectNode
 
@@ -91,6 +92,34 @@ def test_build_object1_pose_goal():
             (0.653269, -0.270440, 0.653402, -0.270496)
         )
         assert goal.planning_options.plan_only is True
+    finally:
+        node.destroy_node()
+
+
+def test_build_object1_marker():
+    """The RViz marker represents the same fixed object1 target."""
+    node = make_node()
+    try:
+        marker = node._build_object1_marker()
+
+        assert marker.header.frame_id == "world"
+        assert marker.ns == "object1"
+        assert marker.id == 0
+        assert marker.type == Marker.SPHERE
+        assert marker.action == Marker.ADD
+        position = marker.pose.position
+        assert (position.x, position.y, position.z) == pytest.approx(
+            (0.106982, 0.0, 1.121022)
+        )
+        assert (marker.scale.x, marker.scale.y, marker.scale.z) == pytest.approx(
+            (0.10, 0.10, 0.10)
+        )
+        assert (
+            marker.color.r,
+            marker.color.g,
+            marker.color.b,
+            marker.color.a,
+        ) == pytest.approx((1.0, 0.1, 0.1, 0.8))
     finally:
         node.destroy_node()
 
