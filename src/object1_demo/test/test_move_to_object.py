@@ -8,6 +8,7 @@ move_group server, no controllers, and no RViz. The node is constructed with
 
 import pytest
 import rclpy
+from geometry_msgs.msg import PoseStamped
 from rclpy.parameter import Parameter
 
 from moveit_msgs.msg import MoveItErrorCodes
@@ -24,13 +25,47 @@ def rclpy_context():
     rclpy.shutdown()
 
 
-def make_node(execute=True):
-    """Construct the node without auto-starting the reaching sequence."""
+def make_target_pose(frame_id="world"):
+    """Create the fixed object1 pose carried by the Objective 2 interface."""
+    target_pose = PoseStamped()
+    target_pose.header.frame_id = frame_id
+    target_pose.pose.position.x = 0.106982
+    target_pose.pose.position.y = 0.0
+    target_pose.pose.position.z = 1.121022
+    target_pose.pose.orientation.x = 0.653269
+    target_pose.pose.orientation.y = -0.270440
+    target_pose.pose.orientation.z = 0.653402
+    target_pose.pose.orientation.w = -0.270496
+    return target_pose
+
+
+def make_node(execute=True, auto_start=False, with_target=True):
+    """Construct the node and optionally provide its target pose."""
     overrides = [
-        Parameter("auto_start", Parameter.Type.BOOL, False),
+        Parameter("auto_start", Parameter.Type.BOOL, auto_start),
         Parameter("execute", Parameter.Type.BOOL, execute),
     ]
-    return MoveToObjectNode(parameter_overrides=overrides)
+    node = MoveToObjectNode(parameter_overrides=overrides)
+    if with_target:
+        node._on_target_pose(make_target_pose())
+    return node
+
+
+def test_target_pose_starts_sequence_once():
+    """The first target starts the flow; later targets are ignored."""
+    node = make_node(auto_start=True, with_target=False)
+    try:
+        starts = []
+        node._start_sequence = lambda: starts.append("started")
+
+        node._on_target_pose(make_target_pose())
+        node._on_target_pose(make_target_pose(frame_id="another_frame"))
+
+        assert starts == ["started"]
+        assert node.planning_frame == "world"
+        assert node.object1_position == pytest.approx((0.106982, 0.0, 1.121022))
+    finally:
+        node.destroy_node()
 
 
 def test_home_definition_has_seven_panda_joints():

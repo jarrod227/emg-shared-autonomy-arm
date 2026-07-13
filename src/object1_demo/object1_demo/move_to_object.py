@@ -1,9 +1,9 @@
-"""Move a simulated robot arm to the fixed object1 pose and back home."""
+"""Move a simulated robot arm to a received target pose and back home."""
 
 import time
 
 import rclpy
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.action import MoveGroup
 from moveit_msgs.msg import (
     Constraints,
@@ -14,13 +14,13 @@ from moveit_msgs.msg import (
 )
 from rclpy.action import ActionClient
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from shape_msgs.msg import SolidPrimitive
 from visualization_msgs.msg import Marker
 
 
 class MoveToObjectNode(Node):
-    """Reach a fixed Cartesian object1 pose, then return to the home pose.
+    """Reach a received Cartesian target pose, then return to the home pose.
 
     The reaching flow is a small state machine:
 
@@ -61,13 +61,6 @@ class MoveToObjectNode(Node):
         self.declare_parameter("auto_start", True)
         self.declare_parameter("velocity_scaling", 0.2)
         self.declare_parameter("acceleration_scaling", 0.2)
-        self.declare_parameter("object1_x", 0.106982)
-        self.declare_parameter("object1_y", 0.0)
-        self.declare_parameter("object1_z", 1.121022)
-        self.declare_parameter("object1_qx", 0.653269)
-        self.declare_parameter("object1_qy", -0.270440)
-        self.declare_parameter("object1_qz", 0.653402)
-        self.declare_parameter("object1_qw", -0.270496)
 
         self.planning_group = self.get_parameter("planning_group").value
         self.planning_frame = self.get_parameter("planning_frame").value
@@ -84,13 +77,20 @@ class MoveToObjectNode(Node):
         self.acceleration_scaling = float(
             self.get_parameter("acceleration_scaling").value
         )
-        self.object1_position = tuple(
-            float(self.get_parameter(name).value)
-            for name in ("object1_x", "object1_y", "object1_z")
+        self.object1_position = None
+        self.object1_orientation = None
+        self._target_received = False
+
+        target_pose_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
         )
-        self.object1_orientation = tuple(
-            float(self.get_parameter(name).value)
-            for name in ("object1_qx", "object1_qy", "object1_qz", "object1_qw")
+        self.target_pose_subscription = self.create_subscription(
+            PoseStamped,
+            "target_object_pose",
+            self._on_target_pose,
+            target_pose_qos,
         )
 
         marker_qos = QoSProfile(
@@ -116,12 +116,47 @@ class MoveToObjectNode(Node):
             f"end_effector_frame={self.end_effector_frame}, "
             f"home_state={self.home_state}"
         )
+        if self.auto_start:
+            self.get_logger().info(
+                "Waiting for a target pose on /target_object_pose."
+            )
+
+    def _on_target_pose(self, target_pose: PoseStamped) -> None:
+        """Store the first valid target pose and start the reaching sequence."""
+        if self._target_received:
+            self.get_logger().warn("Ignoring an additional target pose.")
+            return
+        if not target_pose.header.frame_id:
+            self.get_logger().error("Ignoring target pose with an empty frame_id.")
+            return
+
+        self.planning_frame = target_pose.header.frame_id
+        self.object1_position = (
+            target_pose.pose.position.x,
+            target_pose.pose.position.y,
+            target_pose.pose.position.z,
+        )
+        self.object1_orientation = (
+            target_pose.pose.orientation.x,
+            target_pose.pose.orientation.y,
+            target_pose.pose.orientation.z,
+            target_pose.pose.orientation.w,
+        )
+        self._target_received = True
+
+        self.get_logger().info(
+            "Received object1 target pose on /target_object_pose "
+            f"in frame {self.planning_frame}."
+        )
         self._publish_object1_marker()
         if self.auto_start:
             self._start_sequence()
 
     def _build_object1_marker(self) -> Marker:
-        """Create the RViz marker for the fixed object1 target pose."""
+        """Create the RViz marker for the received object1 target pose."""
+        if self.object1_position is None or self.object1_orientation is None:
+            raise RuntimeError("Cannot build marker before receiving a target pose.")
+
         marker = Marker()
         marker.header.frame_id = self.planning_frame
         marker.header.stamp = self.get_clock().now().to_msg()
@@ -208,7 +243,10 @@ class MoveToObjectNode(Node):
         return goal
 
     def _build_pose_goal(self) -> MoveGroup.Goal:
-        """Create a MoveIt goal for the fixed object1 end-effector pose."""
+        """Create a MoveIt goal for the received object1 end-effector pose."""
+        if self.object1_position is None or self.object1_orientation is None:
+            raise RuntimeError("Cannot build pose goal before receiving a target pose.")
+
         goal = MoveGroup.Goal()
         goal.request.group_name = self.planning_group
         goal.request.allowed_planning_time = float(self.allowed_planning_time)

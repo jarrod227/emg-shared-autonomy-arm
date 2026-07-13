@@ -20,6 +20,7 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
+            "fixed_pose_publisher = object1_demo.fixed_pose_publisher:main",
             "move_to_object = object1_demo.move_to_object:main",
         ],
     },

@@ -2,7 +2,7 @@
 
 ## Current Verified Status (2026-07-13)
 
-This section supersedes older scaffold descriptions below. The current MoveToObjectNode is a reaching coordinator: it sends a Cartesian object1 pose goal for panda_link8 in world to MoveIt, then sends a joint-space ready home goal. It also publishes a retained red RViz marker on /object1_target using the same target coordinates. The fixed pose is configured inside the coordinator; a separate target-pose interface remains deferred to Objective 2.
+This section supersedes older scaffold descriptions below. `fixed_pose_publisher` publishes the deterministic Cartesian object1 target as a retained `PoseStamped` on `/target_object_pose`. `MoveToObjectNode` subscribes to that interface, publishes the matching retained RViz marker on `/object1_target`, sends a Cartesian goal for `panda_link8` to MoveIt, and then sends the joint-space ready home goal. The provider -> subscriber -> MoveIt reach/return flow is runtime-verified.
 
 
 ## Design Status
@@ -29,13 +29,17 @@ live at the workspace root.
 
 ```text
 object1_demo.launch.py
--> move_to_object executable
--> MoveToObjectNode
--> startup log
+├── fixed_pose_publisher
+│   └── /target_object_pose (geometry_msgs/PoseStamped, retained)
+└── move_to_object
+    ├── subscribes /target_object_pose
+    ├── sends MoveGroup goals on /move_action
+    └── publishes /object1_target for RViz
 ```
 
-`MoveToObjectNode` is currently a scaffold. It does not yet define a pose,
-command motion, or call a planning interface.
+The coordinator waits for the first valid target pose, executes the existing
+IDLE -> REACHING -> RETURNING -> DONE state machine, and ignores additional
+target messages during that one-shot run.
 
 ## Objective 1 Architecture
 
@@ -70,7 +74,7 @@ vision-language model can be evaluated only after the basic interface works.
 
 ### Object-Pose Provider
 
-The fixed target-pose publisher is an Objective 1 deliverable. Later objectives
+The retained fixed target-pose provider is implemented. Later objectives
 should preserve that deterministic test path while adding new providers:
 
 ```text
@@ -81,8 +85,8 @@ fixed-pose provider
 
 ### Reaching Coordinator
 
-Objective 1 component. It should coordinate a target pose, a reach attempt, and
-a return-home action while logging failures clearly.
+Implemented Objective 1/2 component. It consumes a `PoseStamped`, coordinates
+a reach attempt and return-home action, and logs state transitions and failures.
 
 ### Motion Backend
 
@@ -151,8 +155,8 @@ responsibilities are:
 | `object1_demo`: Objective 1 reaching orchestration | implemented (MoveIt plan-and-execute) |
 | robot description and simulated arm setup | integrated (`moveit_resources_panda_*`) |
 | MoveIt 2 configuration | integrated (`moveit_resources_panda_moveit_config`) |
-| fixed target-pose publisher | Objective 1 node (pending) |
-| unified `/target_object_pose` interface | Objective 2 |
+| fixed target-pose publisher | implemented and runtime-verified |
+| unified `/target_object_pose` interface | implemented and runtime-verified |
 | marker-based object-pose provider | Objective 3 |
 | constrained target selector | Objective 3 |
 | delivery / handoff controller | Objective 4 |
