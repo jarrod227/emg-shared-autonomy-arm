@@ -32,24 +32,17 @@ def make_node(execute=True):
     return MoveToObjectNode(parameter_overrides=overrides)
 
 
-def test_pose_definitions_have_seven_panda_joints():
-    """object1 and home are both 7-joint Panda configurations."""
-    for config in (
-        MoveToObjectNode.OBJECT1_JOINT_POSITIONS,
-        MoveToObjectNode.HOME_JOINT_POSITIONS,
-    ):
-        names = [name for name, _ in config]
-        assert names == [f"panda_joint{i}" for i in range(1, 8)]
-
-    # Home is the Panda "ready" pose; object1 differs so the arm visibly moves.
-    assert MoveToObjectNode.HOME_JOINT_POSITIONS != MoveToObjectNode.OBJECT1_JOINT_POSITIONS
+def test_home_definition_has_seven_panda_joints():
+    """Home remains a 7-joint Panda configuration."""
+    names = [name for name, _ in MoveToObjectNode.HOME_JOINT_POSITIONS]
+    assert names == [f"panda_joint{i}" for i in range(1, 8)]
 
 
 def test_build_joint_goal_plan_and_execute():
     """With execute=True the goal plans and executes (plan_only False)."""
     node = make_node(execute=True)
     try:
-        goal = node._build_joint_goal(node.OBJECT1_JOINT_POSITIONS)
+        goal = node._build_joint_goal(node.HOME_JOINT_POSITIONS)
 
         assert goal.request.group_name == "panda_arm"
         assert goal.request.max_velocity_scaling_factor == pytest.approx(0.2)
@@ -61,7 +54,43 @@ def test_build_joint_goal_plan_and_execute():
         assert constraints[0].joint_name == "panda_joint1"
         # The constraint positions match the requested configuration.
         sent = [(c.joint_name, c.position) for c in constraints]
-        assert sent == list(node.OBJECT1_JOINT_POSITIONS)
+        assert sent == list(node.HOME_JOINT_POSITIONS)
+    finally:
+        node.destroy_node()
+
+
+def test_build_object1_pose_goal():
+    """object1 is expressed as position and orientation constraints."""
+    node = make_node(execute=False)
+    try:
+        goal = node._build_pose_goal()
+        constraints = goal.request.goal_constraints[0]
+
+        position = constraints.position_constraints[0]
+        assert position.header.frame_id == "world"
+        assert position.link_name == "panda_link8"
+        target = position.constraint_region.primitive_poses[0].position
+        assert (target.x, target.y, target.z) == pytest.approx(
+            (0.106982, 0.0, 1.121022)
+        )
+        assert position.constraint_region.primitives[0].dimensions == pytest.approx(
+            [0.005]
+        )
+
+        orientation = constraints.orientation_constraints[0]
+        assert orientation.header.frame_id == "world"
+        assert orientation.link_name == "panda_link8"
+        quaternion = orientation.orientation
+        actual_orientation = (
+            quaternion.x,
+            quaternion.y,
+            quaternion.z,
+            quaternion.w,
+        )
+        assert actual_orientation == pytest.approx(
+            (0.653269, -0.270440, 0.653402, -0.270496)
+        )
+        assert goal.planning_options.plan_only is True
     finally:
         node.destroy_node()
 

@@ -3,14 +3,22 @@
 import time
 
 import rclpy
+from geometry_msgs.msg import Pose
 from moveit_msgs.action import MoveGroup
-from moveit_msgs.msg import Constraints, JointConstraint, MoveItErrorCodes
+from moveit_msgs.msg import (
+    Constraints,
+    JointConstraint,
+    MoveItErrorCodes,
+    OrientationConstraint,
+    PositionConstraint,
+)
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from shape_msgs.msg import SolidPrimitive
 
 
 class MoveToObjectNode(Node):
-    """Reach a fixed joint-space object1 pose, then return to the home pose.
+    """Reach a fixed Cartesian object1 pose, then return to the home pose.
 
     The reaching flow is a small state machine:
 
@@ -37,17 +45,6 @@ class MoveToObjectNode(Node):
         ("panda_joint7", 0.785),
     )
 
-    # Fixed object1 validation pose (joint-space, not a perception result).
-    OBJECT1_JOINT_POSITIONS = (
-        ("panda_joint1", 0.0),
-        ("panda_joint2", 0.0),
-        ("panda_joint3", 0.0),
-        ("panda_joint4", 0.0),
-        ("panda_joint5", 0.0),
-        ("panda_joint6", 1.571),
-        ("panda_joint7", 0.785),
-    )
-
     def __init__(self, **kwargs) -> None:
         super().__init__("move_to_object", **kwargs)
 
@@ -62,6 +59,13 @@ class MoveToObjectNode(Node):
         self.declare_parameter("auto_start", True)
         self.declare_parameter("velocity_scaling", 0.2)
         self.declare_parameter("acceleration_scaling", 0.2)
+        self.declare_parameter("object1_x", 0.106982)
+        self.declare_parameter("object1_y", 0.0)
+        self.declare_parameter("object1_z", 1.121022)
+        self.declare_parameter("object1_qx", 0.653269)
+        self.declare_parameter("object1_qy", -0.270440)
+        self.declare_parameter("object1_qz", 0.653402)
+        self.declare_parameter("object1_qw", -0.270496)
 
         self.planning_group = self.get_parameter("planning_group").value
         self.planning_frame = self.get_parameter("planning_frame").value
@@ -77,6 +81,14 @@ class MoveToObjectNode(Node):
         )
         self.acceleration_scaling = float(
             self.get_parameter("acceleration_scaling").value
+        )
+        self.object1_position = tuple(
+            float(self.get_parameter(name).value)
+            for name in ("object1_x", "object1_y", "object1_z")
+        )
+        self.object1_orientation = tuple(
+            float(self.get_parameter(name).value)
+            for name in ("object1_qx", "object1_qy", "object1_qz", "object1_qw")
         )
 
         self.move_group_client = ActionClient(self, MoveGroup, "move_action")
@@ -108,7 +120,7 @@ class MoveToObjectNode(Node):
             return
 
         self._transition(self.REACHING)
-        self._send_joint_goal("object1", self.OBJECT1_JOINT_POSITIONS)
+        self._send_pose_goal("object1")
 
     def _wait_for_move_group_server(self) -> bool:
         """Return whether the MoveIt move_group action server is available."""
@@ -148,6 +160,69 @@ class MoveToObjectNode(Node):
         goal.request.goal_constraints.append(constraints)
 
         return goal
+
+    def _build_pose_goal(self) -> MoveGroup.Goal:
+        """Create a MoveIt goal for the fixed object1 end-effector pose."""
+        goal = MoveGroup.Goal()
+        goal.request.group_name = self.planning_group
+        goal.request.allowed_planning_time = float(self.allowed_planning_time)
+        goal.request.num_planning_attempts = int(self.num_planning_attempts)
+        goal.request.max_velocity_scaling_factor = self.velocity_scaling
+        goal.request.max_acceleration_scaling_factor = self.acceleration_scaling
+        goal.planning_options.plan_only = not self.execute
+
+        position_constraint = PositionConstraint()
+        position_constraint.header.frame_id = self.planning_frame
+        position_constraint.link_name = self.end_effector_frame
+        position_constraint.weight = 1.0
+
+        tolerance_region = SolidPrimitive()
+        tolerance_region.type = SolidPrimitive.SPHERE
+        tolerance_region.dimensions = [0.005]
+
+        target_pose = Pose()
+        (
+            target_pose.position.x,
+            target_pose.position.y,
+            target_pose.position.z,
+        ) = self.object1_position
+        target_pose.orientation.w = 1.0
+        position_constraint.constraint_region.primitives.append(tolerance_region)
+        position_constraint.constraint_region.primitive_poses.append(target_pose)
+
+        orientation_constraint = OrientationConstraint()
+        orientation_constraint.header.frame_id = self.planning_frame
+        orientation_constraint.link_name = self.end_effector_frame
+        (
+            orientation_constraint.orientation.x,
+            orientation_constraint.orientation.y,
+            orientation_constraint.orientation.z,
+            orientation_constraint.orientation.w,
+        ) = self.object1_orientation
+        orientation_constraint.absolute_x_axis_tolerance = 0.01
+        orientation_constraint.absolute_y_axis_tolerance = 0.01
+        orientation_constraint.absolute_z_axis_tolerance = 0.01
+        orientation_constraint.weight = 1.0
+
+        constraints = Constraints()
+        constraints.position_constraints.append(position_constraint)
+        constraints.orientation_constraints.append(orientation_constraint)
+        goal.request.goal_constraints.append(constraints)
+        return goal
+
+    def _send_pose_goal(self, target_name: str) -> None:
+        """Send the fixed Cartesian object1 goal."""
+        self._current_target = target_name
+        goal = self._build_pose_goal()
+        self._goal_start_time = time.monotonic()
+        send_goal_future = self.move_group_client.send_goal_async(goal)
+        send_goal_future.add_done_callback(self._on_goal_response)
+
+        mode = "plan-and-execute" if self.execute else "plan-only"
+        self.get_logger().info(
+            f"Sent {mode} pose goal toward {target_name} "
+            f"in {self.planning_frame} for {self.end_effector_frame}."
+        )
 
     def _send_joint_goal(self, target_name: str, joint_positions) -> None:
         """Send a joint-space goal toward the named target."""
