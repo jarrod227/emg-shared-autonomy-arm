@@ -61,7 +61,7 @@ Three layers, deliberately separated — each answers a different question.
 
 ```text
 INTENT LAYER        biosignal provider          -> WHICH object, WHEN to act
-                    (EOG primary; EMG optional, Phase 3)
+                    (EMG)
                               |
                               v
 PERCEPTION LAYER    marker localization         -> WHERE that object is now
@@ -83,9 +83,10 @@ redundant with it.
 
 Objective 3.5 (Phase 1). A biosignal provider decodes a few discrete intents
 per second: **1** cycle target among detected candidates, **2** confirm/trigger
-approach, **3** release/abort. EOG is the primary modality (reusing the
-existing capstone front end); EMG is an optional second modality (Phase 3) to
-demonstrate the same provider contract is modality-agnostic.
+approach, **3** release/abort. EMG is the intent modality (sEMG hardware bought
+in Phase 0); acquisition is new, but the feature-extraction and SVM pipeline
+structure reuses the existing capstone's software. EOG is cut, not deferred —
+see `docs/proposal.md` §5.
 
 ### Object-Pose Provider
 
@@ -170,9 +171,9 @@ responsibilities are:
 | unified `/target_object_pose` interface | implemented and runtime-verified |
 | marker-based object-pose provider | Objective 3 |
 | delivery / handoff controller | Objective 4 |
-| EOG intent provider | Objective 3.5 (Phase 1, MVP completion point) |
+| EMG intent provider | Objective 3.5 (Phase 1, MVP completion point) |
 | SO-ARM101 LeRobot backend (backend B) | Objective 5 (Phase 2) |
-| rclcpp reaching coordinator, EMG provider, LeRobot imitation learning | Phase 3 (conditional) |
+| rclcpp reaching coordinator, LeRobot imitation learning | Phase 3 (conditional) |
 | evaluation tooling | incremental scripts or package |
 
 Avoid creating these packages until their milestone begins and their interfaces
