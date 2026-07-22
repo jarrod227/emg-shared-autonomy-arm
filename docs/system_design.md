@@ -57,31 +57,47 @@ trajectory and return the arm to a neutral or home position.
 
 ## Long-Term Architecture
 
+Three layers, deliberately separated — each answers a different question.
+
 ```text
-request input
--> target selector
--> object-pose provider
--> reaching coordinator
--> motion backend
--> handoff state machine
--> evaluation logger
+INTENT LAYER        biosignal provider          -> WHICH object, WHEN to act
+                    (EOG primary; EMG optional, Phase 3)
+                              |
+                              v
+PERCEPTION LAYER    marker localization         -> WHERE that object is now
+                    (ArUco / AprilTag)
+                              |
+                              v
+EXECUTION LAYER     /target_object_pose -> reaching coordinator -> motion
+                    backend -> safety-aware handoff state machine
+                              |
+                              v
+                    evaluation logger (layered metrics)
 ```
 
-### Request Input and Target Selector
+Language / voice target selection is cut, not deferred — see `docs/proposal.md`
+§5. It would occupy the same layer as biosignal intent and is functionally
+redundant with it.
 
-Roadmap component. Begin with a small, constrained vocabulary. A future
-vision-language model can be evaluated only after the basic interface works.
+### Intent Layer
+
+Objective 3.5 (Phase 1). A biosignal provider decodes a few discrete intents
+per second: **1** cycle target among detected candidates, **2** confirm/trigger
+approach, **3** release/abort. EOG is the primary modality (reusing the
+existing capstone front end); EMG is an optional second modality (Phase 3) to
+demonstrate the same provider contract is modality-agnostic.
 
 ### Object-Pose Provider
 
 The retained fixed target-pose provider is implemented. Later objectives
-should preserve that deterministic test path while adding new providers:
+preserve that deterministic test path while adding new providers, all
+implementing the same contract behind `/target_object_pose`:
 
-```text
-fixed-pose provider
--> marker-based provider
--> future perception provider
-```
+| Provider | Role |
+| --- | --- |
+| fixed pose | deterministic regression test (done) |
+| marker | perception — where the object is (Objective 3) |
+| biosignal | intent — which object, when (Objective 3.5) |
 
 ### Reaching Coordinator
 
@@ -115,24 +131,19 @@ trajectory, and reach-to-home execution.
 
 ### Safety-Aware Handoff State Machine
 
-Roadmap component. Add only after reaching is reliable. Planned states include:
+Objective 4 (Phase 0) component. Planned states:
 
 ```text
-idle
--> approach
--> ready_for_handoff
--> handoff
--> return_home
+idle -> approach -> ready -> release -> return_home
 ```
 
-Timeout, cancellation, failure, and user-confirmation transitions must be
-explicit.
+`ready` is the handoff/delivery zone. Timeout, cancellation, failure, and
+user-confirmation transitions must be explicit; `release` wires to intent 2
+(confirm) and intent 3 (release/abort) once the intent layer exists (Phase 1).
 
-### Optional Isaac Lab Policy
-
-Optional Phase 2 research component. Isaac Lab may be used to evaluate a narrow
-safety-aware reaching policy after the classical ROS 2 baseline is stable.
-Isaac Sim and Isaac Lab are not currently configured in this workspace.
+Isaac Lab / Isaac Sim RL is cut, not deferred — LeRobot imitation learning
+(Phase 3, conditional) covers the same ground on a real arm. See
+`docs/proposal.md` §5.
 
 ## Interface Principles
 
@@ -158,10 +169,10 @@ responsibilities are:
 | fixed target-pose publisher | implemented and runtime-verified |
 | unified `/target_object_pose` interface | implemented and runtime-verified |
 | marker-based object-pose provider | Objective 3 |
-| constrained target selector | Objective 3 |
 | delivery / handoff controller | Objective 4 |
-| SO-ARM101 LeRobot backend (backend B) | Objective 5 |
-| LeRobot imitation-learning policy | Objective 6 (optional) |
+| EOG intent provider | Objective 3.5 (Phase 1, MVP completion point) |
+| SO-ARM101 LeRobot backend (backend B) | Objective 5 (Phase 2) |
+| rclcpp reaching coordinator, EMG provider, LeRobot imitation learning | Phase 3 (conditional) |
 | evaluation tooling | incremental scripts or package |
 
 Avoid creating these packages until their milestone begins and their interfaces
