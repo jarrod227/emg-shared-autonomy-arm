@@ -1,0 +1,42 @@
+# Marker-to-grasp offset, per marker ID.
+#
+# A detected marker pose sits ON the sticker's surface, with +z pointing out
+# of the paper. That is NOT where the gripper should go: reaching straight to
+# it drives the gripper into the sticker face, wrong orientation and all.
+# Each object therefore needs a fixed rigid offset from its marker pose to the
+# actual grasp pose.
+#
+# The offset is expressed in the MARKER's own local frame, so it follows the
+# marker however it is oriented in space: "back off along the sticker normal
+# and rotate into an approach pose" means the same thing regardless of where
+# the object sits. Translation is in metres; rotation_rpy is in radians,
+# applied in the marker frame.
+#
+# Marker frame convention (matches the OpenCV pose on /detected_markers):
+#   +x right across the sticker, +y up the sticker, +z out of the paper.
+#
+# 'default' is used for any detected ID without its own entry.
+
+default:
+  translation:
+    x: 0.0
+    y: 0.0
+    z: 0.0
+  rotation_rpy:
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+
+# Example: sticker on the front face of a box. Back off 3 cm along the marker
+# -z (into the box, toward its centre) and flip 180 deg about x so the gripper
+# approaches facing the sticker instead of sharing its outward normal.
+markers:
+  0:
+    translation:
+      x: 0.0
+      y: 0.0
+      z: -0.03
+    rotation_rpy:
+      roll: 3.14159
+      pitch: 0.0
+      yaw: 0.0
