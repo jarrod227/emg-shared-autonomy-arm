@@ -1,0 +1,26 @@
+image_width: 640
+image_height: 480
+camera_name: "integrated_rgb_camera:_integrat"
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [437.539620, 0.000000, 287.164530,
+         0.000000, 437.284805, 240.139420,
+         0.000000, 0.000000, 1.000000]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [-0.041742, -0.058727, 0.000803, -0.011567, 0.000000]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.000000, 0.000000, 0.000000,
+         0.000000, 1.000000, 0.000000,
+         0.000000, 0.000000, 1.000000]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [409.666168, 0.000000, 270.623300, 0.000000,
+         0.000000, 428.881012, 239.995728, 0.000000,
+         0.000000, 0.000000, 1.000000, 0.000000]
