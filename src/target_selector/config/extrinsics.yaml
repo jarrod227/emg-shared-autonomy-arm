@@ -1,0 +1,40 @@
+# Camera-to-planning-frame extrinsic (world -> camera_optical_frame).
+#
+# ============================ SIMULATION PLACEHOLDER ========================
+# These numbers are NOMINAL and effectively invented. In the Panda fake
+# system the planning frame is virtual and has no physical relationship to
+# the real integrated camera on the desk, so this transform cannot be
+# measured — it only exists so the pipeline has a complete TF chain and the
+# selector can express marker poses in the planning frame.
+#
+# What this DOES let us validate now: the perception -> transform -> selector
+# -> /target_object_pose plumbing, and interface swappability with the fixed
+# pose provider. What it does NOT give: a physically meaningful full-chain
+# accuracy number. Camera-frame accuracy (which IS real) is reported
+# separately in M6.
+#
+# On real SO-ARM101 hardware (Phase 2) this entire transform is REPLACED by a
+# hand-eye calibration between the wrist/base and the mounted camera.
+# ===========================================================================
+#
+# Convention: camera_optical_frame follows the ROS optical convention
+# (z forward along the view axis, x right, y down), which matches the
+# OpenCV pose output published on /detected_markers.
+#
+# Nominal placement: camera ~0.5 m in front of and above the workspace,
+# tilted down to look back toward the planning-frame origin.
+
+parent_frame: world
+child_frame: camera_optical_frame
+
+translation:
+  x: 0.5
+  y: 0.0
+  z: 0.5
+
+# Radians. Roughly: point the optical +z axis back toward the origin and
+# downward. Arbitrary within the placeholder caveat above.
+rotation_rpy:
+  roll: -1.2
+  pitch: 0.0
+  yaw: -3.14159
