@@ -1,4 +1,4 @@
-# Camera-to-planning-frame extrinsic (world -> camera_optical_frame).
+# Camera-to-planning-frame extrinsic (world -> camera).
 #
 # ============================ SIMULATION PLACEHOLDER ========================
 # These numbers are NOMINAL and effectively invented. In the Panda fake
@@ -17,24 +17,31 @@
 # hand-eye calibration between the wrist/base and the mounted camera.
 # ===========================================================================
 #
-# Convention: camera_optical_frame follows the ROS optical convention
-# (z forward along the view axis, x right, y down), which matches the
-# OpenCV pose output published on /detected_markers.
+# Convention: child_frame "camera" is v4l2_camera's image frame_id and here
+# follows the ROS optical convention (z forward along the view axis, x right,
+# y down), matching the OpenCV pose output published on /detected_markers.
 #
-# Nominal placement: camera ~0.5 m in front of and above the workspace,
-# tilted down to look back toward the planning-frame origin.
+# Nominal placement: camera looking straight down at the workspace from
+# above, positioned so a marker held ~0.3 m in front of the lens lands near
+# the already-verified reachable object1 pose (0.107, 0, 1.121), rather than
+# an arbitrary point that may or may not be within the arm's workspace.
+# Distance from the world origin is NOT a reliable reachability proxy here —
+# object1's own verified pose sits 1.13 m from the world origin — so this
+# was tuned by matching magnitude to that known-good pose, not by a reach
+# radius calculation.
 
 parent_frame: world
-child_frame: camera_optical_frame
+child_frame: camera
 
 translation:
-  x: 0.5
+  x: 0.0
   y: 0.0
-  z: 0.5
+  z: 1.42
 
-# Radians. Roughly: point the optical +z axis back toward the origin and
-# downward. Arbitrary within the placeholder caveat above.
+# Radians. roll=pi flips camera +z (forward) to world -z and camera +y to
+# world -y, i.e. "camera looks straight down, right stays right." Arbitrary
+# within the placeholder caveat above.
 rotation_rpy:
-  roll: -1.2
+  roll: -3.14159
   pitch: 0.0
-  yaw: -3.14159
+  yaw: 0.0
