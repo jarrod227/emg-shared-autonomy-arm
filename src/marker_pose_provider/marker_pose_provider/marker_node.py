@@ -29,6 +29,9 @@ ARUCO_DICTIONARY = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 def detect_marker_ids(gray_image):
     """Return (corners, ids) for all markers found in a grayscale image."""
     parameters = cv2.aruco.DetectorParameters_create()
+    # Sub-pixel corner refinement: the default (CORNER_REFINE_NONE) leaves
+    # ~0.5 px corner bias, which PnP amplifies into mm-level depth error.
+    parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
     corners, ids, _rejected = cv2.aruco.detectMarkers(
         gray_image, ARUCO_DICTIONARY, parameters=parameters
     )
@@ -67,7 +70,7 @@ def estimate_marker_pose(corners, marker_length, camera_matrix, dist_coeffs):
         flags=cv2.SOLVEPNP_IPPE_SQUARE,
     )
     return [
-        (rvecs[i], tvecs[i], float(errors[i]))
+        (rvecs[i], tvecs[i], float(np.asarray(errors[i]).reshape(-1)[0]))
         for i in range(len(rvecs))
     ]
 
@@ -126,9 +129,10 @@ def rvec_tvec_to_pose(rvec, tvec) -> Pose:
         qy = (rot[1, 2] + rot[2, 1]) / s
         qz = 0.25 * s
     pose = Pose()
-    pose.position.x = float(tvec[0])
-    pose.position.y = float(tvec[1])
-    pose.position.z = float(tvec[2])
+    translation = np.asarray(tvec, dtype=np.float64).reshape(-1)
+    pose.position.x = float(translation[0])
+    pose.position.y = float(translation[1])
+    pose.position.z = float(translation[2])
     pose.orientation.w = qw
     pose.orientation.x = qx
     pose.orientation.y = qy
