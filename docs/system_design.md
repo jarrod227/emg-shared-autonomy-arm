@@ -141,13 +141,24 @@ coordinator can target either platform:
 ```text
 robot command abstraction
 -> backend A: MoveIt 2 Panda simulation (Objective 1)
--> backend B: LeRobot SO-ARM101 real arm (Objective 5)
+-> backend B: LeRobot SO-ARM101 real arm, planned/scripted (Objective 5)
+-> backend C: learned ACT policy on SO-ARM101 (Objective 6, Phase 3)
 ```
 
 Backend B controls a real SO-ARM101 (5-DOF arm + gripper, 6 Feetech servos)
 through LeRobot, optionally bridged from a ROS 2 command node. The 5-DOF arm
 cannot reach arbitrary 6-DOF poses, so joint-space goals are often more reliable
 than full Cartesian pose goals.
+
+Backend C (Phase 3) replaces the planner with a learned ACT policy. This is
+where the two execution ceilings are compared: a planner's ceiling is fixed by
+what can be specified, a learned policy's ceiling scales with data. The Phase 3
+research studies a **human-intervention layer** on top of backend C — a
+constrained EMG channel (abort / confirm / gate) that catches policy failures
+and flags failure-adjacent states for correction-data collection. The
+intervention channel is deliberately low-bandwidth (the same shared-autonomy
+thesis as the intent layer); its cost is the object of study. See
+`docs/proposal.md` Phase 3 and `TODO.md` P3.2.
 
 ### RViz Visualization
 
@@ -197,6 +208,7 @@ responsibilities are:
 | delivery / handoff controller | Objective 4 (next) |
 | EMG intent provider | Objective 3.5 (Phase 1, MVP completion point) |
 | SO-ARM101 LeRobot backend (backend B) | Objective 5 (Phase 2) |
+| learned ACT policy + EMG intervention layer (backend C) | Objective 6 (Phase 3, PhD research) |
 | rclcpp reaching coordinator, LeRobot imitation learning | Phase 3 (conditional) |
 | evaluation tooling | incremental scripts or package |
 
