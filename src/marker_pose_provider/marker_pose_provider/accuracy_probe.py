@@ -8,8 +8,9 @@ distance from the lens, then run this node for a fixed duration:
 
 It reports, for the camera frame only (the honest part of the error
 budget — the world-frame extrinsic is a simulation placeholder):
-  - detection success rate  (PoseArray msgs / image frames)
-  - z mean/std and error vs the nominal tape distance
+  - raw sample counts (image frames vs detection samples; the topics are
+    not frame-paired, so no percentage rate is claimed)
+  - Euclidean distance mean/std and error vs the nominal tape distance
   - x/y std (repeatability; no ground truth for lateral position)
   - rotation spread around the first sample (repeatability, not accuracy)
 """
@@ -98,8 +99,11 @@ class AccuracyProbe(Node):
         lines = [
             "==== accuracy probe result (camera frame) ====",
             f"nominal distance : {nominal:.3f} m",
-            f"frames           : {n_img} images, {n_det} detections "
-            f"({100.0 * n_det / n_img:.1f}% success)",
+            # Raw counts only: the two topics are not frame-paired, so a
+            # detections/images ratio is not a true per-frame success rate
+            # (it exceeded 100% when detection was very stable). The useful
+            # signal is "reliably detected" vs "fails to detect".
+            f"samples          : {n_img} image frames, {n_det} detection samples",
             f"position mean    : x {positions[:, 0].mean():+.4f}, "
             f"y {positions[:, 1].mean():+.4f}, z {z.mean():.4f} m",
             f"euclidean dist   : mean {norms.mean():.4f} m, "

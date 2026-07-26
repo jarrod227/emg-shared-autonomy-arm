@@ -1,15 +1,23 @@
 # System Design
 
-## Current Verified Status (2026-07-13)
+## Current Verified Status (2026-07-26)
 
-This section supersedes older scaffold descriptions below. `fixed_pose_publisher` publishes the deterministic Cartesian object1 target as a retained `PoseStamped` on `/target_object_pose`. `MoveToObjectNode` subscribes to that interface, publishes the matching retained RViz marker on `/object1_target`, sends a Cartesian goal for `panda_link8` to MoveIt, and then sends the joint-space ready home goal. The provider -> subscriber -> MoveIt reach/return flow is runtime-verified.
-
+This section supersedes older scaffold descriptions below. Two interchangeable
+providers feed the retained `PoseStamped` on `/target_object_pose`: the
+deterministic `fixed_pose_publisher`, and the marker pipeline
+(`marker_pose_provider` detection/PnP -> `target_selector` selection, grasp
+offset, tf2 transform to `world`). `MoveToObjectNode` consumes the interface
+unchanged either way, sends a Cartesian goal for `panda_link8` to MoveIt, and
+returns to the joint-space ready home. Both provider paths are
+runtime-verified end to end; camera-frame accuracy is quantified in
+`docs/objective3_evaluation.md`.
 
 ## Design Status
 
-This document distinguishes the current ROS 2 scaffold, the Objective 1 target,
-and the longer-term architecture. Only `src/object1_demo` exists today. The
-remaining components should be added incrementally.
+This document distinguishes the current implementation from the longer-term
+architecture. The execution layer (Objectives 1–2) and the perception layer
+(Objective 3) exist today; the handoff state machine (Objective 4) and intent
+layer (Objective 3.5) are the next increments.
 
 ## Current Workspace Layout
 
@@ -17,7 +25,9 @@ remaining components should be added incrementally.
 assistive_robot_ws/
 ├── docs/
 ├── src/
-│   └── object1_demo/
+│   ├── object1_demo/          reaching coordinator + fixed-pose provider
+│   ├── marker_pose_provider/  ArUco detection + camera-frame PnP
+│   └── target_selector/       selection, grasp offset, TF to world
 ├── AGENTS.md
 └── TODO.md
 ```
@@ -28,18 +38,32 @@ live at the workspace root.
 ## Current Runtime
 
 ```text
-object1_demo.launch.py
-├── fixed_pose_publisher
-│   └── /target_object_pose (geometry_msgs/PoseStamped, retained)
-└── move_to_object
-    ├── subscribes /target_object_pose
-    ├── sends MoveGroup goals on /move_action
-    └── publishes /object1_target for RViz
+marker_demo.launch.py                    (or: fixed_pose_publisher alone)
+├── v4l2_camera driver
+│   ├── /image_raw
+│   └── /camera_info  (calibrated intrinsics from config/camera_info.yaml)
+└── marker_node
+    └── /detected_markers (PoseArray, camera frame, all detections)
+
+extrinsics.launch.py
+└── static TF world -> camera            (SIMULATION PLACEHOLDER extrinsic)
+
+selector_node
+├── subscribes /detected_markers
+├── applies grasp offset (config/grasp_offsets.yaml), transforms via tf2
+└── /target_object_pose (PoseStamped, retained, latched once)
+
+move_to_object
+├── subscribes /target_object_pose
+├── sends MoveGroup goals on /move_action
+└── publishes /object1_target for RViz
 ```
 
 The coordinator waits for the first valid target pose, executes the existing
 IDLE -> REACHING -> RETURNING -> DONE state machine, and ignores additional
-target messages during that one-shot run.
+target messages during that one-shot run. The selector likewise latches its
+first detection — replacing that with N-stable-frames acquisition and a
+staleness contract is Objective 4 work.
 
 ## Objective 1 Architecture
 
@@ -169,8 +193,8 @@ responsibilities are:
 | MoveIt 2 configuration | integrated (`moveit_resources_panda_moveit_config`) |
 | fixed target-pose publisher | implemented and runtime-verified |
 | unified `/target_object_pose` interface | implemented and runtime-verified |
-| marker-based object-pose provider | Objective 3 |
-| delivery / handoff controller | Objective 4 |
+| marker-based object-pose provider | implemented (`marker_pose_provider` + `target_selector`), accuracy quantified |
+| delivery / handoff controller | Objective 4 (next) |
 | EMG intent provider | Objective 3.5 (Phase 1, MVP completion point) |
 | SO-ARM101 LeRobot backend (backend B) | Objective 5 (Phase 2) |
 | rclcpp reaching coordinator, LeRobot imitation learning | Phase 3 (conditional) |
