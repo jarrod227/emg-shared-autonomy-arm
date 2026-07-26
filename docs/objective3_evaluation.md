@@ -1,7 +1,15 @@
-# Objective 3 — Marker Perception Evaluation (M6)
+# Objective 3.1 — ArUco Pose Baseline Evaluation
 
 Pose-estimation accuracy of the ArUco marker pipeline
 (`marker_pose_provider`), measured against tape-measured ground truth.
+
+## Role in the current roadmap
+
+Objective 3.1 is complete and remains the verified regression/fallback path.
+Objective 3.2 will later add markerless instance segmentation as a separate
+perception path; it does not invalidate, delete, or retroactively change the
+measurements below. The two paths require separate evaluations because they use
+different localization assumptions.
 
 ## What is and isn't measured here
 
@@ -88,7 +96,7 @@ first calibration's cx = 287. Re-measuring, the multiplicative bias was gone and
 errors dropped to +8 mm / +9 mm at 0.30 / 0.50 m.
 
 Takeaway: perception accuracy is calibration-limited, not algorithm-limited —
-the synthetic ground-truth tests (M3.5) already showed the PnP math itself is
+the synthetic ground-truth tests already showed the PnP math itself is
 accurate to ~0.2 mm. A flat calibration target is not optional.
 
 ## Known measurement artifacts
@@ -97,4 +105,5 @@ accurate to ~0.2 mm. A flat calibration target is not optional.
   over image frames; when detection is very stable this can exceed 100 % because
   a single image can trigger more than one callback. It is a counting
   artifact, not a real >100 % rate; the meaningful signal is "reliably detected"
-  vs "fails to detect". (To be tidied in M7.)
+  vs "fails to detect". A future maintenance change should count unique source
+  frames rather than callbacks.

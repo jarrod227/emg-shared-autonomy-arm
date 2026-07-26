@@ -15,9 +15,12 @@ runtime-verified end to end; camera-frame accuracy is quantified in
 ## Design Status
 
 This document distinguishes the current implementation from the longer-term
-architecture. The execution layer (Objectives 1–2) and the perception layer
-(Objective 3) exist today; the handoff state machine (Objective 4) and intent
-layer (Objective 3.5) are the next increments.
+architecture. The execution layer (Objectives 1–2) and ArUco perception
+baseline (Objective 3.1) exist today. Objective 4 is active and is implemented
+as two increments: Objective 4.1 uses the existing pose pipeline plus simulated
+intent/hand observation, and Objective 4.2 adds camera hand-keypoint position.
+Objective 3.2 then adds markerless perception, and Objective 3.5 adds STM32 EMG
+intent.
 
 ## Current Workspace Layout
 
@@ -26,8 +29,8 @@ assistive_robot_ws/
 ├── docs/
 ├── src/
 │   ├── object1_demo/          reaching coordinator + fixed-pose provider
-│   ├── marker_pose_provider/  ArUco detection + camera-frame PnP
-│   └── target_selector/       selection, grasp offset, TF to world
+│   ├── marker_pose_provider/  ArUco detection + camera-frame PnP (3.1)
+│   └── target_selector/       marker selection, grasp offset, TF (3.1)
 ├── AGENTS.md
 └── TODO.md
 ```
@@ -35,7 +38,7 @@ assistive_robot_ws/
 ROS 2 packages live under `src/`. Project-level planning and design documents
 live at the workspace root.
 
-## Current Runtime
+## Current Verified Runtime — Objective 3.1
 
 ```text
 marker_demo.launch.py                    (or: fixed_pose_publisher alone)
@@ -43,14 +46,14 @@ marker_demo.launch.py                    (or: fixed_pose_publisher alone)
 │   ├── /image_raw
 │   └── /camera_info  (calibrated intrinsics from config/camera_info.yaml)
 └── marker_node
-    └── /detected_markers (PoseArray, camera frame, all detections)
+    └── /detected_markers (PoseArray, camera frame, detections only)
 
 extrinsics.launch.py
 └── static TF world -> camera            (SIMULATION PLACEHOLDER extrinsic)
 
 selector_node
 ├── subscribes /detected_markers
-├── applies grasp offset (config/grasp_offsets.yaml), transforms via tf2
+├── selects first pose, applies default grasp offset, transforms via tf2
 └── /target_object_pose (PoseStamped, retained, latched once)
 
 move_to_object
@@ -59,11 +62,20 @@ move_to_object
 └── publishes /object1_target for RViz
 ```
 
-The coordinator waits for the first valid target pose, executes the existing
-IDLE -> REACHING -> RETURNING -> DONE state machine, and ignores additional
-target messages during that one-shot run. The selector likewise latches its
-first detection — replacing that with N-stable-frames acquisition and a
-staleness contract is Objective 4 work.
+`marker_node` publishes only when a marker exists; it does not publish an empty
+heartbeat. Marker IDs are logged but discarded by `PoseArray`, so the current
+selector cannot choose by ID and takes the first pose. It uses the default
+offset, publishes one retained target, and then ignores later detections.
+
+The coordinator waits for the first valid target pose, executes its existing
+IDLE -> REACHING -> RETURNING -> DONE one-shot sequence, and ignores additional
+target messages. These are current implementation facts, not the future
+Objective 4 state machine.
+
+DDS `TRANSIENT_LOCAL` retention and the application one-shot latch are not
+freshness. The selector/tracker will own N-frame stable acquisition and
+last-seen tracking; the Objective 4 controller will own the policy response to
+old targets or stale safety observations.
 
 ## Objective 1 Architecture
 
@@ -79,25 +91,30 @@ The first configured target is named `object1`. It is a deterministic test pose,
 not the output of object recognition. The coordinator should request a reaching
 trajectory and return the arm to a neutral or home position.
 
-## Long-Term Architecture
-
-Three layers, deliberately separated — each answers a different question.
+## Approved Architecture
 
 ```text
-INTENT LAYER        biosignal provider          -> WHICH object, WHEN to act
-                    (EMG)
-                              |
-                              v
-PERCEPTION LAYER    marker localization         -> WHERE that object is now
-                    (ArUco / AprilTag)
-                              |
-                              v
-EXECUTION LAYER     /target_object_pose -> reaching coordinator -> motion
-                    backend -> safety-aware handoff state machine
-                              |
-                              v
-                    evaluation logger (layered metrics)
+CURRENT / PRESERVED
+fixed pose ---------------------------------------------> /target_object_pose
+camera -> ArUco/PnP -> current target_selector --------> /target_object_pose
+
+PLANNED
+camera -> instance segmentation -> tabletop localizer -> /object_candidates
+STM32 EMG -> USB/UART bridge --------------------------> /assistive_intent
+                                                   |             |
+                                                   +------v------+
+                                                   target selector
+                                                         |
+                                              /target_object_pose
+                                                         |
+hand-keypoint monitor -> /hand_observation ------> handoff controller
+                                                         |
+                                                  MoveIt /move_action
 ```
+
+Only one selected-pose source is active at a time. The camera driver should
+also be launched once; multiple perception nodes may subscribe to the same
+`/image_raw` and `/camera_info` streams.
 
 Language / voice target selection is cut, not deferred — see `docs/proposal.md`
 §5. It would occupy the same layer as biosignal intent and is functionally
@@ -105,29 +122,83 @@ redundant with it.
 
 ### Intent Layer
 
-Objective 3.5 (Phase 1). A biosignal provider decodes a few discrete intents
-per second: **1** cycle target among detected candidates, **2** confirm/trigger
-approach, **3** release/abort. EMG is the intent modality (sEMG hardware bought
-in Phase 0); acquisition is new, but the feature-extraction and SVM pipeline
-structure reuses the existing capstone's software. EOG is cut, not deferred —
-see `docs/proposal.md` §5.
+Objective 4 first uses a simulated publisher on the future production
+interface. Objective 3.5 later replaces that source with STM32 edge inference:
 
-### Object-Pose Provider
+```text
+3-channel ADC/DMA
+-> approximately 20–450 Hz DSP
+-> 200 ms windows / 50 ms hop (initial target)
+-> MAV, RMS, zero crossing, waveform length
+-> classical baseline or small quantized model
+-> REST / NEXT_TARGET / CONFIRM / ABORT
+-> USB CDC or UART packet
+-> ROS bridge -> /assistive_intent
+```
 
-The retained fixed target-pose provider is implemented. Later objectives
-preserve that deterministic test path while adding new providers, all
-implementing the same contract behind `/target_object_pose`:
+`REST` produces no event. Intent messages require source timestamp, command,
+confidence, and sequence number; they are reliable and volatile, never retained
+or replayed. EMG does not publish `/target_object_pose`.
 
-| Provider | Role |
-| --- | --- |
-| fixed pose | deterministic regression test (done) |
-| marker | perception — where the object is (Objective 3) |
-| biosignal | intent — which object, when (Objective 3.5) |
+### Perception and Selection
+
+| Responsibility | Source / owner | Status |
+| --- | --- | --- |
+| deterministic selected pose | fixed pose publisher | implemented |
+| geometric selected pose | ArUco + current selector | implemented (3.1) |
+| semantic object candidates | markerless perception | planned (3.2) |
+| discrete intent | simulated input, then STM32 bridge | planned (4 / 3.5) |
+| final selected pose | generalized target selector | planned integration |
+
+Objective 3.2 is bounded to closed-set RGB instance segmentation and
+tabletop-constrained localization:
+
+```text
+/image_raw + /camera_info
+-> instance segmentation
+-> class + confidence + mask + temporary instance/track ID
+-> selected mask point
+-> calibrated camera ray intersected with known tabletop plane
+-> metric 3D position
+-> fixed/class-specific approach height and orientation
+-> timestamped /object_candidates
+```
+
+Instance segmentation itself does not produce depth or a graspable 6-DoF pose.
+The monocular MVP assumes a known plane and configured object height/template.
+RGB-D can later replace the plane assumption without changing downstream
+selection. The vision model runs on the host PC or edge-Linux computer.
+
+The generalized selector owns target identity, minimum confidence, bounded
+pose jitter, N-frame stability, selected-track lock, and last-seen time. The
+source observation timestamp must survive every transform. Candidate messages
+are volatile; `/target_object_pose` may remain retained only because consumers
+enforce maximum age.
+
+The current `PoseArray` marker interface cannot prove the same marker ID across
+frames because IDs are discarded. Objective 3.1 therefore keeps its verified
+single-marker assumption unless a later compatibility adapter is added.
+
+### Safety Observation
+
+Hand-position observation is required to complete the vision-assisted Obj4
+scope. Objective 4.1 first consumes a simulated `/hand_observation` so the state
+machine and failure policy can be tested without a camera model. Objective 4.2
+then supplies **2D hand position from hand keypoints**, not hand instance
+segmentation. Valid keypoints entering a configured delivery ROI produce a
+timestamped observation; the same hand must remain valid for N frames. Missing,
+stale, unstable, or low-confidence input must not permit release.
+
+This monocular cue is not safety-rated and does not estimate reliable 3D
+human–robot separation. It does not replace collision checks, force sensing,
+speed limits, an emergency stop, or a formal hardware safety process.
 
 ### Reaching Coordinator
 
-Implemented Objective 1/2 component. It consumes a `PoseStamped`, coordinates
-a reach attempt and return-home action, and logs state transitions and failures.
+The implemented Objective 1/2 coordinator consumes a `PoseStamped`, runs one
+reach/return sequence, and logs failures. Objective 4 will add a source-neutral
+handoff controller around or in place of that one-shot orchestration while
+preserving the MoveIt action interface.
 
 ### Motion Backend
 
@@ -173,9 +244,14 @@ Objective 4 (Phase 0) component. Planned states:
 idle -> approach -> ready -> release -> return_home
 ```
 
-`ready` is the handoff/delivery zone. Timeout, cancellation, failure, and
-user-confirmation transitions must be explicit; `release` wires to intent 2
-(confirm) and intent 3 (release/abort) once the intent layer exists (Phase 1).
+`ready` is the handoff/delivery zone. Timeout, cancellation, failure, target
+freshness, observation freshness, and user-confirmation transitions must be
+explicit. During Objective 4, simulated `CONFIRM` and `ABORT` events exercise
+the production intent contract. `CONFIRM` may begin approach from `idle` and
+request simulated release from `ready`, but the transition is allowed only when
+the hand observation is fresh, confident, and stable inside the delivery ROI.
+`ABORT` cancels active behavior safely. Real gripper actuation remains
+Objective 5 work.
 
 Isaac Lab / Isaac Sim RL is cut, not deferred — LeRobot imitation learning
 (Phase 3, conditional) covers the same ground on a real arm. See
@@ -186,6 +262,10 @@ Isaac Lab / Isaac Sim RL is cut, not deferred — LeRobot imitation learning
 - Keep ROS 2 packages under `src/`.
 - Keep frame names and pose units explicit.
 - Use a fixed-pose provider for reproducible tests.
+- Keep perception candidates, user intent, final selected pose, and safety
+  observations as separate interfaces.
+- Preserve the source timestamp through localization and TF; retention is not
+  freshness.
 - Reject unsupported requests instead of guessing.
 - Do not execute motion after a planning failure.
 - Log state transitions and failure causes.
@@ -204,9 +284,14 @@ responsibilities are:
 | MoveIt 2 configuration | integrated (`moveit_resources_panda_moveit_config`) |
 | fixed target-pose publisher | implemented and runtime-verified |
 | unified `/target_object_pose` interface | implemented and runtime-verified |
-| marker-based object-pose provider | implemented (`marker_pose_provider` + `target_selector`), accuracy quantified |
-| delivery / handoff controller | Objective 4 (next) |
-| EMG intent provider | Objective 3.5 (Phase 1, MVP completion point) |
+| ArUco pose baseline | implemented (`marker_pose_provider` + `target_selector`), accuracy quantified (3.1) |
+| delivery / handoff controller | Objective 4.1 (active; existing pose + simulated intent/hand input) |
+| hand-keypoint position observation | Objective 4.2 (required for vision-assisted handoff) |
+| markerless object perception | Objective 3.2 (planned host-side package) |
+| generalized candidate/intent selector | Objective 3.2/3.5 integration (planned) |
+| shared ROS interfaces | planned when message fields are frozen |
+| STM32 EMG firmware | Objective 3.5 (planned, non-ROS firmware) |
+| EMG USB/UART ROS bridge | Objective 3.5 (planned; intent only) |
 | SO-ARM101 LeRobot backend (backend B) | Objective 5 (Phase 2) |
 | learned ACT policy + EMG intervention layer (backend C) | Objective 6 (Phase 3, PhD research) |
 | rclcpp reaching coordinator, LeRobot imitation learning | Phase 3 (conditional) |
