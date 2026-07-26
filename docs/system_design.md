@@ -132,8 +132,15 @@ interface. Objective 3.5 later replaces that source with STM32 edge inference:
 -> REST / NEXT_TARGET / CONFIRM / ABORT
 -> calibrated direction + normalized activation envelope
 -> USB CDC or UART packet
--> ROS bridge -> /assistive_intent + /assistive_view_control
+-> MVP Python/rclpy bridge -> /assistive_intent + /assistive_view_control
 ```
+
+Firmware ownership is explicit: STM32CubeIDE C/C++ implements ADC/DMA,
+DSP/features, inference, and the versioned packet producer. PC Python tools own
+raw capture/replay, plots, training/quantization, and golden-vector comparison.
+The first runtime bridge is Python/`rclpy` so protocol and diagnostics can be
+iterated quickly. A later `rclcpp` receiver/parser with a fixed-size ring buffer
+is an optional measured optimization, not an Objective 3.5 completion gate.
 
 `REST` produces no event. Intent messages require source timestamp, command,
 confidence, and sequence number; they are reliable and volatile, never retained
@@ -486,12 +493,13 @@ responsibilities are:
 | markerless object perception | Objective 3.2 (planned host-side instance mask + stereo-point-cloud package) |
 | generalized target selector/tracker | Objective 3.2/3.5 integration (planned; stable candidates + intent -> selected pose/status) |
 | shared ROS interfaces | planned after candidate, intent, view-control, target-status, and hand fields are frozen |
-| STM32 EMG firmware | Objective 3.5 (planned, non-ROS firmware) |
-| EMG USB/UART ROS bridge | Objective 3.5 (planned; discrete intent + separate proportional view-control output) |
+| STM32 EMG firmware | Objective 3.5 (planned STM32CubeIDE C/C++; ADC/DMA, DSP/features, inference, packet producer) |
+| PC EMG tooling | Objective 3.5 (planned Python capture/plot/train/quantize/replay/golden vectors) |
+| EMG USB/UART ROS bridge | Objective 3.5 MVP Python/`rclpy`; optional measured `rclcpp` receiver/parser/ring-buffer rewrite in Phase 3 |
 | SO-ARM101 LeRobot backend (backend B) | Objective 5 (Phase 2; real-arm commands, cancellation, gripper/held-object status) |
 | eye-in-hand calibration and deterministic visual refinement | Objective 5 (stereo remount/recalibration plus `PREGRASP -> REOBSERVE -> REFINE -> GRASP`) |
 | learned ACT policy + EMG intervention layer (backend C) | Objective 6 (Phase 3, PhD research) |
-| rclcpp reaching coordinator, LeRobot imitation learning | Phase 3 (conditional) |
+| one measured rclcpp rewrite (reaching coordinator default; EMG bridge alternative), LeRobot imitation learning | Phase 3 (conditional) |
 | evaluation tooling | incremental scripts or package |
 
 Avoid creating these packages until their milestone begins and their interfaces
