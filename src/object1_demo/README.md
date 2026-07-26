@@ -10,9 +10,8 @@ coordinator. The coordinator consumes one retained
 `MoveGroup` goals on `/move_action`, and returns the Panda to its ready pose:
 
 ```text
-fixed object1 pose
--> pre-grasp pose
--> plan and execute
+receive fixed object1 reach target
+-> plan and execute the reach
 -> return home
 ```
 
@@ -20,7 +19,8 @@ The fixed provider and the Objective 3.1 ArUco pipeline have both driven this
 coordinator without changing its target callback or MoveIt goal construction.
 The current coordinator is still a one-shot
 `IDLE -> REACHING -> RETURNING -> DONE` baseline; the Objective 4 handoff state
-machine is not implemented yet.
+machine is not implemented yet. It does not command a gripper or perform a
+physical grasp.
 
 Camera drivers, ArUco detection, future Objective 3.2 instance segmentation,
 STM32 EMG intent, and future hand observations belong to other packages. They

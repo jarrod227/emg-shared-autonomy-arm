@@ -10,6 +10,8 @@ Objective 3.2 will later add markerless instance segmentation as a separate
 perception path; it does not invalidate, delete, or retroactively change the
 measurements below. The two paths require separate evaluations because they use
 different localization assumptions.
+Objective 3.2 dual-RGB stereo localization will therefore receive its own
+evaluation document.
 
 ## What is and isn't measured here
 

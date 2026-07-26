@@ -17,10 +17,11 @@ runtime-verified end to end; camera-frame accuracy is quantified in
 This document distinguishes the current implementation from the longer-term
 architecture. The execution layer (Objectives 1–2) and ArUco perception
 baseline (Objective 3.1) exist today. Objective 4 is active and is implemented
-as two increments: Objective 4.1 uses the existing pose pipeline plus simulated
-intent/hand observation, and Objective 4.2 adds camera hand-keypoint position.
-Objective 3.2 then adds markerless perception, and Objective 3.5 adds STM32 EMG
-intent.
+as three increments: Objective 4.1 uses the existing pose pipeline plus
+simulated intent/hand observation; Objective 4.2 adds stereo-triangulated hand
+keypoints; Objective 4.3 defines bounded search with simulated view commands.
+Objective 3.2 then adds instance-mask/stereo object perception, and Objective
+3.5 adds STM32 discrete intent plus proportional view control.
 
 ## Current Workspace Layout
 
@@ -99,22 +100,19 @@ fixed pose ---------------------------------------------> /target_object_pose
 camera -> ArUco/PnP -> current target_selector --------> /target_object_pose
 
 PLANNED
-camera -> instance segmentation -> tabletop localizer -> /object_candidates
-STM32 EMG -> USB/UART bridge --------------------------> /assistive_intent
-                                                   |             |
-                                                   +------v------+
-                                                   target selector
-                                                         |
-                                              /target_object_pose
-                                                         |
-hand-keypoint monitor -> /hand_observation ------> handoff controller
-                                                         |
-                                                  MoveIt /move_action
+left/right RGB -> sync/rectify -> disparity/PointCloud2 --------+
+left rectified RGB -> instance mask ----------------------------+-> /object_candidates
+STM32 EMG -> USB/UART bridge -> /assistive_intent --------------+-> target selector
+STM32 EMG -> USB/UART bridge -> /assistive_view_control --------+       |
+                                                               /target_object_pose
+stereo hand keypoints -> 3D /hand_observation ----------> handoff controller
+                                                                     |
+                                                             robot backend
 ```
 
-Only one selected-pose source is active at a time. The camera driver should
-also be launched once; multiple perception nodes may subscribe to the same
-`/image_raw` and `/camera_info` streams.
+Only one selected-pose source is active at a time. Each physical camera driver
+is launched once in its own namespace; multiple consumers may reuse the
+rectified streams. The preserved ArUco path may use the left camera alone.
 
 Language / voice target selection is cut, not deferred — see `docs/proposal.md`
 §5. It would occupy the same layer as biosignal intent and is functionally
@@ -132,13 +130,56 @@ interface. Objective 3.5 later replaces that source with STM32 edge inference:
 -> MAV, RMS, zero crossing, waveform length
 -> classical baseline or small quantized model
 -> REST / NEXT_TARGET / CONFIRM / ABORT
+-> calibrated direction + normalized activation envelope
 -> USB CDC or UART packet
--> ROS bridge -> /assistive_intent
+-> ROS bridge -> /assistive_intent + /assistive_view_control
 ```
 
 `REST` produces no event. Intent messages require source timestamp, command,
 confidence, and sequence number; they are reliable and volatile, never retained
-or replayed. EMG does not publish `/target_object_pose`.
+or replayed. `ViewControlCommand` is also volatile and contains
+`LEFT`/`RIGHT`/`HOLD`, normalized activation, confidence, signal quality,
+source time, and sequence. EMG does not publish `/target_object_pose`.
+
+After per-session rest and comfortable-contraction calibration:
+
+```text
+activation = clip((envelope - rest) / (comfortable - rest), 0, 1)
+target_angle = safe_center +/- configured_limit * activation
+```
+
+Activation changes target angle, not speed. The controller uses a fixed low
+nominal speed plus acceleration/deceleration limits. Deadband, smoothing,
+saturation, stable-window gating, and a stale-command watchdog suppress noise.
+A newer valid command preempts the old search target after a smooth halt;
+`ABORT` bypasses smoothing and always has priority.
+
+### Stereo Sensing Foundation
+
+Two ordinary USB RGB cameras form a passive stereo sensor only after they are
+mounted in one rigid bracket and calibrated. They have no assumed hardware
+trigger. The planned bench interface is:
+
+```text
+/stereo/left/image_raw       + /stereo/left/camera_info
+/stereo/right/image_raw      + /stereo/right/camera_info
+-> approximate-time pair with maximum skew
+-> stereo rectification
+-> /stereo/left/image_rect + /stereo/right/image_rect
+-> /stereo/disparity + /stereo/points2
+```
+
+Calibration records each camera's intrinsics, the fixed left/right extrinsic,
+rectification maps, and reprojection matrix. Acquisition is stop-and-look: the
+robot or bench rig is stationary, vibration settles, and a short burst of
+timestamp-checked pairs is processed. Excessive skew, invalid disparity, or
+high reprojection error invalidates the observation.
+
+Before Objective 5, the bracket may be fixed on a bench and has a static
+planning-frame extrinsic. Objective 5 remounts it on one moving robot link,
+requires stereo recalibration plus hand-eye calibration, and resolves
+`base -> end_effector -> stereo_reference` at the image timestamp. Reusing the
+old bench extrinsic or the latest TF is invalid.
 
 ### Perception and Selection
 
@@ -146,34 +187,47 @@ or replayed. EMG does not publish `/target_object_pose`.
 | --- | --- | --- |
 | deterministic selected pose | fixed pose publisher | implemented |
 | geometric selected pose | ArUco + current selector | implemented (3.1) |
-| semantic object candidates | markerless perception | planned (3.2) |
-| discrete intent | simulated input, then STM32 bridge | planned (4 / 3.5) |
-| final selected pose | generalized target selector | planned integration |
+| semantic object candidates | instance mask + stereo point cloud | planned (3.2) |
+| discrete intent | simulated input, then STM32 bridge | planned (4.1 / 3.5) |
+| bounded search command | simulated input, then STM32 bridge | planned (4.3 / 3.5) |
+| target acquisition and final pose | generalized target selector | planned integration |
 
-Objective 3.2 is bounded to closed-set RGB instance segmentation and
-tabletop-constrained localization:
+Objective 3.2 is bounded to closed-set instance segmentation plus
+mask-filtered passive-stereo localization:
 
 ```text
-/image_raw + /camera_info
--> instance segmentation
--> class + confidence + mask + temporary instance/track ID
--> selected mask point
--> calibrated camera ray intersected with known tabletop plane
--> metric 3D position
--> fixed/class-specific approach height and orientation
+approximately synchronized rectified left/right images
+-> disparity + PointCloud2 in the stereo reference frame
+left rectified image
+-> class + confidence + instance mask + temporary track ID
+instance mask ∩ valid stereo points
+-> reject invalid disparity, outliers, and tabletop-plane points
+-> robust metric object position
+-> fixed/class-specific grasp offset, approach height, and orientation
 -> timestamped /object_candidates
 ```
 
-Instance segmentation itself does not produce depth or a graspable 6-DoF pose.
-The monocular MVP assumes a known plane and configured object height/template.
-RGB-D can later replace the plane assumption without changing downstream
-selection. The vision model runs on the host PC or edge-Linux computer.
+The instance model runs on the host PC or edge-Linux computer. It supplies a
+2D class and mask, not depth. Stereo correspondence supplies metric points only
+where disparity is valid; the tabletop is a support and outlier constraint,
+not the primary depth source. A point cloud does not automatically provide a
+reliable grasp orientation, so the MVP keeps a fixed or class-specific grasp
+template and does not claim full 6-DoF object-pose recovery.
 
-The generalized selector owns target identity, minimum confidence, bounded
-pose jitter, N-frame stability, selected-track lock, and last-seen time. The
-source observation timestamp must survive every transform. Candidate messages
-are volatile; `/target_object_pose` may remain retained only because consumers
-enforce maximum age.
+Stop-and-look applies to target acquisition: motion stops, the bracket settles,
+and only a fresh burst of pairs inside the configured skew/reprojection limits
+may contribute candidates. Each candidate preserves the source-pair time,
+stereo frame, class, confidence, temporary track identity, and localization
+quality. An empty array or explicit invalid observation reports that no usable
+candidate exists; silence is not treated as a fresh negative observation.
+
+The generalized selector owns candidate identity, minimum confidence, bounded
+position jitter, N-frame stability, selected-track lock, and last-seen time.
+It combines stable candidates with `/assistive_intent` and is the sole
+publisher of `/target_object_pose` for the integrated markerless path.
+Candidate streams are volatile. `/target_object_pose` may remain reliable and
+retained only because every consumer checks the preserved source timestamp
+against a configured maximum age. Retention is not freshness.
 
 The current `PoseArray` marker interface cannot prove the same marker ID across
 frames because IDs are discarded. Objective 3.1 therefore keeps its verified
@@ -184,30 +238,70 @@ single-marker assumption unless a later compatibility adapter is added.
 Hand-position observation is required to complete the vision-assisted Obj4
 scope. Objective 4.1 first consumes a simulated `/hand_observation` so the state
 machine and failure policy can be tested without a camera model. Objective 4.2
-then supplies **2D hand position from hand keypoints**, not hand instance
-segmentation. Valid keypoints entering a configured delivery ROI produce a
-timestamped observation; the same hand must remain valid for N frames. Missing,
-stale, unstable, or low-confidence input must not permit release.
+reuses the shared stereo foundation:
 
-This monocular cue is not safety-rated and does not estimate reliable 3D
-human–robot separation. It does not replace collision checks, force sensing,
-speed limits, an emergency stop, or a formal hardware safety process.
+```text
+rectified left/right images
+-> hand keypoints in both views
+-> cross-view association and epipolar checks
+-> triangulation + reprojection validation
+-> robust 3D palm/hand point
+-> configured 3D delivery-volume test
+-> timestamped /hand_observation
+```
+
+The observation reports valid/no-hand status explicitly and carries source
+time, frame, confidence, pair skew, reprojection quality, and the 3D point when
+valid. The same valid hand-in-volume condition must remain stable for N frames.
+Missing keypoints in either view, stale or excessive-skew pairs, failed
+association, high reprojection error, low confidence, or instability all
+invalidate the cue and block release. Hand instance segmentation is optional
+future robustness work, not an Objective 4.2 dependency.
+
+The observer owns measurement validity; the handoff controller owns the
+fail-closed response and may permit `HANDOFF_READY -> RELEASE` only with a
+fresh, stable observation plus the required user confirmation. Stereo
+triangulation estimates approximate 3D hand position, but it is not
+safety-rated separation monitoring. It does not replace collision checking,
+force sensing, speed limits, an emergency stop, or a formal hardware safety
+process. Objective 5 still delivers to a fixed zone rather than chasing a
+moving hand.
 
 ### Reaching Coordinator
 
 The implemented Objective 1/2 coordinator consumes a `PoseStamped`, runs one
-reach/return sequence, and logs failures. Objective 4 will add a source-neutral
-handoff controller around or in place of that one-shot orchestration while
-preserving the MoveIt action interface.
+reach/return sequence, and logs failures. That verified node remains the
+Objective 1/2 regression path. Objective 4 adds a source-neutral handoff
+controller around or in place of the one-shot orchestration while preserving
+the existing target-pose seam and MoveIt action interface.
+
+The planned controller consumes five independent kinds of input:
+
+```text
+/target_object_pose + target status   selected target and freshness
+/assistive_intent                     NEXT_TARGET / CONFIRM / ABORT events
+/assistive_view_control               bounded search-angle command
+/hand_observation                     3D delivery-volume cue and validity
+robot-backend result/status           motion, cancellation, and held-object state
+```
+
+It rejects an over-age retained target before approach, owns state timeouts and
+the response to stale target/hand/view inputs, and never treats message receipt
+as proof of freshness. Goal construction remains backend-specific; the state
+machine decides when a goal may be sent, cancelled, preempted, or followed by a
+safe return. `ABORT` has global priority over motion smoothing and normal state
+transitions.
+
+Proportional view commands are not general teleoperation. They are accepted
+only in `TARGET_SEARCH` or `HANDOFF_SEARCH`, control one designated viewing
+joint/axis, and choose a bounded target angle rather than speed. A newer fresh
+command smoothly preempts the old target; watchdog expiry holds position. The
+controller must confirm that search motion has stopped before accepting a new
+stop-and-look localization burst.
 
 ### Motion Backend
 
-Objective 1 component. It should use MoveIt 2 with a supported simulated arm.
-The robot description, planning group, planning frame, and end-effector frame
-must be confirmed before implementation.
-
-The backend should sit behind a robot-command abstraction so the same reaching
-coordinator can target either platform:
+The robot backend sits behind a source-independent command abstraction:
 
 ```text
 robot command abstraction
@@ -216,20 +310,55 @@ robot command abstraction
 -> backend C: learned ACT policy on SO-ARM101 (Objective 6, Phase 3)
 ```
 
-Backend B controls a real SO-ARM101 (5-DOF arm + gripper, 6 Feetech servos)
-through LeRobot, optionally bridged from a ROS 2 command node. The 5-DOF arm
-cannot reach arbitrary 6-DOF poses, so joint-space goals are often more reliable
-than full Cartesian pose goals.
+Backend A is the implemented Panda MoveIt path. It uses the verified
+`moveit_msgs/action/MoveGroup` interface on `/move_action`; the planning group,
+planning frame, end-effector frame, velocity/acceleration scaling, and
+plan-only versus plan-and-execute mode remain explicit.
 
-Backend C (Phase 3) replaces the planner with a learned ACT policy. This is
-where the two execution ceilings are compared: a planner's ceiling is fixed by
-what can be specified, a learned policy's ceiling scales with data. The Phase 3
-research studies a **human-intervention layer** on top of backend C — a
+Backend B controls the real SO-ARM101 (5-DOF arm + gripper, 6 Feetech servos)
+through LeRobot, optionally bridged from ROS 2. The 5-DOF arm cannot realize an
+arbitrary 6-DoF end-effector pose, so the backend may use reachable
+joint-space goals or constrained task-space commands while preserving the
+upstream selected-target contract.
+
+Objective 5 owns the physical eye-in-hand conversion. Both ordinary USB
+cameras are fixed in one rigid bracket on one moving robot link; mounting is
+followed by stereo recalibration and a measured
+`end_effector -> stereo_reference` hand-eye transform. Every observation is
+transformed through `base -> end_effector -> stereo_reference` at its source
+timestamp. Reusing the bench extrinsic or looking up only the latest transform
+is invalid.
+
+Objective 5 also owns the deterministic stop-and-look retrieval sequence:
+
+```text
+PREGRASP -> stop and settle
+-> REOBSERVE -> acquire a fresh valid stereo burst
+-> REFINE -> compute and bound one target correction
+-> GRASP -> verify held object
+-> LIFT_CLEAR
+```
+
+Failed/stale reobservation, a correction outside configured bounds, exhausted
+retry count, or failed grasp verification prevents `GRASP`/`LIFT_CLEAR` and
+enters the defined retry, abort, or safe-return path. `HANDOFF_SEARCH` is
+forbidden until `holding_object=true`; loaded search uses separate, tighter
+angle and speed limits. Physical delivery remains to a fixed zone.
+
+Backend C (Phase 3) is an optional learned ACT backend evaluated only after the
+deterministic Objective 5 baseline is calibrated and measured. It does not own
+stereo calibration, hand-eye calibration, or stop-and-look refinement. The
+Phase 3 research studies a **human-intervention layer** on top of backend C — a
 constrained EMG channel (abort / confirm / gate) that catches policy failures
 and flags failure-adjacent states for correction-data collection. The
 intervention channel is deliberately low-bandwidth (the same shared-autonomy
 thesis as the intent layer); its cost is the object of study. See
 `docs/proposal.md` Phase 3 and `TODO.md` P3.2.
+
+Calibrated geometry and `PREGRASP -> REOBSERVE -> REFINE -> GRASP` remain the
+measured Objective 5 baseline. Backend C may later study bounded residuals or
+failure recovery, but it must not be used to hide systematic stereo, hand-eye,
+or robot-calibration bias.
 
 ### RViz Visualization
 
@@ -238,20 +367,53 @@ trajectory, and reach-to-home execution.
 
 ### Safety-Aware Handoff State Machine
 
-Objective 4 (Phase 0) component. Planned states:
+Objective 4 defines the source-independent control and safety contract. Its
+simulation milestones exercise the same target, intent, view-control, and hand
+interfaces that later drive Objective 5. The full nominal state path is:
 
 ```text
-idle -> approach -> ready -> release -> return_home
+HOME/IDLE
+├─ fresh stable target + CONFIRM -> APPROACH
+└─ no fresh target -> TARGET_SEARCH -> target lock -> APPROACH
+
+APPROACH
+-> PREGRASP -> REOBSERVE -> REFINE -> GRASP -> LIFT_CLEAR   (physical in Obj5)
+-> HANDOFF_SEARCH -> stable hand -> HANDOFF_READY
+-> RELEASE -> RETREAT -> RETURN_HOME
 ```
 
-`ready` is the handoff/delivery zone. Timeout, cancellation, failure, target
-freshness, observation freshness, and user-confirmation transitions must be
-explicit. During Objective 4, simulated `CONFIRM` and `ABORT` events exercise
-the production intent contract. `CONFIRM` may begin approach from `idle` and
-request simulated release from `ready`, but the transition is allowed only when
-the hand observation is fresh, confident, and stable inside the delivery ROI.
-`ABORT` cancels active behavior safely. Real gripper actuation remains
-Objective 5 work.
+Objective 4.1 implements the core timeout, cancellation, failure, target-age,
+confirmation, simulated hold/release, and return behavior. Objective 4.2 adds
+the fail-closed 3D hand-observation gate. Objective 4.3 adds the two bounded
+search states with simulated view commands. Physical grasping, held-object
+verification, loaded motion, and the `PREGRASP -> REOBSERVE -> REFINE -> GRASP`
+subsequence remain Objective 5 responsibilities.
+
+`TARGET_SEARCH` is allowed only before target lock with an empty/simulated
+empty gripper. It accepts fresh `/assistive_view_control`, moves one viewing
+joint toward a bounded target angle at fixed low nominal speed, and exits only
+after search motion is cancelled and fully stopped and a new N-frame-stable
+target is acquired from fresh observations.
+
+`HANDOFF_SEARCH` is a different loaded condition. It is allowed only after a
+simulated or verified `GRASP` plus `LIFT_CLEAR` and requires
+`holding_object=true`. It uses independent, tighter angle and speed limits.
+Stable hand acquisition cancels search, waits for a confirmed stop, and then
+uses a new fresh stereo burst before entering `HANDOFF_READY`.
+
+Only the search states accept proportional view commands. Activation selects
+angle, not speed; configured relative travel is capped at 45 degrees and by
+absolute joint/collision limits. Two search goals may never execute
+concurrently. A newer command smoothly preempts the old goal, stale command
+holds position, and search timeout follows the defined hold/return/failure
+policy. `ABORT` bypasses smoothing, cancels active motion, and has global
+priority.
+
+`HANDOFF_READY -> RELEASE` additionally requires a fresh, confident,
+N-frame-stable hand point inside the configured 3D delivery volume plus the
+required `CONFIRM`. Missing or invalid hand input never permits release.
+Objective 4 release is simulated; Objective 5 gripper release occurs only at a
+fixed delivery zone under the real-hardware safety policy.
 
 Isaac Lab / Isaac Sim RL is cut, not deferred — LeRobot imitation learning
 (Phase 3, conditional) covers the same ground on a real arm. See
@@ -261,15 +423,46 @@ Isaac Lab / Isaac Sim RL is cut, not deferred — LeRobot imitation learning
 
 - Keep ROS 2 packages under `src/`.
 - Keep frame names and pose units explicit.
-- Use a fixed-pose provider for reproducible tests.
-- Keep perception candidates, user intent, final selected pose, and safety
-  observations as separate interfaces.
-- Preserve the source timestamp through localization and TF; retention is not
-  freshness.
+- Preserve the fixed-pose and Objective 3.1 ArUco paths as reproducible
+  regression/fallback sources.
+- Keep perception candidates, discrete intent, proportional view control,
+  final selected pose, target status, and hand observation as separate
+  interfaces. EMG never fabricates a Pose.
+- Only the active selector/pose provider may publish `/target_object_pose`;
+  preserved alternatives are selected by launch/configuration rather than
+  competing on the same topic.
+- Preserve camera/source timestamps through approximate pairing, stereo,
+  candidate tracking, TF, and target publication. Retention is not freshness,
+  and eye-in-hand transforms are resolved at the observation time.
+- Treat two ordinary USB cameras as stereo only after rigid mounting,
+  calibration/rectification, pair-skew checks, and measured working-range
+  error. Do not call them RGB-D or hardware synchronized.
+- Use stop-and-look acquisition for metric localization: halt, settle, reject
+  old/excessive-skew pairs, then acquire a fresh stable burst.
+- Keep candidate and observation streams volatile and explicit about empty or
+  invalid data. Keep command streams volatile; do not replay old intent or view
+  commands. A retained target is usable only while within its age contract.
+- The selector/tracker owns candidate identity, confidence/jitter checks,
+  N-frame target stability, lock, and last-seen time. The controller owns the
+  state-machine response to stale/invalid inputs.
+- Accept proportional view commands only in `TARGET_SEARCH` or
+  `HANDOFF_SEARCH`. Map activation to one bounded target angle, not speed; use
+  fixed low speed, acceleration limits, preemption, and a stale-command hold.
+- Require `holding_object=true` and stricter loaded limits before
+  `HANDOFF_SEARCH`. Two search goals must never execute concurrently.
+- Give `ABORT` global priority over smoothing, search, and nominal transitions.
+- Require a fresh, confident, N-frame-stable 3D hand cue for release, while
+  documenting that it is not safety-rated separation monitoring.
+- Keep physical handoff at a fixed delivery zone; reject unsupported or
+  unsafe requests instead of guessing.
+- Fix systematic stereo, hand-eye, and robot calibration errors before any
+  learned residual or policy is evaluated.
 - Reject unsupported requests instead of guessing.
 - Do not execute motion after a planning failure.
 - Log state transitions and failure causes.
-- Keep speed and handoff-distance limits configurable.
+- Keep target age, pair skew, reprojection quality, search angle/speed,
+  correction magnitude/retries, hand stability, and delivery-distance limits
+  configurable.
 - Add tests as each behavioral layer is introduced.
 
 ## Planned Package Boundaries
@@ -285,14 +478,18 @@ responsibilities are:
 | fixed target-pose publisher | implemented and runtime-verified |
 | unified `/target_object_pose` interface | implemented and runtime-verified |
 | ArUco pose baseline | implemented (`marker_pose_provider` + `target_selector`), accuracy quantified (3.1) |
-| delivery / handoff controller | Objective 4.1 (active; existing pose + simulated intent/hand input) |
-| hand-keypoint position observation | Objective 4.2 (required for vision-assisted handoff) |
-| markerless object perception | Objective 3.2 (planned host-side package) |
-| generalized candidate/intent selector | Objective 3.2/3.5 integration (planned) |
-| shared ROS interfaces | planned when message fields are frozen |
+| source-neutral handoff controller | Objective 4.1 (active; existing pose + simulated intent/hand input) |
+| shared stereo acquisition/rectification | Objective 4.2 (planned; two namespaced USB drivers, approximate sync, calibration, stop-and-look) |
+| stereo hand-observation node | Objective 4.2 (planned; keypoint association, triangulation, 3D delivery-volume validity) |
+| bounded active-view search controller | Objective 4.3 (planned first with simulated view commands) |
+| simulated intent/view/hand providers | Objective 4 test and integration executables (planned) |
+| markerless object perception | Objective 3.2 (planned host-side instance mask + stereo-point-cloud package) |
+| generalized target selector/tracker | Objective 3.2/3.5 integration (planned; stable candidates + intent -> selected pose/status) |
+| shared ROS interfaces | planned after candidate, intent, view-control, target-status, and hand fields are frozen |
 | STM32 EMG firmware | Objective 3.5 (planned, non-ROS firmware) |
-| EMG USB/UART ROS bridge | Objective 3.5 (planned; intent only) |
-| SO-ARM101 LeRobot backend (backend B) | Objective 5 (Phase 2) |
+| EMG USB/UART ROS bridge | Objective 3.5 (planned; discrete intent + separate proportional view-control output) |
+| SO-ARM101 LeRobot backend (backend B) | Objective 5 (Phase 2; real-arm commands, cancellation, gripper/held-object status) |
+| eye-in-hand calibration and deterministic visual refinement | Objective 5 (stereo remount/recalibration plus `PREGRASP -> REOBSERVE -> REFINE -> GRASP`) |
 | learned ACT policy + EMG intervention layer (backend C) | Objective 6 (Phase 3, PhD research) |
 | rclcpp reaching coordinator, LeRobot imitation learning | Phase 3 (conditional) |
 | evaluation tooling | incremental scripts or package |
