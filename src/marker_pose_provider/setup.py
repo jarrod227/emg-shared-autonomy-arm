@@ -22,6 +22,7 @@ setup(
     entry_points={
         "console_scripts": [
             "marker_node = marker_pose_provider.marker_node:main",
+            "accuracy_probe = marker_pose_provider.accuracy_probe:main",
         ],
     },
 )
