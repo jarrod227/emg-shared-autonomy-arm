@@ -53,6 +53,19 @@ def test_invalid_result_is_an_explicit_no_hand_message():
     )
 
 
+def test_integer_nanoseconds_preserve_large_epoch_stamp_exactly():
+    source_nanoseconds = 1_785_174_214_909_537_099
+
+    message = hand_observation_from_result(
+        make_result(),
+        "world",
+        source_time_nanoseconds=source_nanoseconds,
+    )
+
+    assert message.header.stamp.sec == 1_785_174_214
+    assert message.header.stamp.nanosec == 909_537_099
+
+
 def test_invalid_confidence_is_clamped_to_message_contract():
     message = hand_observation_from_result(
         make_result(valid=False, point=None, confidence=1.2),

@@ -6,6 +6,7 @@ import pytest
 from stereo_hand_observer.geometry import (
     StereoGeometryError,
     epipolar_error,
+    fundamental_from_projections,
     project_point,
     triangulate_keypoint,
 )
@@ -82,6 +83,30 @@ def test_project_point_matches_independent_pinhole_equations():
         project_point(RIGHT_PROJECTION, point),
         independently_project(point, right_camera=True),
     )
+
+
+def test_fundamental_matrix_is_derived_from_camera_info_projections():
+    fundamental = fundamental_from_projections(
+        LEFT_PROJECTION,
+        RIGHT_PROJECTION,
+    )
+    point = np.array([0.05, 0.02, 1.0])
+
+    error = epipolar_error(
+        fundamental,
+        independently_project(point),
+        independently_project(point, right_camera=True),
+    )
+
+    assert error == pytest.approx(0.0, abs=1e-10)
+
+
+def test_identical_projection_matrices_have_no_stereo_baseline():
+    with pytest.raises(StereoGeometryError, match="baseline"):
+        fundamental_from_projections(
+            LEFT_PROJECTION,
+            LEFT_PROJECTION,
+        )
 
 
 def test_epipolar_check_rejects_vertical_keypoint_mismatch():

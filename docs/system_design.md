@@ -16,17 +16,17 @@ Objective 4.1 is also implemented as a separate Phase-0 simulated controller:
 `assistive_interfaces` defines `AssistiveIntent` and `HandObservation`, while
 `assistive_handoff` implements the five-state handoff flow, simulated
 providers, freshness/timeout checks, `ABORT`, and fail-closed release gating.
-Archived results cover the 23-test Objective 1/2/3.1 baseline. The repository
-contains 25 Objective 4.1 controller test cases, but no archived result
-establishes a combined 48-test pass; do not claim 48 tests passing before a
-fresh full run.
+Historical results cover the 23-test Objective 1/2/3.1 baseline and the earlier
+25-test Objective 4.1 controller suite. On 2026-07-27 all six packages built;
+the current result summary is 107 tests with zero errors or failures after the
+global-topic packages were rerun sequentially.
 
-Objective 4.2 now has a separate `stereo_hand_observer` package implementing
-synthetic rectified stereo geometry, epipolar/reprojection rejection, a
-spherical delivery-volume and N-frame stability gate, the existing
-`HandObservation` adapter, and a synthetic ROS node. Its fresh package-local
-run passed 43 tests on 2026-07-27, including eight ROS topic-level handoff
-integration cases; live-camera and bench-stereo validation are still pending.
+Objective 4.2 has a separate `stereo_hand_observer` package implementing
+synthetic and live rectified-image paths, `CameraInfo.P` stereo geometry,
+replaceable/optional MediaPipe keypoint detection, approximate synchronization,
+epipolar/reprojection rejection, delivery-volume/N-frame gates, exact source
+stamps, and stream watchdog invalidation. Its package-local run passed 59 tests;
+real model/camera runtime and bench-stereo validation are still pending.
 
 ## Design Status
 
@@ -49,7 +49,7 @@ assistive_robot_ws/
 │   ├── target_selector/       marker selection, grasp offset, TF (3.1)
 │   ├── assistive_interfaces/  intent + hand-observation messages (4.1)
 │   ├── assistive_handoff/     simulated handoff controller + providers (4.1)
-│   └── stereo_hand_observer/  stereo geometry/gates + synthetic node (4.2)
+│   └── stereo_hand_observer/  stereo geometry/gates + live adapter (4.2)
 ├── AGENTS.md
 └── TODO.md
 ```
@@ -279,15 +279,14 @@ rectified left/right images
 ```
 
 The no-hardware portion is implemented in `stereo_hand_observer`: synthetic
-corresponding keypoints exercise triangulation, epipolar/reprojection limits,
-the configured spherical delivery volume, N-frame stability, explicit invalid
-results, and ROS message conversion. Controller-level refusal integration is
-verified through the real ROS topic and controller transition. This stage has
-no SO-ARM101 or STM32/EMG dependency.
-Completing Objective 4.2 still requires live keypoint association plus a rigid,
-calibrated fixed bench stereo pair with measured timestamp skew and
-working-range 3D error. Eye-in-hand mounting and the resulting stereo/hand-eye
-recalibration remain Objective 5.
+and rectified-image inputs exercise detector association, triangulation,
+epipolar/reprojection limits, the configured delivery volume, N-frame
+stability, exact source stamping, explicit invalid results, and an unpaired
+stream watchdog. Controller and image-topic refusal integration are verified
+with deterministic injected detections. Completing Objective 4.2 still
+requires running the actual detector and a rigid calibrated fixed bench stereo
+pair, then measuring timestamp skew and working-range 3D error. Eye-in-hand
+mounting and the resulting stereo/hand-eye recalibration remain Objective 5.
 
 The observation reports valid/no-hand status explicitly and carries source
 time, frame, confidence, pair skew, reprojection quality, and the 3D point when
@@ -426,9 +425,10 @@ APPROACH
 
 Objective 4.1 has implemented the core timeout, cancellation, failure,
 target-age, confirmation, simulated hold/release, and return behavior.
-Objective 4.2 is active and replaces the simulated hand source with a
-stereo-triangulated, quality-checked, N-frame-stable 3D observation while
-preserving the fail-closed controller contract. Objective 4.3 adds the two
+Objective 4.2 is active; its live adapter can replace the simulated hand source
+with a stereo-triangulated, quality-checked, N-frame-stable 3D observation while
+preserving the fail-closed controller contract. Physical deployment and bench
+measurement remain. Objective 4.3 adds the two
 bounded search states with simulated view commands. Physical grasping, held-object
 verification, loaded motion, and the `PREGRASP -> REOBSERVE -> REFINE -> GRASP`
 subsequence remain Objective 5 responsibilities.
@@ -524,7 +524,7 @@ responsibilities are:
 | ArUco pose baseline | implemented (`marker_pose_provider` + `target_selector`), accuracy quantified (3.1) |
 | source-neutral handoff controller | implemented (Objective 4.1 Phase-0; simulated actions and target/intent/hand inputs) |
 | shared stereo acquisition/rectification | Objective 4.2 active; final validation uses two namespaced USB drivers, approximate sync, calibration, and stop-and-look |
-| stereo hand-observation node | Objective 4.2 active; `stereo_hand_observer` synthetic geometry, quality/volume/stability gates, message adapter, and test node implemented; live image keypoint association and bench validation pending |
+| stereo hand-observation node | Objective 4.2 active; synthetic harness plus live rectified-image/CameraInfo sync, optional detector adapter, quality/volume/stability gates, exact stamps, and watchdog implemented; actual model/camera runtime and bench validation pending |
 | bounded active-view search controller | Objective 4.3 (planned first with simulated view commands) |
 | simulated target/intent/hand providers | implemented (Objective 4.1) |
 | simulated view provider | planned (Objective 4.3) |

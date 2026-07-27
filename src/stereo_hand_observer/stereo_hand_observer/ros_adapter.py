@@ -1,6 +1,7 @@
 """Convert the pure pipeline result into the frozen ROS message contract."""
 
 import math
+import operator
 
 from assistive_interfaces.msg import HandObservation
 from builtin_interfaces.msg import Time
@@ -11,6 +12,23 @@ from stereo_hand_observer.pipeline import PipelineResult
 _NANOSECONDS_PER_SECOND = 1_000_000_000
 
 
+def _stamp_from_nanoseconds(source_time_nanoseconds):
+    try:
+        total_nanoseconds = operator.index(source_time_nanoseconds)
+    except TypeError as error:
+        raise ValueError(
+            "source_time_nanoseconds must be an integer"
+        ) from error
+    if isinstance(source_time_nanoseconds, bool) or total_nanoseconds < 0:
+        raise ValueError(
+            "source_time_nanoseconds must be a non-negative integer"
+        )
+    stamp = Time()
+    stamp.sec = total_nanoseconds // _NANOSECONDS_PER_SECOND
+    stamp.nanosec = total_nanoseconds % _NANOSECONDS_PER_SECOND
+    return stamp
+
+
 def _stamp_from_seconds(source_time_sec):
     source_time_sec = float(source_time_sec)
     if not math.isfinite(source_time_sec) or source_time_sec < 0.0:
@@ -18,13 +36,15 @@ def _stamp_from_seconds(source_time_sec):
     total_nanoseconds = round(
         source_time_sec * _NANOSECONDS_PER_SECOND
     )
-    stamp = Time()
-    stamp.sec = total_nanoseconds // _NANOSECONDS_PER_SECOND
-    stamp.nanosec = total_nanoseconds % _NANOSECONDS_PER_SECOND
-    return stamp
+    return _stamp_from_nanoseconds(total_nanoseconds)
 
 
-def hand_observation_from_result(result, frame_id):
+def hand_observation_from_result(
+    result,
+    frame_id,
+    *,
+    source_time_nanoseconds=None,
+):
     """Build one HandObservation without changing the pipeline decision."""
     if not isinstance(result, PipelineResult):
         raise TypeError("result must be a PipelineResult")
@@ -41,7 +61,12 @@ def hand_observation_from_result(result, frame_id):
         raise ValueError("observation error fields must be non-negative")
 
     message = HandObservation()
-    message.header.stamp = _stamp_from_seconds(result.source_time_sec)
+    if source_time_nanoseconds is None:
+        message.header.stamp = _stamp_from_seconds(result.source_time_sec)
+    else:
+        message.header.stamp = _stamp_from_nanoseconds(
+            source_time_nanoseconds
+        )
     message.header.frame_id = frame_id
     message.valid = result.valid
     message.confidence = max(0.0, min(1.0, confidence))

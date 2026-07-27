@@ -21,6 +21,8 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
+            "live_observer = "
+            "stereo_hand_observer.live_observer:main",
             "synthetic_observer = "
             "stereo_hand_observer.synthetic_observer:main",
         ],

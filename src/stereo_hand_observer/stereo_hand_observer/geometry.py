@@ -30,6 +30,48 @@ class TriangulationResult:
         )
 
 
+def fundamental_from_projections(left_projection, right_projection):
+    """Derive a fundamental matrix from two calibrated projections."""
+    left_matrix = _finite_array(
+        left_projection,
+        (3, 4),
+        "left_projection",
+    )
+    right_matrix = _finite_array(
+        right_projection,
+        (3, 4),
+        "right_projection",
+    )
+
+    _, _, left_singular_vectors = np.linalg.svd(left_matrix)
+    left_camera_center = left_singular_vectors[-1]
+    right_epipole = right_matrix @ left_camera_center
+    epipole_norm = np.linalg.norm(right_epipole)
+    if epipole_norm <= _EPSILON:
+        raise StereoGeometryError(
+            "projection matrices do not define a stereo baseline"
+        )
+
+    epipole_cross_product = np.array(
+        [
+            [0.0, -right_epipole[2], right_epipole[1]],
+            [right_epipole[2], 0.0, -right_epipole[0]],
+            [-right_epipole[1], right_epipole[0], 0.0],
+        ]
+    )
+    fundamental = (
+        epipole_cross_product
+        @ right_matrix
+        @ np.linalg.pinv(left_matrix)
+    )
+    fundamental_norm = np.linalg.norm(fundamental)
+    if fundamental_norm <= _EPSILON:
+        raise StereoGeometryError(
+            "projection matrices produced a degenerate fundamental matrix"
+        )
+    return fundamental / fundamental_norm
+
+
 def _finite_array(value, expected_shape, name):
     array = np.asarray(value, dtype=np.float64)
     if array.shape != expected_shape:

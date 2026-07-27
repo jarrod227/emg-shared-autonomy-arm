@@ -98,6 +98,44 @@ class StereoHandPipeline:
             reason=decision.reason,
         )
 
+    def invalidate(
+        self,
+        reason,
+        *,
+        left_source_time_sec,
+        right_source_time_sec,
+        confidence=0.0,
+    ):
+        """Reset stability and return one explicit invalid observation."""
+        try:
+            left_time = float(left_source_time_sec)
+            right_time = float(right_source_time_sec)
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            left_time = right_time = 0.0
+            confidence = 0.0
+            reason = "invalid_pair_metadata"
+
+        if not all(
+            math.isfinite(value)
+            for value in (left_time, right_time, confidence)
+        ):
+            left_time = right_time = 0.0
+            confidence = 0.0
+            reason = "invalid_pair_metadata"
+        if not 0.0 <= confidence <= 1.0:
+            confidence = 0.0
+            reason = "invalid_pair_metadata"
+
+        decision = self._gate.invalidate(reason)
+        return self._result(
+            decision,
+            confidence=confidence,
+            pair_skew_sec=abs(left_time - right_time),
+            reprojection_error_px=0.0,
+            source_time_sec=min(left_time, right_time),
+        )
+
     def process(self, pair, now_sec):
         """Process one synchronized image pair into hand-observation data."""
         if not isinstance(pair, StereoKeypointPair):
