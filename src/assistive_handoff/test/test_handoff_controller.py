@@ -11,6 +11,7 @@ import time
 import pytest
 import rclpy
 from geometry_msgs.msg import PoseStamped
+from rclpy.duration import Duration
 from rclpy.parameter import Parameter
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile
 from std_msgs.msg import String
@@ -40,7 +41,9 @@ def spin_until(nodes, predicate, timeout=3.0):
 class Graph:
     """Controller under test + a helper node faking every input stream."""
 
-    def __init__(self, param_overrides, hand_point, hand_frame, hand_valid):
+    def __init__(
+        self, param_overrides, hand_point, hand_frame, hand_valid, publish_target
+    ):
         params = dict(FAST_PARAMS)
         params.update(param_overrides)
         self.controller = HandoffController(
@@ -70,8 +73,10 @@ class Graph:
         self._hand_point = hand_point
         self._hand_frame = hand_frame
         self._hand_valid = hand_valid
-        # Keep hand and target continuously fresh, like the sim publishers.
-        # Indirect via lambda so a test can stub out _publish_* afterwards.
+        self._auto_target = publish_target
+        # Keep hand (and, unless disabled, target) continuously fresh, like
+        # the sim publishers; staleness tests disable auto-target and publish
+        # aged stamps through send_target() instead.
         self.helper.create_timer(0.05, lambda: self._publish_hand())
         self.helper.create_timer(0.05, lambda: self._publish_target())
 
@@ -93,13 +98,30 @@ class Graph:
         self._hand_pub.publish(msg)
 
     def _publish_target(self):
+        if not self._auto_target:
+            return
+        self._target_pub.publish(self._make_target(age_sec=0.0))
+
+    def send_target(self, age_sec=0.0):
+        """Publish one target whose source stamp is age_sec in the past."""
+        self._target_pub.publish(self._make_target(age_sec))
+
+    def _make_target(self, age_sec):
         msg = PoseStamped()
-        msg.header.stamp = self.helper.get_clock().now().to_msg()
+        stamp = self.helper.get_clock().now() - Duration(seconds=age_sec)
+        msg.header.stamp = stamp.to_msg()
         msg.header.frame_id = "world"
         msg.pose.position.x = 0.106982
         msg.pose.position.z = 1.121022
         msg.pose.orientation.w = 1.0
-        self._target_pub.publish(msg)
+        return msg
+
+    def wait_for_target_receipt(self, timeout=2.0):
+        """Guard against false passes: staying idle only proves a refusal if
+        the controller demonstrably received the (stale) target first."""
+        return spin_until(
+            self.nodes, lambda: self.controller._last_target is not None, timeout
+        )
 
     def send_intent(self, command):
         msg = AssistiveIntent()
@@ -136,8 +158,11 @@ def make_graph():
         hand_point=HAND_POINT,
         hand_frame="world",
         hand_valid=True,
+        publish_target=True,
     ):
-        graph = Graph(param_overrides, hand_point, hand_frame, hand_valid)
+        graph = Graph(
+            param_overrides, hand_point, hand_frame, hand_valid, publish_target
+        )
         graphs.append(graph)
         return graph
 
@@ -161,9 +186,8 @@ def test_happy_path_full_cycle(make_graph):
 
 
 def test_confirm_without_target_stays_idle(make_graph):
-    g = make_graph()
-    # Suppress the target stream: the gate must refuse CONFIRM.
-    g._publish_target = lambda: None
+    # No target stream at all: the gate must refuse CONFIRM.
+    g = make_graph(publish_target=False)
     g.settle(0.3)
     g.send_intent(AssistiveIntent.CONFIRM)
     g.settle(0.5)
@@ -258,6 +282,66 @@ def test_return_home_failure_latches_fault(make_graph):
     g.settle(0.5)
     assert g.state is HandoffState.RETURN_HOME
     assert "idle" not in g.states[1:], "fault state leaked back to idle"
+
+
+def test_half_second_old_target_allowed_by_default(make_graph):
+    g = make_graph(publish_target=False)
+    g.settle(0.3)
+    g.send_target(age_sec=0.5)
+    assert g.wait_for_target_receipt()
+    g.send_intent(AssistiveIntent.CONFIRM)
+    # 0.5s old is well inside the default 2.0s window: approach must start.
+    assert g.wait_for_state(HandoffState.APPROACH), "fresh-enough target refused"
+
+
+def test_half_second_old_target_refused_when_max_age_tightened(make_graph):
+    # Same 0.5s-old message as above, but the window is now 0.1s.
+    g = make_graph({"target_max_age_sec": 0.1}, publish_target=False)
+    g.settle(0.3)
+    g.send_target(age_sec=0.5)
+    assert g.wait_for_target_receipt()
+    g.send_intent(AssistiveIntent.CONFIRM)
+    g.settle(0.5)
+    assert g.state is HandoffState.IDLE, "stale target accepted"
+
+
+def test_confirm_refused_when_retained_target_predates_subscriber(make_graph):
+    # A latched publisher that outlives its single stale-stamped publish;
+    # the controller is created afterwards, so the sample it receives comes
+    # from DDS TRANSIENT_LOCAL retention — the exact late-joiner hazard.
+    early = rclpy.create_node("early_target_publisher")
+    early_pub = early.create_publisher(
+        PoseStamped,
+        "/target_object_pose",
+        QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL),
+    )
+    msg = PoseStamped()
+    stamp = early.get_clock().now() - Duration(seconds=5.0)
+    msg.header.stamp = stamp.to_msg()
+    msg.header.frame_id = "world"
+    msg.pose.orientation.w = 1.0
+    early_pub.publish(msg)
+
+    g = make_graph(publish_target=False)  # controller joins after the publish
+    assert g.wait_for_target_receipt(), "retained sample never delivered"
+    g.send_intent(AssistiveIntent.CONFIRM)
+    g.settle(0.5)
+    assert g.state is HandoffState.IDLE, "retained stale target accepted"
+    early.destroy_node()
+
+
+def test_target_max_age_must_be_positive_and_finite():
+    rclpy.init()
+    try:
+        for bad in (0.0, -1.0, float("inf"), float("nan")):
+            with pytest.raises(ValueError):
+                HandoffController(
+                    parameter_overrides=[
+                        Parameter("target_max_age_sec", value=bad)
+                    ]
+                )
+    finally:
+        rclpy.shutdown()
 
 
 def test_speed_scale_out_of_range_rejected():

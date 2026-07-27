@@ -1,4 +1,5 @@
-"""Objective 4.1 M2: handoff state machine — timeouts, ABORT, failure paths.
+"""Objective 4.1 M3: handoff state machine — timeouts, ABORT, failure
+paths, and parameterized /target_object_pose staleness rejection.
 
 States and transitions:
 
@@ -24,9 +25,8 @@ Release gates (all must pass, checked on CONFIRM in READY):
   center (NOT of /target_object_pose — that is the pickup location).
 
 Still out of scope (later milestones):
-- M3: configurable max-age parameters + retained-/target_object_pose
-  rejection tests (hardcoded age constants below).
-- M4: dedicated fail-closed release tests for absent/stale hand streams.
+- M4: hand max-age parameterization (HAND_MAX_AGE_SEC stays hardcoded)
+  plus dedicated fail-closed release tests for absent/stale hand streams.
 - M5: full failure-case test matrix.
 
 Motion is simulated: _start_motion() arms a one-shot completion timer plus
@@ -52,8 +52,9 @@ from std_msgs.msg import String
 
 from assistive_interfaces.msg import AssistiveIntent, HandObservation
 
-# M2 hardcoded freshness limits; promoted to declared parameters in M3.
-TARGET_MAX_AGE_SEC = 2.0
+# Hardcoded hand freshness limit; M4 promotes it to a parameter alongside
+# the dedicated fail-closed release tests. (The target limit is already the
+# target_max_age_sec parameter as of M3.)
 HAND_MAX_AGE_SEC = 1.0
 
 
@@ -83,6 +84,11 @@ class HandoffController(Node):
         self.declare_parameter("delivery_center_y", 0.3)
         self.declare_parameter("delivery_center_z", 1.0)
         self.declare_parameter("delivery_frame", "world")
+        # Max source-stamp age for /target_object_pose. The topic is retained
+        # (TRANSIENT_LOCAL), so a late-joining controller can be handed a
+        # sample published long ago; this age gate is what makes accepting a
+        # retained sample safe.
+        self.declare_parameter("target_max_age_sec", 2.0)
         # Test hook: name a state ("approach"/"release"/"return_home") whose
         # simulated motion never completes, to exercise the watchdog. Without
         # this the deadline path would be untestable until real hardware.
@@ -105,6 +111,15 @@ class HandoffController(Node):
             self.get_parameter("delivery_center_z").value,
         )
         self._delivery_frame = self.get_parameter("delivery_frame").value
+        self._target_max_age_sec = self.get_parameter("target_max_age_sec").value
+        if not (
+            math.isfinite(self._target_max_age_sec)
+            and self._target_max_age_sec > 0.0
+        ):
+            raise ValueError(
+                "target_max_age_sec must be finite and > 0, "
+                f"got {self._target_max_age_sec}"
+            )
         self._simulate_stuck_motion = self.get_parameter(
             "simulate_stuck_motion"
         ).value
@@ -219,10 +234,10 @@ class HandoffController(Node):
             self.get_logger().warning("CONFIRM refused: no /target_object_pose yet")
             return False
         age = self._age_sec(self._last_target.header.stamp)
-        if age > TARGET_MAX_AGE_SEC:
+        if age > self._target_max_age_sec:
             self.get_logger().warning(
                 f"CONFIRM refused: target is {age:.2f}s old "
-                f"(max {TARGET_MAX_AGE_SEC}s)"
+                f"(max {self._target_max_age_sec}s)"
             )
             return False
         return True
