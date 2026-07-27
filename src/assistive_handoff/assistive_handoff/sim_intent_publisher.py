@@ -1,4 +1,4 @@
-"""Interactive simulated /assistive_intent source (Objective 4.1 M1).
+"""Interactive Phase-0 /assistive_intent source for Objective 4.1.
 
 Reads single-letter commands from stdin and publishes one AssistiveIntent
 per line, with a per-session monotonically increasing sequence number as
@@ -8,6 +8,9 @@ the message contract requires:
     c  -> CONFIRM
     a  -> ABORT
     q  -> quit
+
+NEXT_TARGET is published on the source-independent intent contract for the
+upstream target selector; the handoff controller itself does not cycle targets.
 
 Also works non-interactively for scripted tests: `echo c | ros2 run ...`
 publishes one CONFIRM and exits. QoS is the contract's reliable + volatile

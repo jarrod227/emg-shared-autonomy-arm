@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = "assistive_handoff"
+package_name = "stereo_hand_observer"
 
 setup(
     name=package_name,
@@ -15,17 +15,14 @@ setup(
     maintainer="Jiayu Yang",
     maintainer_email="jarrodyang227@gmail.com",
     description=(
-        "Completed Phase-0 simulated Objective 4.1 handoff controller with "
-        "freshness gates and fail-safe timeout, ABORT, and fault handling."
+        "Quality-checked stereo hand-keypoint geometry for Objective 4.2."
     ),
     license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "handoff_controller = assistive_handoff.handoff_controller:main",
-            "sim_intent_publisher = assistive_handoff.sim_intent_publisher:main",
-            "sim_hand_publisher = assistive_handoff.sim_hand_publisher:main",
-            "sim_target_publisher = assistive_handoff.sim_target_publisher:main",
+            "synthetic_observer = "
+            "stereo_hand_observer.synthetic_observer:main",
         ],
     },
 )

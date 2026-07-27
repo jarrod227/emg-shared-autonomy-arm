@@ -17,15 +17,16 @@ receive fixed object1 reach target
 
 The fixed provider and the Objective 3.1 ArUco pipeline have both driven this
 coordinator without changing its target callback or MoveIt goal construction.
-The current coordinator is still a one-shot
-`IDLE -> REACHING -> RETURNING -> DONE` baseline; the Objective 4 handoff state
-machine is not implemented yet. It does not command a gripper or perform a
-physical grasp.
+The current coordinator remains the one-shot
+`IDLE -> REACHING -> RETURNING -> DONE` regression path. Objective 4.1 is
+implemented separately in the `assistive_handoff` package as a completed
+Phase-0 simulated handoff controller, so this package does not command a
+gripper or perform a physical grasp.
 
 Camera drivers, ArUco detection, future Objective 3.2 instance segmentation,
-STM32 EMG intent, and future hand observations belong to other packages. They
-must converge through the source-independent target/intent contracts rather
-than adding perception code here.
+STM32 EMG intent, and Objective 4.2 stereo hand observations belong to other
+packages. They must converge through the source-independent target, intent,
+and hand-observation contracts rather than adding perception code here.
 
 ## Build
 

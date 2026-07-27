@@ -1,6 +1,6 @@
 # System Design
 
-## Current Verified Status (2026-07-26)
+## Current Verified Status (2026-07-27)
 
 This section supersedes older scaffold descriptions below. Two interchangeable
 providers feed the retained `PoseStamped` on `/target_object_pose`: the
@@ -12,16 +12,31 @@ returns to the joint-space ready home. Both provider paths are
 runtime-verified end to end; camera-frame accuracy is quantified in
 `docs/objective3_evaluation.md`.
 
+Objective 4.1 is also implemented as a separate Phase-0 simulated controller:
+`assistive_interfaces` defines `AssistiveIntent` and `HandObservation`, while
+`assistive_handoff` implements the five-state handoff flow, simulated
+providers, freshness/timeout checks, `ABORT`, and fail-closed release gating.
+Archived results cover the 23-test Objective 1/2/3.1 baseline. The repository
+contains 25 Objective 4.1 controller test cases, but no archived result
+establishes a combined 48-test pass; do not claim 48 tests passing before a
+fresh full run.
+
+Objective 4.2 now has a separate `stereo_hand_observer` package implementing
+synthetic rectified stereo geometry, epipolar/reprojection rejection, a
+spherical delivery-volume and N-frame stability gate, the existing
+`HandObservation` adapter, and a synthetic ROS node. Its fresh package-local
+run passed 43 tests on 2026-07-27, including eight ROS topic-level handoff
+integration cases; live-camera and bench-stereo validation are still pending.
+
 ## Design Status
 
 This document distinguishes the current implementation from the longer-term
-architecture. The execution layer (Objectives 1–2) and ArUco perception
-baseline (Objective 3.1) exist today. Objective 4 is active and is implemented
-as three increments: Objective 4.1 uses the existing pose pipeline plus
-simulated intent/hand observation; Objective 4.2 adds stereo-triangulated hand
-keypoints; Objective 4.3 defines bounded search with simulated view commands.
-Objective 3.2 then adds instance-mask/stereo object perception, and Objective
-3.5 adds STM32 discrete intent plus proportional view control.
+architecture. The execution layer (Objectives 1–2), ArUco perception baseline
+(Objective 3.1), and Phase-0 simulated handoff state machine (Objective 4.1)
+exist today. Objective 4.2 is active and adds stereo-triangulated hand
+keypoints; Objective 4.3 then defines bounded search with simulated view
+commands. Objective 3.2 later adds instance-mask/stereo object perception, and
+Objective 3.5 adds STM32 discrete intent plus proportional view control.
 
 ## Current Workspace Layout
 
@@ -31,7 +46,10 @@ assistive_robot_ws/
 ├── src/
 │   ├── object1_demo/          reaching coordinator + fixed-pose provider
 │   ├── marker_pose_provider/  ArUco detection + camera-frame PnP (3.1)
-│   └── target_selector/       marker selection, grasp offset, TF (3.1)
+│   ├── target_selector/       marker selection, grasp offset, TF (3.1)
+│   ├── assistive_interfaces/  intent + hand-observation messages (4.1)
+│   ├── assistive_handoff/     simulated handoff controller + providers (4.1)
+│   └── stereo_hand_observer/  stereo geometry/gates + synthetic node (4.2)
 ├── AGENTS.md
 └── TODO.md
 ```
@@ -68,15 +86,16 @@ heartbeat. Marker IDs are logged but discarded by `PoseArray`, so the current
 selector cannot choose by ID and takes the first pose. It uses the default
 offset, publishes one retained target, and then ignores later detections.
 
-The coordinator waits for the first valid target pose, executes its existing
+The Objective 1/2 coordinator waits for the first valid target pose, executes its existing
 IDLE -> REACHING -> RETURNING -> DONE one-shot sequence, and ignores additional
-target messages. These are current implementation facts, not the future
-Objective 4 state machine.
+target messages. These remain current regression-path facts. The separate
+Objective 4.1 `assistive_handoff` package implements the Phase-0 handoff state
+machine without replacing that verified one-shot node.
 
 DDS `TRANSIENT_LOCAL` retention and the application one-shot latch are not
 freshness. The selector/tracker will own N-frame stable acquisition and
-last-seen tracking; the Objective 4 controller will own the policy response to
-old targets or stale safety observations.
+last-seen tracking; the Objective 4.1 controller already owns the Phase-0
+policy response to old targets and stale hand observations.
 
 ## Objective 1 Architecture
 
@@ -98,6 +117,8 @@ trajectory and return the arm to a neutral or home position.
 CURRENT / PRESERVED
 fixed pose ---------------------------------------------> /target_object_pose
 camera -> ArUco/PnP -> current target_selector --------> /target_object_pose
+simulated target/intent/hand inputs --------------------> handoff controller
+                                                          (Phase-0 state/actions)
 
 PLANNED
 left/right RGB -> sync/rectify -> disparity/PointCloud2 --------+
@@ -120,8 +141,8 @@ redundant with it.
 
 ### Intent Layer
 
-Objective 4 first uses a simulated publisher on the future production
-interface. Objective 3.5 later replaces that source with STM32 edge inference:
+Objective 4.1 uses a simulated publisher on the future production interface.
+Objective 3.5 later replaces that source with STM32 edge inference:
 
 ```text
 3-channel ADC/DMA
@@ -195,7 +216,7 @@ old bench extrinsic or the latest TF is invalid.
 | deterministic selected pose | fixed pose publisher | implemented |
 | geometric selected pose | ArUco + current selector | implemented (3.1) |
 | semantic object candidates | instance mask + stereo point cloud | planned (3.2) |
-| discrete intent | simulated input, then STM32 bridge | planned (4.1 / 3.5) |
+| discrete intent | simulated input, then STM32 bridge | simulated source implemented (4.1); STM32 planned (3.5) |
 | bounded search command | simulated input, then STM32 bridge | planned (4.3 / 3.5) |
 | target acquisition and final pose | generalized target selector | planned integration |
 
@@ -243,9 +264,9 @@ single-marker assumption unless a later compatibility adapter is added.
 ### Safety Observation
 
 Hand-position observation is required to complete the vision-assisted Obj4
-scope. Objective 4.1 first consumes a simulated `/hand_observation` so the state
-machine and failure policy can be tested without a camera model. Objective 4.2
-reuses the shared stereo foundation:
+scope. Objective 4.1 consumes a simulated `/hand_observation`; its state
+machine and fail-closed response are implemented without a camera model.
+Objective 4.2 is active and reuses the shared stereo foundation:
 
 ```text
 rectified left/right images
@@ -257,6 +278,17 @@ rectified left/right images
 -> timestamped /hand_observation
 ```
 
+The no-hardware portion is implemented in `stereo_hand_observer`: synthetic
+corresponding keypoints exercise triangulation, epipolar/reprojection limits,
+the configured spherical delivery volume, N-frame stability, explicit invalid
+results, and ROS message conversion. Controller-level refusal integration is
+verified through the real ROS topic and controller transition. This stage has
+no SO-ARM101 or STM32/EMG dependency.
+Completing Objective 4.2 still requires live keypoint association plus a rigid,
+calibrated fixed bench stereo pair with measured timestamp skew and
+working-range 3D error. Eye-in-hand mounting and the resulting stereo/hand-eye
+recalibration remain Objective 5.
+
 The observation reports valid/no-hand status explicitly and carries source
 time, frame, confidence, pair skew, reprojection quality, and the 3D point when
 valid. The same valid hand-in-volume condition must remain stable for N frames.
@@ -266,9 +298,11 @@ invalidate the cue and block release. Hand instance segmentation is optional
 future robustness work, not an Objective 4.2 dependency.
 
 The observer owns measurement validity; the handoff controller owns the
-fail-closed response and may permit `HANDOFF_READY -> RELEASE` only with a
-fresh, stable observation plus the required user confirmation. Stereo
-triangulation estimates approximate 3D hand position, but it is not
+fail-closed response. The current Phase-0 controller permits `READY -> RELEASE`
+only with a fresh, stable observation plus the required user confirmation; the
+full planned state path later names this transition
+`HANDOFF_READY -> RELEASE`.
+Stereo triangulation estimates approximate 3D hand position, but it is not
 safety-rated separation monitoring. It does not replace collision checking,
 force sensing, speed limits, an emergency stop, or a formal hardware safety
 process. Objective 5 still delivers to a fixed zone rather than chasing a
@@ -278,11 +312,12 @@ moving hand.
 
 The implemented Objective 1/2 coordinator consumes a `PoseStamped`, runs one
 reach/return sequence, and logs failures. That verified node remains the
-Objective 1/2 regression path. Objective 4 adds a source-neutral handoff
-controller around or in place of the one-shot orchestration while preserving
-the existing target-pose seam and MoveIt action interface.
+Objective 1/2 regression path. Objective 4.1 adds a separate source-neutral
+Phase-0 handoff controller while preserving the target-pose seam; its motion,
+hold, and release actions are simulated rather than real MoveIt/gripper goals.
 
-The planned controller consumes five independent kinds of input:
+The current controller consumes target pose, intent, and hand observation. The
+integrated controller evolves to consume five independent kinds of input:
 
 ```text
 /target_object_pose + target status   selected target and freshness
@@ -389,10 +424,12 @@ APPROACH
 -> RELEASE -> RETREAT -> RETURN_HOME
 ```
 
-Objective 4.1 implements the core timeout, cancellation, failure, target-age,
-confirmation, simulated hold/release, and return behavior. Objective 4.2 adds
-the fail-closed 3D hand-observation gate. Objective 4.3 adds the two bounded
-search states with simulated view commands. Physical grasping, held-object
+Objective 4.1 has implemented the core timeout, cancellation, failure,
+target-age, confirmation, simulated hold/release, and return behavior.
+Objective 4.2 is active and replaces the simulated hand source with a
+stereo-triangulated, quality-checked, N-frame-stable 3D observation while
+preserving the fail-closed controller contract. Objective 4.3 adds the two
+bounded search states with simulated view commands. Physical grasping, held-object
 verification, loaded motion, and the `PREGRASP -> REOBSERVE -> REFINE -> GRASP`
 subsequence remain Objective 5 responsibilities.
 
@@ -485,14 +522,15 @@ responsibilities are:
 | fixed target-pose publisher | implemented and runtime-verified |
 | unified `/target_object_pose` interface | implemented and runtime-verified |
 | ArUco pose baseline | implemented (`marker_pose_provider` + `target_selector`), accuracy quantified (3.1) |
-| source-neutral handoff controller | Objective 4.1 (active; existing pose + simulated intent/hand input) |
-| shared stereo acquisition/rectification | Objective 4.2 (planned; two namespaced USB drivers, approximate sync, calibration, stop-and-look) |
-| stereo hand-observation node | Objective 4.2 (planned; keypoint association, triangulation, 3D delivery-volume validity) |
+| source-neutral handoff controller | implemented (Objective 4.1 Phase-0; simulated actions and target/intent/hand inputs) |
+| shared stereo acquisition/rectification | Objective 4.2 active; final validation uses two namespaced USB drivers, approximate sync, calibration, and stop-and-look |
+| stereo hand-observation node | Objective 4.2 active; `stereo_hand_observer` synthetic geometry, quality/volume/stability gates, message adapter, and test node implemented; live image keypoint association and bench validation pending |
 | bounded active-view search controller | Objective 4.3 (planned first with simulated view commands) |
-| simulated intent/view/hand providers | Objective 4 test and integration executables (planned) |
+| simulated target/intent/hand providers | implemented (Objective 4.1) |
+| simulated view provider | planned (Objective 4.3) |
 | markerless object perception | Objective 3.2 (planned host-side instance mask + stereo-point-cloud package) |
 | generalized target selector/tracker | Objective 3.2/3.5 integration (planned; stable candidates + intent -> selected pose/status) |
-| shared ROS interfaces | planned after candidate, intent, view-control, target-status, and hand fields are frozen |
+| shared ROS interfaces | `AssistiveIntent` and `HandObservation` implemented in `assistive_interfaces`; candidate, view-control, and target-status contracts remain planned |
 | STM32 EMG firmware | Objective 3.5 (planned STM32CubeIDE C/C++; ADC/DMA, DSP/features, inference, packet producer) |
 | PC EMG tooling | Objective 3.5 (planned Python capture/plot/train/quantize/replay/golden vectors) |
 | EMG USB/UART ROS bridge | Objective 3.5 MVP Python/`rclpy`; optional measured `rclcpp` receiver/parser/ring-buffer rewrite in Phase 3 |

@@ -1,12 +1,12 @@
-"""Simulated /hand_observation source (Objective 4.1 M1).
+"""Phase-0 simulated /hand_observation source for Objective 4.1.
 
 Publishes a valid, freshly stamped HandObservation at 10 Hz with a fixed
 3D point, standing in for the Objective 4.2 stereo hand localizer. The
 stereo-quality fields stay 0.0 as the message contract specifies for the
 4.1 simulated publisher.
 
-Stopping this node (Ctrl-C) is the M1 way to make the hand stream go
-stale and watch the controller refuse release.
+Stopping this node (Ctrl-C) makes the hand stream go stale and demonstrates
+that the controller's parameterized freshness gate refuses release.
 """
 
 import rclpy

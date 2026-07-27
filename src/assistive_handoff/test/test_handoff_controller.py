@@ -1,9 +1,10 @@
-"""Node-level tests for HandoffController (Objective 4.1 M2 behaviors).
+"""The 25 node-level tests for the completed Objective 4.1 Phase-0 controller.
 
 No simulator needed: the test process publishes intent / hand / target
 itself (mirroring the sim publishers) and watches the controller's state.
-Timing parameters are shrunk via parameter_overrides so every test runs in
-well under a second of simulated-motion time.
+The suite covers the full simulated cycle, parameterized target/hand freshness
+gates, timeouts, ABORT paths, callback races, and fault latching. Timing
+parameters are shrunk via parameter_overrides so each test runs quickly.
 """
 
 import time

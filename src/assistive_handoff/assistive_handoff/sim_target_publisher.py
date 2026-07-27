@@ -1,17 +1,18 @@
-"""Simulated /target_object_pose source (Objective 4.1 M1).
+"""Phase-0 simulated /target_object_pose source for Objective 4.1.
 
 Re-stamps and republishes a fixed target pose at 2 Hz, using the same
 retained (TRANSIENT_LOCAL) QoS as the real Objective 3.1 publishers
 (target_selector, fixed_pose_publisher), so the handoff controller's
-subscription QoS is exercised exactly as it will be in integration (M6).
+subscription QoS is exercised exactly as it is in integration.
 
 The pose is the object1_demo fixed grasp pose — already verified reachable
-by the Panda MoveIt pipeline — so later milestones can hand it to the real
-motion backend unchanged.
+by the Panda MoveIt pipeline — so motion-backend integration can consume it
+unchanged.
 
-Unlike the real publishers this one republishes continuously; M3 tests the
-one-shot retained case (old stamp must be rejected by age, not accepted
-because DDS just delivered it).
+Unlike the real publishers this one republishes continuously. Dedicated
+controller tests cover the one-shot retained case: an old source stamp must
+be rejected using parameterized age checking, regardless of when DDS delivers
+the sample.
 """
 
 import rclpy

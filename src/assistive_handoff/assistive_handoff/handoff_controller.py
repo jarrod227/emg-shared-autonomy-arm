@@ -1,6 +1,8 @@
-"""Objective 4.1 M4: handoff state machine — timeouts, ABORT, failure
-paths, and parameterized staleness rejection for both /target_object_pose
-and /hand_observation (release fails closed).
+"""Completed Objective 4.1 Phase-0 simulated handoff controller.
+
+The controller includes parameterized source-time freshness gates for both
+/target_object_pose and /hand_observation, plus timeouts, ABORT preemption,
+race-safe callbacks, and latched fault handling. Release fails closed.
 
 States and transitions:
 
@@ -11,7 +13,7 @@ States and transitions:
     RETURN_HOME --motion done-->                     IDLE
 
     APPROACH / READY / RELEASE  --ABORT-->           RETURN_HOME
-        (M2's release is simulated, so aborting it just cancels a timer;
+        (Phase-0 release is simulated, so aborting it just cancels a timer;
          the irreversible-gripper policy is a hardware-phase decision)
     READY       --no CONFIRM within ready_timeout--> RETURN_HOME
     APPROACH / RELEASE motion failure or timeout --> RETURN_HOME
@@ -26,14 +28,11 @@ Release gates (all must pass, checked on CONFIRM in READY):
   center (NOT of /target_object_pose — that is the pickup location).
 
 Release gating is checked once, at the READY -> RELEASE decision (choice
-made in M4): once a real gripper starts opening it may be past its
-irreversible commit point, so losing the hand signal mid-release does not
-automatically mean "interrupt". N-frame stability gating belongs to
-Objective 4.2; the real-release cancellation policy is an Objective 5
+for the Phase-0 controller): once a real gripper starts opening it may be
+past its irreversible commit point, so losing the hand signal mid-release
+does not automatically mean "interrupt". N-frame stability gating belongs
+to Objective 4.2; the real-release cancellation policy is an Objective 5
 (hardware-phase) decision.
-
-Still out of scope (later milestones):
-- M5: full failure-case test matrix.
 
 Motion is simulated: _start_motion() arms a one-shot completion timer plus
 a deadline (watchdog) timer; _on_motion_result() receives the "result".
@@ -44,6 +43,8 @@ stale callback can never mutate the state machine.
 
 Freshness is always judged on header.stamp (source time), never on message
 receipt time, per the assistive_interfaces contracts.
+
+The completed behavior is covered by 25 node-level controller tests.
 """
 
 import enum
@@ -136,8 +137,8 @@ class HandoffController(Node):
         )
         # /target_object_pose is retained (TRANSIENT_LOCAL) by target_selector
         # and fixed_pose_publisher; subscribe with the same durability so a
-        # late-starting controller still sees the target. Age checking is what
-        # makes accepting a retained sample safe — hardcoded here, M3 hardens.
+        # late-starting controller still sees the target. The parameterized
+        # target_max_age_sec source-time gate makes retained acceptance safe.
         latched_qos = QoSProfile(
             depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL
         )
@@ -180,9 +181,12 @@ class HandoffController(Node):
         elif command == AssistiveIntent.ABORT:
             self._on_abort()
         elif command == AssistiveIntent.NEXT_TARGET:
-            # M2 still has a single simulated target; cycling arrives with
-            # the multi-candidate selector integration.
-            self.get_logger().info("NEXT_TARGET received: no-op in M2")
+            # Target cycling belongs to the upstream selector. This controller
+            # consumes whichever source-independent target it publishes.
+            self.get_logger().info(
+                "NEXT_TARGET ignored by handoff_controller; "
+                "handled by upstream selector"
+            )
         else:
             self.get_logger().warning(f"unknown intent command {command}: ignoring")
 
@@ -312,10 +316,10 @@ class HandoffController(Node):
             )
 
     def _start_motion(self, result_state: HandoffState) -> None:
-        # M2: a one-shot timer stands in for sending a MoveIt action goal;
-        # the deadline timer is the watchdog for a motion that never reports.
-        # Later milestones replace the completion timer with the real goal
-        # request and route the action result into _on_motion_result.
+        # Phase-0 uses a one-shot timer in place of a MoveIt action goal; the
+        # deadline timer is the watchdog for a motion that never reports.
+        # Motion-backend integration replaces the completion timer with the
+        # real goal request and routes its result into _on_motion_result.
         epoch = self._epoch
         if self._simulate_stuck_motion == self._state.value:
             self.get_logger().warning(
