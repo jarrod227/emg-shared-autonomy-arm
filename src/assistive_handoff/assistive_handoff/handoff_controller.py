@@ -1,31 +1,47 @@
-"""Objective 4.1 M1: handoff state machine skeleton (happy path only).
+"""Objective 4.1 M2: handoff state machine — timeouts, ABORT, failure paths.
 
-States and M1 transitions:
+States and transitions:
 
-    IDLE        --CONFIRM + fresh target-->        APPROACH
-    APPROACH    --simulated motion done-->         READY
-    READY       --CONFIRM + fresh valid hand-->    RELEASE
-    RELEASE     --simulated release done-->        RETURN_HOME
-    RETURN_HOME --simulated motion done-->         IDLE
+    IDLE        --CONFIRM + fresh target-->          APPROACH
+    APPROACH    --motion done-->                     READY
+    READY       --CONFIRM + release gates pass-->    RELEASE
+    RELEASE     --release done-->                    RETURN_HOME
+    RETURN_HOME --motion done-->                     IDLE
 
-Deliberately out of scope in M1 (later milestones):
-- M2: timeouts, ABORT cancellation, failure transitions, configurable
-  speed / delivery-distance parameters.
-- M3: configurable max-age parameters and rejection of retained
-  /target_object_pose samples (M1 uses hardcoded age constants below).
-- M4: fail-closed release testing when /hand_observation is absent/stale.
-- M5: failure-case tests.
+    APPROACH / READY / RELEASE  --ABORT-->           RETURN_HOME
+        (M2's release is simulated, so aborting it just cancels a timer;
+         the irreversible-gripper policy is a hardware-phase decision)
+    READY       --no CONFIRM within ready_timeout--> RETURN_HOME
+    APPROACH / RELEASE motion failure or timeout --> RETURN_HOME
+    RETURN_HOME motion failure or timeout        --> stays RETURN_HOME with a
+        latched fault: IDLE would falsely announce "safely home", so the node
+        refuses all further intents until restarted.
 
-Motion is simulated: _start_motion() arms a one-shot timer and
-_on_motion_result() receives its "result". These two methods are the seam
-where a MoveIt action goal / result callback replaces the timer in a later
-milestone; the state logic must not need to change for that swap.
+Release gates (all must pass, checked on CONFIRM in READY):
+- latest /hand_observation exists, valid, and fresh (source-stamp age);
+- its frame_id matches delivery_frame (mismatch = refuse, no guessing);
+- hand point is within max_delivery_distance of the configured delivery
+  center (NOT of /target_object_pose — that is the pickup location).
+
+Still out of scope (later milestones):
+- M3: configurable max-age parameters + retained-/target_object_pose
+  rejection tests (hardcoded age constants below).
+- M4: dedicated fail-closed release tests for absent/stale hand streams.
+- M5: full failure-case test matrix.
+
+Motion is simulated: _start_motion() arms a one-shot completion timer plus
+a deadline (watchdog) timer; _on_motion_result() receives the "result".
+These are the seam where a MoveIt action goal/result replaces the timers.
+Every transition bumps a generation counter (_epoch); timer callbacks
+carry the epoch they were armed in and do nothing if it has moved on, so a
+stale callback can never mutate the state machine.
 
 Freshness is always judged on header.stamp (source time), never on message
 receipt time, per the assistive_interfaces contracts.
 """
 
 import enum
+import math
 
 import rclpy
 from geometry_msgs.msg import PoseStamped
@@ -36,14 +52,9 @@ from std_msgs.msg import String
 
 from assistive_interfaces.msg import AssistiveIntent, HandObservation
 
-# M1 hardcoded freshness limits; promoted to declared parameters in M3.
-# Sim publishers run at 2 Hz (target) and 10 Hz (hand), so a healthy stream
-# stays far below these ages and a stopped publisher exceeds them quickly.
+# M2 hardcoded freshness limits; promoted to declared parameters in M3.
 TARGET_MAX_AGE_SEC = 2.0
 HAND_MAX_AGE_SEC = 1.0
-
-# One-shot timer period standing in for real motion duration.
-SIMULATED_MOTION_SEC = 2.0
 
 
 class HandoffState(enum.Enum):
@@ -57,16 +68,56 @@ class HandoffState(enum.Enum):
 class HandoffController(Node):
     """Drives the handoff cycle from intent + hand + target observations."""
 
-    def __init__(self) -> None:
-        super().__init__("handoff_controller")
+    def __init__(self, **node_kwargs) -> None:
+        super().__init__("handoff_controller", **node_kwargs)
+
+        # speed_scale is not consumed by the simulated motion; it is stored
+        # for the future MoveIt backend (velocity scaling factor) and only
+        # validated here so a bad config fails at startup, not mid-motion.
+        self.declare_parameter("speed_scale", 1.0)
+        self.declare_parameter("sim_motion_sec", 2.0)
+        self.declare_parameter("motion_timeout_sec", 10.0)
+        self.declare_parameter("ready_timeout_sec", 30.0)
+        self.declare_parameter("max_delivery_distance", 0.5)
+        self.declare_parameter("delivery_center_x", 0.4)
+        self.declare_parameter("delivery_center_y", 0.3)
+        self.declare_parameter("delivery_center_z", 1.0)
+        self.declare_parameter("delivery_frame", "world")
+        # Test hook: name a state ("approach"/"release"/"return_home") whose
+        # simulated motion never completes, to exercise the watchdog. Without
+        # this the deadline path would be untestable until real hardware.
+        self.declare_parameter("simulate_stuck_motion", "")
+
+        self._speed_scale = self.get_parameter("speed_scale").value
+        if not 0.0 < self._speed_scale <= 1.0:
+            raise ValueError(
+                f"speed_scale must be in (0, 1], got {self._speed_scale}"
+            )
+        self._sim_motion_sec = self.get_parameter("sim_motion_sec").value
+        self._motion_timeout_sec = self.get_parameter("motion_timeout_sec").value
+        self._ready_timeout_sec = self.get_parameter("ready_timeout_sec").value
+        self._max_delivery_distance = self.get_parameter(
+            "max_delivery_distance"
+        ).value
+        self._delivery_center = (
+            self.get_parameter("delivery_center_x").value,
+            self.get_parameter("delivery_center_y").value,
+            self.get_parameter("delivery_center_z").value,
+        )
+        self._delivery_frame = self.get_parameter("delivery_frame").value
+        self._simulate_stuck_motion = self.get_parameter(
+            "simulate_stuck_motion"
+        ).value
 
         self._state = HandoffState.IDLE
         self._last_target: PoseStamped | None = None
         self._last_hand: HandObservation | None = None
-        self._motion_timer = None
+        self._fault = False
+        # Generation counter: bumped on every transition (and fault latch);
+        # timer callbacks armed under an older epoch must not act.
+        self._epoch = 0
+        self._pending_timers = []
 
-        # Intent and hand streams are reliable + volatile per the message
-        # contracts (never retained); default depth-10 QoS matches that.
         self._intent_sub = self.create_subscription(
             AssistiveIntent, "/assistive_intent", self._on_intent, 10
         )
@@ -89,7 +140,12 @@ class HandoffController(Node):
         # mid-cycle still shows it; transitions also publish immediately.
         self._state_republish_timer = self.create_timer(1.0, self._publish_state)
 
-        self.get_logger().info("handoff_controller started in state 'idle'")
+        self.get_logger().info(
+            "handoff_controller started in state 'idle' "
+            f"(speed_scale={self._speed_scale}, "
+            f"delivery_center={self._delivery_center} in "
+            f"'{self._delivery_frame}')"
+        )
 
     # ------------------------------------------------------------------
     # Subscriptions
@@ -102,24 +158,26 @@ class HandoffController(Node):
         self._last_hand = msg
 
     def _on_intent(self, msg: AssistiveIntent) -> None:
+        if self._fault:
+            self.get_logger().error(
+                "fault latched (return_home failed): ignoring intent; "
+                "restart the controller to recover"
+            )
+            return
         command = msg.command
         if command == AssistiveIntent.CONFIRM:
             self._on_confirm()
-        elif command == AssistiveIntent.NEXT_TARGET:
-            # M1 has a single simulated target; cycling arrives with the
-            # multi-candidate selector integration.
-            self.get_logger().info("NEXT_TARGET received: no-op in M1")
         elif command == AssistiveIntent.ABORT:
-            # Loud on purpose: silently ignoring a safety command would be
-            # easy to miss. Cancellation transitions land in M2.
-            self.get_logger().warning(
-                "ABORT received but not handled until M2 — ignoring"
-            )
+            self._on_abort()
+        elif command == AssistiveIntent.NEXT_TARGET:
+            # M2 still has a single simulated target; cycling arrives with
+            # the multi-candidate selector integration.
+            self.get_logger().info("NEXT_TARGET received: no-op in M2")
         else:
             self.get_logger().warning(f"unknown intent command {command}: ignoring")
 
     # ------------------------------------------------------------------
-    # CONFIRM gates
+    # Intent handling
     # ------------------------------------------------------------------
 
     def _on_confirm(self) -> None:
@@ -128,12 +186,33 @@ class HandoffController(Node):
                 self._transition(HandoffState.APPROACH)
             # else: _target_is_fresh already logged why the gate refused
         elif self._state is HandoffState.READY:
-            if self._hand_is_fresh_and_valid():
+            if self._release_gates_pass():
                 self._transition(HandoffState.RELEASE)
         else:
             self.get_logger().info(
                 f"CONFIRM ignored in state '{self._state.value}'"
             )
+
+    def _on_abort(self) -> None:
+        if self._state in (
+            HandoffState.APPROACH,
+            HandoffState.READY,
+            HandoffState.RELEASE,
+        ):
+            # M2 release is a timer, so cancelling it is safe. When a real
+            # gripper lands, aborting mid-RELEASE needs its own policy.
+            self.get_logger().warning(
+                f"ABORT in '{self._state.value}': cancelling, returning home"
+            )
+            self._transition(HandoffState.RETURN_HOME)
+        else:
+            self.get_logger().info(
+                f"ABORT ignored in state '{self._state.value}'"
+            )
+
+    # ------------------------------------------------------------------
+    # Gates
+    # ------------------------------------------------------------------
 
     def _target_is_fresh(self) -> bool:
         if self._last_target is None:
@@ -148,18 +227,35 @@ class HandoffController(Node):
             return False
         return True
 
-    def _hand_is_fresh_and_valid(self) -> bool:
-        if self._last_hand is None:
+    def _release_gates_pass(self) -> bool:
+        hand = self._last_hand
+        if hand is None:
             self.get_logger().warning("release refused: no /hand_observation yet")
             return False
-        if not self._last_hand.valid:
+        if not hand.valid:
             self.get_logger().warning("release refused: latest observation is no-hand")
             return False
-        age = self._age_sec(self._last_hand.header.stamp)
+        age = self._age_sec(hand.header.stamp)
         if age > HAND_MAX_AGE_SEC:
             self.get_logger().warning(
                 f"release refused: hand observation is {age:.2f}s old "
                 f"(max {HAND_MAX_AGE_SEC}s)"
+            )
+            return False
+        if hand.header.frame_id != self._delivery_frame:
+            # Refusing beats silently comparing points in different frames.
+            self.get_logger().warning(
+                f"release refused: hand frame '{hand.header.frame_id}' != "
+                f"delivery frame '{self._delivery_frame}'"
+            )
+            return False
+        distance = math.dist(
+            (hand.point.x, hand.point.y, hand.point.z), self._delivery_center
+        )
+        if distance > self._max_delivery_distance:
+            self.get_logger().warning(
+                f"release refused: hand is {distance:.3f}m from delivery "
+                f"center (max {self._max_delivery_distance}m)"
             )
             return False
         return True
@@ -168,18 +264,20 @@ class HandoffController(Node):
         return (self.get_clock().now() - Time.from_msg(stamp)).nanoseconds / 1e9
 
     # ------------------------------------------------------------------
-    # State transitions and simulated motion
+    # State transitions, simulated motion, timeouts
     # ------------------------------------------------------------------
 
     def _transition(self, new_state: HandoffState) -> None:
+        self._epoch += 1
+        self._cancel_pending_timers()
         self.get_logger().info(
             f"state: {self._state.value} -> {new_state.value}"
         )
         self._state = new_state
         self._publish_state()
 
-        # Entry actions: states whose exit is a motion/action result rather
-        # than an intent event start their (simulated) motion here.
+        # Entry actions: motion states start their (simulated) motion; READY
+        # arms the dwell timeout so the arm never hovers indefinitely.
         if new_state is HandoffState.APPROACH:
             self._start_motion(HandoffState.READY)
         elif new_state is HandoffState.RELEASE:
@@ -187,21 +285,86 @@ class HandoffController(Node):
             self._start_motion(HandoffState.RETURN_HOME)
         elif new_state is HandoffState.RETURN_HOME:
             self._start_motion(HandoffState.IDLE)
+        elif new_state is HandoffState.READY:
+            epoch = self._epoch
+            self._pending_timers.append(
+                self.create_timer(
+                    self._ready_timeout_sec,
+                    lambda: self._on_ready_timeout(epoch),
+                )
+            )
 
     def _start_motion(self, result_state: HandoffState) -> None:
-        # M1: a one-shot timer stands in for sending a MoveIt action goal.
-        # Later milestones replace this body with the real goal request and
-        # route the action result into _on_motion_result unchanged.
-        self._motion_timer = self.create_timer(
-            SIMULATED_MOTION_SEC,
-            lambda: self._on_motion_result(result_state),
+        # M2: a one-shot timer stands in for sending a MoveIt action goal;
+        # the deadline timer is the watchdog for a motion that never reports.
+        # Later milestones replace the completion timer with the real goal
+        # request and route the action result into _on_motion_result.
+        epoch = self._epoch
+        if self._simulate_stuck_motion == self._state.value:
+            self.get_logger().warning(
+                f"simulate_stuck_motion: motion in '{self._state.value}' "
+                "will never complete"
+            )
+        else:
+            self._pending_timers.append(
+                self.create_timer(
+                    self._sim_motion_sec,
+                    lambda: self._on_motion_result(epoch, result_state),
+                )
+            )
+        self._pending_timers.append(
+            self.create_timer(
+                self._motion_timeout_sec,
+                lambda: self._on_motion_timeout(epoch),
+            )
         )
 
-    def _on_motion_result(self, result_state: HandoffState) -> None:
-        # rclpy timers repeat, so a one-shot must destroy itself first.
-        self.destroy_timer(self._motion_timer)
-        self._motion_timer = None
+    def _on_motion_result(
+        self, epoch: int, result_state: HandoffState
+    ) -> None:
+        if epoch != self._epoch:
+            return  # stale callback from a superseded motion
         self._transition(result_state)
+
+    def _on_motion_timeout(self, epoch: int) -> None:
+        if epoch != self._epoch:
+            return
+        self.get_logger().error(
+            f"motion in '{self._state.value}' exceeded "
+            f"{self._motion_timeout_sec}s"
+        )
+        self._on_motion_failure()
+
+    def _on_motion_failure(self) -> None:
+        if self._state is HandoffState.RETURN_HOME:
+            # Nowhere safer to go, and claiming IDLE would falsely announce
+            # "safely home". Stay put, latch the fault, refuse new work.
+            self._fault = True
+            self._epoch += 1
+            self._cancel_pending_timers()
+            self.get_logger().error(
+                "fault latched: return_home failed; staying in 'return_home' "
+                "and refusing intents until restart"
+            )
+        else:
+            self.get_logger().warning(
+                f"motion failure in '{self._state.value}': returning home"
+            )
+            self._transition(HandoffState.RETURN_HOME)
+
+    def _on_ready_timeout(self, epoch: int) -> None:
+        if epoch != self._epoch:
+            return
+        self.get_logger().warning(
+            f"no CONFIRM within {self._ready_timeout_sec}s in 'ready': "
+            "returning home"
+        )
+        self._transition(HandoffState.RETURN_HOME)
+
+    def _cancel_pending_timers(self) -> None:
+        for timer in self._pending_timers:
+            self.destroy_timer(timer)
+        self._pending_timers.clear()
 
     def _publish_state(self) -> None:
         self._state_pub.publish(String(data=self._state.value))
