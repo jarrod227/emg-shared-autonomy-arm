@@ -15,5 +15,8 @@ __pycache__/
 .DS_Store
 .aider*
 
+# Scratch dir from the Codex tool (skills under .codex/ stay tracked)
+.codex-tmp/
+
 # One-off calibration aids (not build artifacts of the workspace)
 checkerboard_*.png
