@@ -375,6 +375,80 @@ def test_return_home_failure_latches_fault(make_graph):
     assert "idle" not in g.states[1:], "fault state leaked back to idle"
 
 
+def test_abort_in_ready_returns_home(make_graph):
+    # READY's entry arms the dwell-timeout timer; ABORT must cancel it and
+    # go home (a distinct entry path from the approach/release aborts).
+    g = make_graph()
+    g.confirm_to_ready()
+    g.send_intent(AssistiveIntent.ABORT)
+    assert g.wait_for_state(HandoffState.RETURN_HOME)
+    assert g.wait_for_state(HandoffState.IDLE)
+    assert "release" not in g.states
+
+
+def test_abort_ignored_in_idle(make_graph):
+    # A safety command arriving in the wrong state must cause no transition;
+    # an unchanged epoch proves none happened (state value alone could hide
+    # a spurious transition back to the same state).
+    g = make_graph()
+    g.settle(0.3)
+    epoch_before = g.controller._epoch
+    g.send_intent(AssistiveIntent.ABORT)
+    g.settle(0.4)
+    assert g.state is HandoffState.IDLE
+    assert g.controller._epoch == epoch_before
+
+
+def test_intents_ignored_in_return_home(make_graph):
+    # Freeze return_home so it persists, then hammer it with CONFIRM and
+    # ABORT: neither may transition, restart the motion, or latch a fault.
+    g = make_graph({"simulate_stuck_motion": "return_home"})
+    g.settle(0.3)
+    g.send_intent(AssistiveIntent.CONFIRM)
+    assert g.wait_for_state(HandoffState.APPROACH)
+    g.send_intent(AssistiveIntent.ABORT)
+    assert g.wait_for_state(HandoffState.RETURN_HOME)
+    epoch_before = g.controller._epoch
+    g.send_intent(AssistiveIntent.CONFIRM)
+    g.settle(0.3)
+    g.send_intent(AssistiveIntent.ABORT)
+    g.settle(0.3)
+    assert g.state is HandoffState.RETURN_HOME
+    assert g.controller._epoch == epoch_before
+    assert not g.controller._fault
+
+
+def test_confirm_ignored_in_approach(make_graph):
+    # Operator mashing CONFIRM mid-motion must not skip ahead or restart
+    # the motion.
+    g = make_graph({"simulate_stuck_motion": "approach"})
+    g.settle(0.3)
+    g.send_intent(AssistiveIntent.CONFIRM)
+    assert g.wait_for_state(HandoffState.APPROACH)
+    epoch_before = g.controller._epoch
+    g.send_intent(AssistiveIntent.CONFIRM)
+    g.settle(0.4)
+    assert g.state is HandoffState.APPROACH
+    assert g.controller._epoch == epoch_before
+    assert "ready" not in g.states
+
+
+def test_stale_epoch_callbacks_do_not_act(make_graph):
+    # The epoch guard is the race-safety mechanism: a timer callback armed
+    # before a transition must be a no-op after it. Call the callbacks
+    # directly with an outdated epoch — deterministic, no timing games.
+    g = make_graph({"simulate_stuck_motion": "approach"})
+    g.settle(0.3)
+    g.send_intent(AssistiveIntent.CONFIRM)
+    assert g.wait_for_state(HandoffState.APPROACH)
+    stale_epoch = g.controller._epoch - 1
+    g.controller._on_motion_result(stale_epoch, HandoffState.RELEASE)
+    assert g.state is HandoffState.APPROACH, "stale result callback acted"
+    g.controller._on_motion_timeout(stale_epoch)
+    assert g.state is HandoffState.APPROACH, "stale timeout callback acted"
+    assert not g.controller._fault
+
+
 def test_half_second_old_target_allowed_by_default(make_graph):
     g = make_graph(publish_target=False)
     g.settle(0.3)
