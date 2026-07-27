@@ -1,5 +1,6 @@
-"""Objective 4.1 M3: handoff state machine — timeouts, ABORT, failure
-paths, and parameterized /target_object_pose staleness rejection.
+"""Objective 4.1 M4: handoff state machine — timeouts, ABORT, failure
+paths, and parameterized staleness rejection for both /target_object_pose
+and /hand_observation (release fails closed).
 
 States and transitions:
 
@@ -24,9 +25,14 @@ Release gates (all must pass, checked on CONFIRM in READY):
 - hand point is within max_delivery_distance of the configured delivery
   center (NOT of /target_object_pose — that is the pickup location).
 
+Release gating is checked once, at the READY -> RELEASE decision (choice
+made in M4): once a real gripper starts opening it may be past its
+irreversible commit point, so losing the hand signal mid-release does not
+automatically mean "interrupt". N-frame stability gating belongs to
+Objective 4.2; the real-release cancellation policy is an Objective 5
+(hardware-phase) decision.
+
 Still out of scope (later milestones):
-- M4: hand max-age parameterization (HAND_MAX_AGE_SEC stays hardcoded)
-  plus dedicated fail-closed release tests for absent/stale hand streams.
 - M5: full failure-case test matrix.
 
 Motion is simulated: _start_motion() arms a one-shot completion timer plus
@@ -51,12 +57,6 @@ from rclpy.time import Time
 from std_msgs.msg import String
 
 from assistive_interfaces.msg import AssistiveIntent, HandObservation
-
-# Hardcoded hand freshness limit; M4 promotes it to a parameter alongside
-# the dedicated fail-closed release tests. (The target limit is already the
-# target_max_age_sec parameter as of M3.)
-HAND_MAX_AGE_SEC = 1.0
-
 
 class HandoffState(enum.Enum):
     IDLE = "idle"
@@ -89,6 +89,8 @@ class HandoffController(Node):
         # sample published long ago; this age gate is what makes accepting a
         # retained sample safe.
         self.declare_parameter("target_max_age_sec", 2.0)
+        # Max source-stamp age for /hand_observation at the release gate.
+        self.declare_parameter("hand_max_age_sec", 1.0)
         # Test hook: name a state ("approach"/"release"/"return_home") whose
         # simulated motion never completes, to exercise the watchdog. Without
         # this the deadline path would be untestable until real hardware.
@@ -111,15 +113,8 @@ class HandoffController(Node):
             self.get_parameter("delivery_center_z").value,
         )
         self._delivery_frame = self.get_parameter("delivery_frame").value
-        self._target_max_age_sec = self.get_parameter("target_max_age_sec").value
-        if not (
-            math.isfinite(self._target_max_age_sec)
-            and self._target_max_age_sec > 0.0
-        ):
-            raise ValueError(
-                "target_max_age_sec must be finite and > 0, "
-                f"got {self._target_max_age_sec}"
-            )
+        self._target_max_age_sec = self._positive_finite_param("target_max_age_sec")
+        self._hand_max_age_sec = self._positive_finite_param("hand_max_age_sec")
         self._simulate_stuck_motion = self.get_parameter(
             "simulate_stuck_motion"
         ).value
@@ -214,8 +209,9 @@ class HandoffController(Node):
             HandoffState.READY,
             HandoffState.RELEASE,
         ):
-            # M2 release is a timer, so cancelling it is safe. When a real
-            # gripper lands, aborting mid-RELEASE needs its own policy.
+            # Phase-0 release is a timer, so cancelling it is safe. The
+            # real-gripper mid-RELEASE abort policy (commit point, whether
+            # to interrupt at all) is an Objective 5 hardware-phase decision.
             self.get_logger().warning(
                 f"ABORT in '{self._state.value}': cancelling, returning home"
             )
@@ -251,10 +247,10 @@ class HandoffController(Node):
             self.get_logger().warning("release refused: latest observation is no-hand")
             return False
         age = self._age_sec(hand.header.stamp)
-        if age > HAND_MAX_AGE_SEC:
+        if age > self._hand_max_age_sec:
             self.get_logger().warning(
                 f"release refused: hand observation is {age:.2f}s old "
-                f"(max {HAND_MAX_AGE_SEC}s)"
+                f"(max {self._hand_max_age_sec}s)"
             )
             return False
         if hand.header.frame_id != self._delivery_frame:
@@ -277,6 +273,12 @@ class HandoffController(Node):
 
     def _age_sec(self, stamp) -> float:
         return (self.get_clock().now() - Time.from_msg(stamp)).nanoseconds / 1e9
+
+    def _positive_finite_param(self, name: str) -> float:
+        value = self.get_parameter(name).value
+        if not (math.isfinite(value) and value > 0.0):
+            raise ValueError(f"{name} must be finite and > 0, got {value}")
+        return value
 
     # ------------------------------------------------------------------
     # State transitions, simulated motion, timeouts

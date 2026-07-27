@@ -42,7 +42,13 @@ class Graph:
     """Controller under test + a helper node faking every input stream."""
 
     def __init__(
-        self, param_overrides, hand_point, hand_frame, hand_valid, publish_target
+        self,
+        param_overrides,
+        hand_point,
+        hand_frame,
+        hand_valid,
+        publish_target,
+        publish_hand,
     ):
         params = dict(FAST_PARAMS)
         params.update(param_overrides)
@@ -74,9 +80,11 @@ class Graph:
         self._hand_frame = hand_frame
         self._hand_valid = hand_valid
         self._auto_target = publish_target
-        # Keep hand (and, unless disabled, target) continuously fresh, like
-        # the sim publishers; staleness tests disable auto-target and publish
-        # aged stamps through send_target() instead.
+        self._auto_hand = publish_hand
+        # Keep hand and target continuously fresh, like the sim publishers;
+        # staleness tests disable the auto stream and publish aged stamps
+        # through send_target()/send_hand() instead (an auto stream would
+        # immediately overwrite an artificially aged message).
         self.helper.create_timer(0.05, lambda: self._publish_hand())
         self.helper.create_timer(0.05, lambda: self._publish_target())
 
@@ -89,13 +97,29 @@ class Graph:
         return self.controller._state
 
     def _publish_hand(self):
+        if not self._auto_hand:
+            return
+        self._hand_pub.publish(self._make_hand(age_sec=0.0))
+
+    def send_hand(self, age_sec=0.0):
+        """Publish one hand observation stamped age_sec in the past."""
+        self._hand_pub.publish(self._make_hand(age_sec))
+
+    def _make_hand(self, age_sec):
         msg = HandObservation()
-        msg.header.stamp = self.helper.get_clock().now().to_msg()
+        stamp = self.helper.get_clock().now() - Duration(seconds=age_sec)
+        msg.header.stamp = stamp.to_msg()
         msg.header.frame_id = self._hand_frame
         msg.valid = self._hand_valid
         msg.point.x, msg.point.y, msg.point.z = self._hand_point
         msg.confidence = 0.9
-        self._hand_pub.publish(msg)
+        return msg
+
+    def wait_for_hand_receipt(self, timeout=2.0):
+        """Same false-pass guard as wait_for_target_receipt, for the hand."""
+        return spin_until(
+            self.nodes, lambda: self.controller._last_hand is not None, timeout
+        )
 
     def _publish_target(self):
         if not self._auto_target:
@@ -159,9 +183,15 @@ def make_graph():
         hand_frame="world",
         hand_valid=True,
         publish_target=True,
+        publish_hand=True,
     ):
         graph = Graph(
-            param_overrides, hand_point, hand_frame, hand_valid, publish_target
+            param_overrides,
+            hand_point,
+            hand_frame,
+            hand_valid,
+            publish_target,
+            publish_hand,
         )
         graphs.append(graph)
         return graph
@@ -246,12 +276,73 @@ def test_release_refused_on_frame_mismatch(make_graph):
     assert g.state is HandoffState.READY, "release happened despite frame mismatch"
 
 
-def test_release_refused_on_no_hand_observation(make_graph):
+def test_release_refused_on_no_hand_flag(make_graph):
+    # valid=false is the *explicit* no-hand signal — a live stream saying
+    # "I looked and there is no hand" (distinct from never-received below).
     g = make_graph(hand_valid=False)
     g.confirm_to_ready()
     g.send_intent(AssistiveIntent.CONFIRM)
     g.settle(0.5)
     assert g.state is HandoffState.READY, "release happened despite no-hand"
+
+
+def test_release_refused_when_hand_never_received(make_graph):
+    # No hand stream at all: _last_hand stays None and release must refuse.
+    g = make_graph(publish_hand=False)
+    g.confirm_to_ready()
+    assert g.controller._last_hand is None
+    g.send_intent(AssistiveIntent.CONFIRM)
+    g.settle(0.5)
+    assert g.state is HandoffState.READY, "release happened with no hand stream"
+
+
+def test_release_refused_when_hand_is_stale(make_graph):
+    # A valid, in-range hand whose source stamp is simply too old.
+    g = make_graph(publish_hand=False)
+    g.confirm_to_ready()
+    g.send_hand(age_sec=2.0)  # default hand_max_age_sec is 1.0
+    assert g.wait_for_hand_receipt(), "aged hand never delivered"
+    g.send_intent(AssistiveIntent.CONFIRM)
+    g.settle(0.5)
+    assert g.state is HandoffState.READY, "stale hand accepted for release"
+
+
+def test_half_second_old_hand_allowed_by_default(make_graph):
+    g = make_graph(publish_hand=False)
+    g.confirm_to_ready()
+    g.send_hand(age_sec=0.5)
+    assert g.wait_for_hand_receipt()
+    g.send_intent(AssistiveIntent.CONFIRM)
+    # 0.5s old is inside the default 1.0s window: release must start.
+    assert spin_until(g.nodes, lambda: "release" in g.states), (
+        "fresh-enough hand refused"
+    )
+
+
+def test_half_second_old_hand_refused_when_max_age_tightened(make_graph):
+    # Same 0.5s-old observation as above, but the window is now 0.1s.
+    g = make_graph({"hand_max_age_sec": 0.1}, publish_hand=False)
+    g.confirm_to_ready()
+    g.send_hand(age_sec=0.5)
+    assert g.wait_for_hand_receipt()
+    g.send_intent(AssistiveIntent.CONFIRM)
+    g.settle(0.5)
+    assert g.state is HandoffState.READY
+    assert "release" not in g.states, "stale hand accepted for release"
+
+
+def test_hand_max_age_must_be_positive_and_finite():
+    rclpy.init()
+    try:
+        for bad in (0.0, -1.0, float("inf"), float("nan")):
+            with pytest.raises(ValueError):
+                HandoffController(
+                    parameter_overrides=[
+                        Parameter("hand_max_age_sec", value=bad)
+                    ]
+                )
+    finally:
+        rclpy.shutdown()
 
 
 def test_stuck_approach_watchdog_returns_home(make_graph):
