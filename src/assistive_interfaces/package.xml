@@ -3,7 +3,7 @@
 <package format="3">
   <name>assistive_interfaces</name>
   <version>0.0.1</version>
-  <description>Message contracts for assistive discrete intent and hand observation (Objective 4).</description>
+  <description>Message contracts for assistive intent, hand observation, and bounded view control (Objective 4).</description>
   <maintainer email="jarrodyang227@gmail.com">Jiayu Yang</maintainer>
   <license>Apache-2.0</license>
 

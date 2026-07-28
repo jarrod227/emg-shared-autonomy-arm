@@ -3,7 +3,7 @@
 <package format="3">
   <name>assistive_handoff</name>
   <version>0.0.1</version>
-  <description>Completed Phase-0 simulated Objective 4.1 handoff controller with target and hand freshness gates, timeout, ABORT, and fault handling.</description>
+  <description>Phase-0 Objective 4.1/4.3 handoff controller with bounded simulated active-view search, freshness gates, watchdogs, and ABORT handling.</description>
   <maintainer email="jarrodyang227@gmail.com">Jiayu Yang</maintainer>
   <license>Apache-2.0</license>
 

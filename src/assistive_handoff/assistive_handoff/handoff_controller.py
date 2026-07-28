@@ -1,4 +1,4 @@
-"""Completed Objective 4.1 Phase-0 simulated handoff controller.
+"""Objective 4.1/4.3 Phase-0 simulated handoff and active-view controller.
 
 The controller includes parameterized source-time freshness gates for both
 /target_object_pose and /hand_observation, plus timeouts, ABORT preemption,
@@ -7,12 +7,16 @@ race-safe callbacks, and latched fault handling. Release fails closed.
 States and transitions:
 
     IDLE        --CONFIRM + fresh target-->          APPROACH
+    IDLE        --fresh view command + no target-->  TARGET_SEARCH
+    TARGET_SEARCH --stop + fresh target + CONFIRM--> APPROACH
     APPROACH    --motion done-->                     READY
+    READY       --view command + no hand + held-->   HANDOFF_SEARCH
+    HANDOFF_SEARCH --stop + fresh hand-->            READY
     READY       --CONFIRM + release gates pass-->    RELEASE
     RELEASE     --release done-->                    RETURN_HOME
     RETURN_HOME --motion done-->                     IDLE
 
-    APPROACH / READY / RELEASE  --ABORT-->           RETURN_HOME
+    SEARCH / APPROACH / READY / RELEASE --ABORT-->   RETURN_HOME
         (Phase-0 release is simulated, so aborting it just cancels a timer;
          the irreversible-gripper policy is a hardware-phase decision)
     READY       --no CONFIRM within ready_timeout--> RETURN_HOME
@@ -44,7 +48,7 @@ stale callback can never mutate the state machine.
 Freshness is always judged on header.stamp (source time), never on message
 receipt time, per the assistive_interfaces contracts.
 
-The completed behavior is covered by 25 node-level controller tests.
+The source-independent behavior is covered by node-level controller tests.
 """
 
 import enum
@@ -55,16 +59,35 @@ from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile
 from rclpy.time import Time
-from std_msgs.msg import String
+from std_msgs.msg import Float64, String
 
-from assistive_interfaces.msg import AssistiveIntent, HandObservation
+from assistive_interfaces.msg import (
+    AssistiveIntent,
+    HandObservation,
+    ViewControlCommand,
+)
+
+from assistive_handoff.view_search import SearchProfile, SimulatedViewMotion
+
 
 class HandoffState(enum.Enum):
     IDLE = "idle"
+    TARGET_SEARCH = "target_search"
     APPROACH = "approach"
+    HANDOFF_SEARCH = "handoff_search"
     READY = "ready"
     RELEASE = "release"
     RETURN_HOME = "return_home"
+
+
+class SearchPhase(enum.Enum):
+    """Internal stop-and-look phases; public states stay source-independent."""
+
+    ACTIVE = "active"
+    STOPPING_FOR_OBSERVATION = "stopping_for_observation"
+    WAITING_FOR_FRESH_OBSERVATION = "waiting_for_fresh_observation"
+    LOCKED = "locked"
+    STOPPING_FOR_TIMEOUT = "stopping_for_timeout"
 
 
 class HandoffController(Node):
@@ -97,6 +120,37 @@ class HandoffController(Node):
         # this the deadline path would be untestable until real hardware.
         self.declare_parameter("simulate_stuck_motion", "")
 
+        # Objective 4.3 bounded active-view command and simulation settings.
+        # All angles are radians. Relative travel is additionally hard-capped
+        # by SearchProfile at pi/4 (45 degrees).
+        self.declare_parameter("view_command_max_age_sec", 0.5)
+        self.declare_parameter("view_command_future_tolerance_sec", 0.05)
+        self.declare_parameter("view_watchdog_sec", 0.75)
+        self.declare_parameter("search_timeout_sec", 20.0)
+        self.declare_parameter("view_update_period_sec", 0.02)
+        self.declare_parameter("view_confidence_min", 0.6)
+        self.declare_parameter("view_signal_quality_min", 0.5)
+        self.declare_parameter("view_activation_deadband", 0.05)
+        self.declare_parameter("view_activation_smoothing_alpha", 0.4)
+        self.declare_parameter("view_stable_command_count", 2)
+        self.declare_parameter("view_target_update_min_rad", 0.02)
+
+        self.declare_parameter("target_search_center_angle", 0.0)
+        self.declare_parameter("target_search_relative_limit", math.pi / 4.0)
+        self.declare_parameter("target_search_min_angle", -math.pi / 3.0)
+        self.declare_parameter("target_search_max_angle", math.pi / 3.0)
+        self.declare_parameter("target_search_nominal_speed", 0.25)
+        self.declare_parameter("target_search_acceleration", 0.5)
+        self.declare_parameter("target_search_deceleration", 0.75)
+
+        self.declare_parameter("handoff_search_center_angle", 0.0)
+        self.declare_parameter("handoff_search_relative_limit", math.pi / 9.0)
+        self.declare_parameter("handoff_search_min_angle", -math.pi / 3.0)
+        self.declare_parameter("handoff_search_max_angle", math.pi / 3.0)
+        self.declare_parameter("handoff_search_nominal_speed", 0.12)
+        self.declare_parameter("handoff_search_acceleration", 0.3)
+        self.declare_parameter("handoff_search_deceleration", 0.5)
+
         self._speed_scale = self.get_parameter("speed_scale").value
         if not 0.0 < self._speed_scale <= 1.0:
             raise ValueError(
@@ -120,6 +174,49 @@ class HandoffController(Node):
             "simulate_stuck_motion"
         ).value
 
+        self._view_command_max_age_sec = self._positive_finite_param(
+            "view_command_max_age_sec"
+        )
+        self._view_future_tolerance_sec = self._nonnegative_finite_param(
+            "view_command_future_tolerance_sec"
+        )
+        self._view_watchdog_sec = self._positive_finite_param(
+            "view_watchdog_sec"
+        )
+        self._search_timeout_sec = self._positive_finite_param(
+            "search_timeout_sec"
+        )
+        self._view_update_period_sec = self._positive_finite_param(
+            "view_update_period_sec"
+        )
+        self._view_confidence_min = self._unit_interval_param(
+            "view_confidence_min"
+        )
+        self._view_signal_quality_min = self._unit_interval_param(
+            "view_signal_quality_min"
+        )
+        self._view_activation_deadband = self._unit_interval_param(
+            "view_activation_deadband", upper_inclusive=False
+        )
+        self._view_smoothing_alpha = self._unit_interval_param(
+            "view_activation_smoothing_alpha", lower_inclusive=False
+        )
+        self._view_stable_command_count = self._positive_integer_param(
+            "view_stable_command_count"
+        )
+        self._view_target_update_min_rad = self._nonnegative_finite_param(
+            "view_target_update_min_rad"
+        )
+        self._target_search_profile = self._load_search_profile("target_search")
+        self._handoff_search_profile = self._load_search_profile("handoff_search")
+        if (
+            self._handoff_search_profile.relative_limit
+            > self._target_search_profile.relative_limit
+        ):
+            raise ValueError("handoff search angle limit must not exceed target search")
+        if self._handoff_search_profile.nominal_speed > self._target_search_profile.nominal_speed:
+            raise ValueError("handoff search speed must not exceed target search")
+
         self._state = HandoffState.IDLE
         self._last_target: PoseStamped | None = None
         self._last_hand: HandObservation | None = None
@@ -128,6 +225,20 @@ class HandoffController(Node):
         # timer callbacks armed under an older epoch must not act.
         self._epoch = 0
         self._pending_timers = []
+
+        self._holding_object = False
+        self._search_phase: SearchPhase | None = None
+        self._search_started_at: Time | None = None
+        self._search_stopped_at: Time | None = None
+        self._last_view_source_time: Time | None = None
+        self._last_view_sequence: int | None = None
+        self._view_watchdog_holding = False
+        self._view_candidate_direction: int | None = None
+        self._view_candidate_count = 0
+        self._view_smoothed_activation = 0.0
+        self._last_requested_view_target: float | None = None
+        self._active_search_profile = self._target_search_profile
+        self._view_motion = SimulatedViewMotion(self._target_search_profile)
 
         self._intent_sub = self.create_subscription(
             AssistiveIntent, "/assistive_intent", self._on_intent, 10
@@ -146,10 +257,27 @@ class HandoffController(Node):
             PoseStamped, "/target_object_pose", self._on_target, latched_qos
         )
 
+        volatile_latest_qos = QoSProfile(
+            depth=1, durability=QoSDurabilityPolicy.VOLATILE
+        )
+        self._view_sub = self.create_subscription(
+            ViewControlCommand,
+            "/assistive_view_control",
+            self._on_view_control,
+            volatile_latest_qos,
+        )
+
         self._state_pub = self.create_publisher(String, "/handoff_state", 10)
+        self._view_angle_pub = self.create_publisher(
+            Float64, "/simulated_view_angle", 10
+        )
         # Republish the current state at 1 Hz so `ros2 topic echo` joined
         # mid-cycle still shows it; transitions also publish immediately.
         self._state_republish_timer = self.create_timer(1.0, self._publish_state)
+        self._view_update_timer = self.create_timer(
+            self._view_update_period_sec, self._on_view_tick
+        )
+        self._publish_view_angle()
 
         self.get_logger().info(
             "handoff_controller started in state 'idle' "
@@ -164,9 +292,279 @@ class HandoffController(Node):
 
     def _on_target(self, msg: PoseStamped) -> None:
         self._last_target = msg
+        if self._state is HandoffState.TARGET_SEARCH:
+            usable = self._target_observation_is_usable(msg)
+            self._handle_search_observation(msg.header.stamp, usable)
 
     def _on_hand(self, msg: HandObservation) -> None:
         self._last_hand = msg
+        if self._state is HandoffState.HANDOFF_SEARCH:
+            usable = self._hand_is_release_ready(msg, log_reasons=False)
+            usable = usable and (
+                self._age_sec(msg.header.stamp)
+                >= -self._view_future_tolerance_sec
+            )
+            self._handle_search_observation(msg.header.stamp, usable)
+
+    def _on_view_control(self, msg: ViewControlCommand) -> None:
+        if self._fault:
+            return
+        if self._state not in (
+            HandoffState.IDLE,
+            HandoffState.TARGET_SEARCH,
+            HandoffState.READY,
+            HandoffState.HANDOFF_SEARCH,
+        ):
+            return
+
+        activation = self._validated_view_activation(msg)
+        if activation is None:
+            return
+        requests_motion = (
+            msg.direction in (
+                ViewControlCommand.LEFT,
+                ViewControlCommand.RIGHT,
+            )
+            and activation > self._view_activation_deadband
+        )
+
+        if self._state is HandoffState.IDLE:
+            if self._target_is_available() or not requests_motion:
+                return
+            self._transition(HandoffState.TARGET_SEARCH)
+        elif self._state is HandoffState.READY:
+            if not self._holding_object:
+                self.get_logger().warning(
+                    "HANDOFF_SEARCH refused: holding_object is false"
+                )
+                return
+            if (
+                self._hand_is_release_ready(
+                    self._last_hand, log_reasons=False
+                )
+                or not requests_motion
+            ):
+                return
+            self._transition(HandoffState.HANDOFF_SEARCH)
+
+        if self._state in (
+            HandoffState.TARGET_SEARCH,
+            HandoffState.HANDOFF_SEARCH,
+        ):
+            self._apply_view_command(msg, activation)
+
+    def _validated_view_activation(
+        self, msg: ViewControlCommand
+    ) -> float | None:
+        if msg.direction not in (
+            ViewControlCommand.HOLD,
+            ViewControlCommand.LEFT,
+            ViewControlCommand.RIGHT,
+        ):
+            self.get_logger().warning(
+                f"view command ignored: unknown direction {msg.direction}"
+            )
+            return None
+
+        age = self._age_sec(msg.header.stamp)
+        if age < -self._view_future_tolerance_sec:
+            self.get_logger().warning(
+                f"view command ignored: source stamp is {-age:.3f}s future"
+            )
+            return None
+        if age > self._view_command_max_age_sec:
+            self.get_logger().warning(
+                f"view command ignored: source stamp is {age:.3f}s old"
+            )
+            return None
+
+        confidence = float(msg.confidence)
+        signal_quality = float(msg.signal_quality)
+        for name, value, minimum in (
+            ("confidence", confidence, self._view_confidence_min),
+            (
+                "signal_quality",
+                signal_quality,
+                self._view_signal_quality_min,
+            ),
+        ):
+            if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+                self.get_logger().warning(
+                    f"view command ignored: invalid {name}={value}"
+                )
+                return None
+            if value < minimum:
+                self.get_logger().warning(
+                    f"view command ignored: {name}={value:.3f} "
+                    f"below {minimum:.3f}"
+                )
+                return None
+
+        activation = float(msg.activation)
+        if not math.isfinite(activation):
+            self.get_logger().warning(
+                "view command ignored: activation is not finite"
+            )
+            return None
+        activation = min(1.0, max(0.0, activation))
+
+        sequence = int(msg.sequence)
+        if (
+            self._last_view_sequence is not None
+            and not self._sequence_is_newer(
+                sequence, self._last_view_sequence
+            )
+        ):
+            self.get_logger().warning(
+                f"view command ignored: sequence {sequence} is not newer"
+            )
+            return None
+        self._last_view_sequence = sequence
+        return activation
+
+    @staticmethod
+    def _sequence_is_newer(sequence: int, previous: int) -> bool:
+        delta = (sequence - previous) & 0xFFFFFFFF
+        return 0 < delta < 0x80000000
+
+    def _apply_view_command(
+        self, msg: ViewControlCommand, activation: float
+    ) -> None:
+        if self._search_phase is not SearchPhase.ACTIVE:
+            return
+
+        self._last_view_source_time = Time.from_msg(msg.header.stamp)
+        self._view_watchdog_holding = False
+        if (
+            msg.direction == ViewControlCommand.HOLD
+            or activation <= self._view_activation_deadband
+        ):
+            self._view_motion.request_hold()
+            self._reset_view_filter()
+            return
+
+        direction = (
+            -1 if msg.direction == ViewControlCommand.LEFT else 1
+        )
+        if direction != self._view_candidate_direction:
+            self._view_candidate_direction = direction
+            self._view_candidate_count = 1
+            self._view_smoothed_activation = activation
+        else:
+            self._view_candidate_count += 1
+            alpha = self._view_smoothing_alpha
+            self._view_smoothed_activation = (
+                alpha * activation
+                + (1.0 - alpha) * self._view_smoothed_activation
+            )
+
+        if self._view_candidate_count < self._view_stable_command_count:
+            return
+        target = self._active_search_profile.target_for(
+            direction, self._view_smoothed_activation
+        )
+        if (
+            self._last_requested_view_target is not None
+            and abs(target - self._last_requested_view_target)
+            < self._view_target_update_min_rad
+        ):
+            return
+        self._last_requested_view_target = self._view_motion.request_target(
+            target
+        )
+
+    def _reset_view_filter(self) -> None:
+        self._view_candidate_direction = None
+        self._view_candidate_count = 0
+        self._view_smoothed_activation = 0.0
+        self._last_requested_view_target = None
+
+    def _target_observation_is_usable(self, msg: PoseStamped) -> bool:
+        age = self._age_sec(msg.header.stamp)
+        return (
+            -self._view_future_tolerance_sec
+            <= age
+            <= self._target_max_age_sec
+        )
+
+    def _handle_search_observation(self, stamp, usable: bool) -> None:
+        if not usable or self._search_phase not in (
+            SearchPhase.ACTIVE,
+            SearchPhase.WAITING_FOR_FRESH_OBSERVATION,
+        ):
+            return
+        reference = (
+            self._search_started_at
+            if self._search_phase is SearchPhase.ACTIVE
+            else self._search_stopped_at
+        )
+        if reference is None:
+            return
+        if Time.from_msg(stamp).nanoseconds <= reference.nanoseconds:
+            return
+
+        if self._search_phase is SearchPhase.ACTIVE:
+            self._view_motion.request_hold()
+            self._reset_view_filter()
+            self._search_phase = SearchPhase.STOPPING_FOR_OBSERVATION
+            self.get_logger().info(
+                f"{self._state.value}: observation acquired; stopping view"
+            )
+        elif self._state is HandoffState.TARGET_SEARCH:
+            self._search_phase = SearchPhase.LOCKED
+            self.get_logger().info(
+                "target locked from a post-stop observation; waiting CONFIRM"
+            )
+        else:
+            self.get_logger().info(
+                "hand locked from a post-stop observation; entering ready"
+            )
+            self._transition(HandoffState.READY)
+
+    def _on_view_tick(self) -> None:
+        self._view_motion.step(self._view_update_period_sec)
+        self._publish_view_angle()
+        if self._state not in (
+            HandoffState.TARGET_SEARCH,
+            HandoffState.HANDOFF_SEARCH,
+        ):
+            return
+
+        if self._search_phase is SearchPhase.ACTIVE:
+            watchdog_expired = self._last_view_source_time is None
+            if self._last_view_source_time is not None:
+                age = (
+                    self.get_clock().now() - self._last_view_source_time
+                ).nanoseconds / 1e9
+                watchdog_expired = age > self._view_watchdog_sec
+            if watchdog_expired and not self._view_watchdog_holding:
+                self._view_motion.request_hold()
+                self._reset_view_filter()
+                self._view_watchdog_holding = True
+                self.get_logger().warning(
+                    f"{self._state.value}: view watchdog expired; holding"
+                )
+
+        if (
+            self._search_phase
+            is SearchPhase.STOPPING_FOR_OBSERVATION
+            and not self._view_motion.moving
+        ):
+            self._search_stopped_at = self.get_clock().now()
+            self._search_phase = SearchPhase.WAITING_FOR_FRESH_OBSERVATION
+            self.get_logger().info(
+                f"{self._state.value}: view stopped; waiting fresh observation"
+            )
+        elif (
+            self._search_phase is SearchPhase.STOPPING_FOR_TIMEOUT
+            and not self._view_motion.moving
+        ):
+            self._transition(HandoffState.RETURN_HOME)
+
+    def _publish_view_angle(self) -> None:
+        self._view_angle_pub.publish(
+            Float64(data=self._view_motion.position)
+        )
 
     def _on_intent(self, msg: AssistiveIntent) -> None:
         if self._fault:
@@ -199,6 +597,21 @@ class HandoffController(Node):
             if self._target_is_fresh():
                 self._transition(HandoffState.APPROACH)
             # else: _target_is_fresh already logged why the gate refused
+        elif self._state is HandoffState.TARGET_SEARCH:
+            if self._search_phase is not SearchPhase.LOCKED:
+                self.get_logger().info(
+                    "CONFIRM ignored: target search has no post-stop lock"
+                )
+            elif self._target_is_fresh():
+                self._transition(HandoffState.APPROACH)
+            else:
+                # The lock aged out while waiting for the user. Resume the
+                # same bounded search; a new command is required by watchdog.
+                self._search_phase = SearchPhase.ACTIVE
+                self._search_started_at = self.get_clock().now()
+                self._search_stopped_at = None
+                self._last_view_source_time = None
+                self._reset_view_filter()
         elif self._state is HandoffState.READY:
             if self._release_gates_pass():
                 self._transition(HandoffState.RELEASE)
@@ -209,10 +622,17 @@ class HandoffController(Node):
 
     def _on_abort(self) -> None:
         if self._state in (
+            HandoffState.TARGET_SEARCH,
             HandoffState.APPROACH,
+            HandoffState.HANDOFF_SEARCH,
             HandoffState.READY,
             HandoffState.RELEASE,
         ):
+            if self._state in (
+                HandoffState.TARGET_SEARCH,
+                HandoffState.HANDOFF_SEARCH,
+            ):
+                self._view_motion.emergency_stop()
             # Phase-0 release is a timer, so cancelling it is safe. The
             # real-gripper mid-RELEASE abort policy (commit point, whether
             # to interrupt at all) is an Objective 5 hardware-phase decision.
@@ -242,37 +662,55 @@ class HandoffController(Node):
             return False
         return True
 
+    def _target_is_available(self) -> bool:
+        return (
+            self._last_target is not None
+            and self._age_sec(self._last_target.header.stamp)
+            <= self._target_max_age_sec
+        )
+
     def _release_gates_pass(self) -> bool:
-        hand = self._last_hand
+        return self._hand_is_release_ready(
+            self._last_hand, log_reasons=True
+        )
+
+    def _hand_is_release_ready(
+        self,
+        hand: HandObservation | None,
+        *,
+        log_reasons: bool,
+    ) -> bool:
+        def refuse(message: str) -> bool:
+            if log_reasons:
+                self.get_logger().warning(message)
+            return False
+
         if hand is None:
-            self.get_logger().warning("release refused: no /hand_observation yet")
-            return False
+            return refuse("release refused: no /hand_observation yet")
         if not hand.valid:
-            self.get_logger().warning("release refused: latest observation is no-hand")
-            return False
+            return refuse(
+                "release refused: latest observation is no-hand"
+            )
         age = self._age_sec(hand.header.stamp)
         if age > self._hand_max_age_sec:
-            self.get_logger().warning(
+            return refuse(
                 f"release refused: hand observation is {age:.2f}s old "
                 f"(max {self._hand_max_age_sec}s)"
             )
-            return False
         if hand.header.frame_id != self._delivery_frame:
             # Refusing beats silently comparing points in different frames.
-            self.get_logger().warning(
+            return refuse(
                 f"release refused: hand frame '{hand.header.frame_id}' != "
                 f"delivery frame '{self._delivery_frame}'"
             )
-            return False
         distance = math.dist(
             (hand.point.x, hand.point.y, hand.point.z), self._delivery_center
         )
         if distance > self._max_delivery_distance:
-            self.get_logger().warning(
+            return refuse(
                 f"release refused: hand is {distance:.3f}m from delivery "
                 f"center (max {self._max_delivery_distance}m)"
             )
-            return False
         return True
 
     def _age_sec(self, stamp) -> float:
@@ -284,11 +722,88 @@ class HandoffController(Node):
             raise ValueError(f"{name} must be finite and > 0, got {value}")
         return value
 
+    def _nonnegative_finite_param(self, name: str) -> float:
+        value = self.get_parameter(name).value
+        if not (math.isfinite(value) and value >= 0.0):
+            raise ValueError(
+                f"{name} must be finite and >= 0, got {value}"
+            )
+        return float(value)
+
+    def _unit_interval_param(
+        self,
+        name: str,
+        *,
+        lower_inclusive: bool = True,
+        upper_inclusive: bool = True,
+    ) -> float:
+        value = self.get_parameter(name).value
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite, got {value}")
+        lower_ok = value >= 0.0 if lower_inclusive else value > 0.0
+        upper_ok = value <= 1.0 if upper_inclusive else value < 1.0
+        if not lower_ok or not upper_ok:
+            left = "[" if lower_inclusive else "("
+            right = "]" if upper_inclusive else ")"
+            raise ValueError(
+                f"{name} must be in {left}0, 1{right}, got {value}"
+            )
+        return float(value)
+
+    def _positive_integer_param(self, name: str) -> int:
+        value = self.get_parameter(name).value
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"{name} must be an integer >= 1, got {value}")
+        return value
+
+    def _load_search_profile(self, prefix: str) -> SearchProfile:
+        return SearchProfile(
+            center_angle=self.get_parameter(
+                f"{prefix}_center_angle"
+            ).value,
+            relative_limit=self.get_parameter(
+                f"{prefix}_relative_limit"
+            ).value,
+            min_angle=self.get_parameter(f"{prefix}_min_angle").value,
+            max_angle=self.get_parameter(f"{prefix}_max_angle").value,
+            nominal_speed=self.get_parameter(
+                f"{prefix}_nominal_speed"
+            ).value,
+            acceleration=self.get_parameter(
+                f"{prefix}_acceleration"
+            ).value,
+            deceleration=self.get_parameter(
+                f"{prefix}_deceleration"
+            ).value,
+        )
+
     # ------------------------------------------------------------------
     # State transitions, simulated motion, timeouts
     # ------------------------------------------------------------------
 
     def _transition(self, new_state: HandoffState) -> None:
+        if (
+            new_state is HandoffState.HANDOFF_SEARCH
+            and not self._holding_object
+        ):
+            self.get_logger().warning(
+                "HANDOFF_SEARCH refused: holding_object is false"
+            )
+            return
+
+        old_state = self._state
+        if old_state in (
+            HandoffState.TARGET_SEARCH,
+            HandoffState.HANDOFF_SEARCH,
+        ) and new_state not in (
+            HandoffState.TARGET_SEARCH,
+            HandoffState.HANDOFF_SEARCH,
+        ):
+            self._view_motion.emergency_stop()
+            self._search_phase = None
+            self._search_started_at = None
+            self._search_stopped_at = None
+
         self._epoch += 1
         self._cancel_pending_timers()
         self.get_logger().info(
@@ -299,7 +814,12 @@ class HandoffController(Node):
 
         # Entry actions: motion states start their (simulated) motion; READY
         # arms the dwell timeout so the arm never hovers indefinitely.
-        if new_state is HandoffState.APPROACH:
+        if new_state in (
+            HandoffState.TARGET_SEARCH,
+            HandoffState.HANDOFF_SEARCH,
+        ):
+            self._start_search(new_state)
+        elif new_state is HandoffState.APPROACH:
             self._start_motion(HandoffState.READY)
         elif new_state is HandoffState.RELEASE:
             # Phase-0 release is a simulated transition: no gripper actuation.
@@ -314,6 +834,38 @@ class HandoffController(Node):
                     lambda: self._on_ready_timeout(epoch),
                 )
             )
+        elif new_state is HandoffState.IDLE:
+            self._holding_object = False
+            self._active_search_profile = self._target_search_profile
+            self._view_motion = SimulatedViewMotion(
+                self._target_search_profile
+            )
+            self._publish_view_angle()
+
+    def _start_search(self, state: HandoffState) -> None:
+        if self._view_motion.moving:
+            raise RuntimeError("cannot enter search while view motion is active")
+        profile = (
+            self._target_search_profile
+            if state is HandoffState.TARGET_SEARCH
+            else self._handoff_search_profile
+        )
+        self._view_motion.configure(profile)
+        self._active_search_profile = profile
+        self._search_phase = SearchPhase.ACTIVE
+        self._search_started_at = self.get_clock().now()
+        self._search_stopped_at = None
+        self._last_view_source_time = None
+        self._view_watchdog_holding = False
+        self._reset_view_filter()
+
+        epoch = self._epoch
+        self._pending_timers.append(
+            self.create_timer(
+                self._search_timeout_sec,
+                lambda: self._on_search_timeout(epoch),
+            )
+        )
 
     def _start_motion(self, result_state: HandoffState) -> None:
         # Phase-0 uses a one-shot timer in place of a MoveIt action goal; the
@@ -345,6 +897,10 @@ class HandoffController(Node):
     ) -> None:
         if epoch != self._epoch:
             return  # stale callback from a superseded motion
+        if self._state is HandoffState.APPROACH:
+            self._holding_object = True
+        elif self._state is HandoffState.RELEASE:
+            self._holding_object = False
         self._transition(result_state)
 
     def _on_motion_timeout(self, epoch: int) -> None:
@@ -381,6 +937,19 @@ class HandoffController(Node):
             "returning home"
         )
         self._transition(HandoffState.RETURN_HOME)
+
+    def _on_search_timeout(self, epoch: int) -> None:
+        if epoch != self._epoch or self._state not in (
+            HandoffState.TARGET_SEARCH,
+            HandoffState.HANDOFF_SEARCH,
+        ):
+            return
+        self.get_logger().warning(
+            f"{self._state.value}: search timeout; stopping before return"
+        )
+        self._view_motion.request_hold()
+        self._reset_view_filter()
+        self._search_phase = SearchPhase.STOPPING_FOR_TIMEOUT
 
     def _cancel_pending_timers(self) -> None:
         for timer in self._pending_timers:

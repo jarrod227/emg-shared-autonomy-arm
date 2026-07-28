@@ -15,15 +15,44 @@ from geometry_msgs.msg import PoseStamped
 from rclpy.duration import Duration
 from rclpy.parameter import Parameter
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile
-from std_msgs.msg import String
+from std_msgs.msg import Float64, String
 
-from assistive_handoff.handoff_controller import HandoffController, HandoffState
-from assistive_interfaces.msg import AssistiveIntent, HandObservation
+from assistive_handoff.handoff_controller import (
+    HandoffController,
+    HandoffState,
+    SearchPhase,
+)
+from assistive_interfaces.msg import (
+    AssistiveIntent,
+    HandObservation,
+    ViewControlCommand,
+)
 
 FAST_PARAMS = {
     "sim_motion_sec": 0.2,
     "motion_timeout_sec": 2.0,
     "ready_timeout_sec": 5.0,
+}
+
+SEARCH_PARAMS = {
+    "view_update_period_sec": 0.01,
+    "view_command_max_age_sec": 0.5,
+    "view_watchdog_sec": 0.15,
+    "search_timeout_sec": 2.0,
+    "view_stable_command_count": 1,
+    "view_target_update_min_rad": 0.0,
+    "target_search_relative_limit": 0.6,
+    "target_search_min_angle": -1.0,
+    "target_search_max_angle": 1.0,
+    "target_search_nominal_speed": 1.0,
+    "target_search_acceleration": 4.0,
+    "target_search_deceleration": 4.0,
+    "handoff_search_relative_limit": 0.3,
+    "handoff_search_min_angle": -1.0,
+    "handoff_search_max_angle": 1.0,
+    "handoff_search_nominal_speed": 0.5,
+    "handoff_search_acceleration": 2.0,
+    "handoff_search_deceleration": 4.0,
 }
 
 HAND_POINT = (0.4, 0.3, 1.0)  # matches the default delivery center
@@ -63,6 +92,13 @@ class Graph:
         self._intent_pub = self.helper.create_publisher(
             AssistiveIntent, "/assistive_intent", 10
         )
+        self._view_pub = self.helper.create_publisher(
+            ViewControlCommand,
+            "/assistive_view_control",
+            QoSProfile(
+                depth=1, durability=QoSDurabilityPolicy.VOLATILE
+            ),
+        )
         self._hand_pub = self.helper.create_publisher(
             HandObservation, "/hand_observation", 10
         )
@@ -75,8 +111,16 @@ class Graph:
         self.helper.create_subscription(
             String, "/handoff_state", lambda msg: self.states.append(msg.data), 10
         )
+        self.angles = []
+        self.helper.create_subscription(
+            Float64,
+            "/simulated_view_angle",
+            lambda msg: self.angles.append(msg.data),
+            10,
+        )
 
         self._sequence = 0
+        self._view_sequence = 0
         self._hand_point = hand_point
         self._hand_frame = hand_frame
         self._hand_valid = hand_valid
@@ -158,8 +202,40 @@ class Graph:
         self._sequence += 1
         self._intent_pub.publish(msg)
 
+    def send_view(
+        self,
+        direction,
+        *,
+        activation=0.8,
+        confidence=1.0,
+        signal_quality=1.0,
+        age_sec=0.0,
+        sequence=None,
+    ):
+        msg = ViewControlCommand()
+        stamp = self.helper.get_clock().now() - Duration(seconds=age_sec)
+        msg.header.stamp = stamp.to_msg()
+        msg.header.frame_id = "test_view"
+        msg.direction = direction
+        msg.activation = activation
+        msg.confidence = confidence
+        msg.signal_quality = signal_quality
+        if sequence is None:
+            sequence = self._view_sequence
+            self._view_sequence += 1
+        msg.sequence = sequence
+        self._view_pub.publish(msg)
+
     def wait_for_state(self, state, timeout=3.0):
-        return spin_until(self.nodes, lambda: self.state is state, timeout)
+        return spin_until(
+            self.nodes,
+            lambda: (
+                self.state is state
+                and bool(self.states)
+                and self.states[-1] == state.value
+            ),
+            timeout,
+        )
 
     def settle(self, seconds):
         spin_until(self.nodes, lambda: False, timeout=seconds)
@@ -519,6 +595,211 @@ def test_speed_scale_out_of_range_rejected():
             )
     finally:
         rclpy.shutdown()
+
+
+def make_search_graph(
+    make_graph,
+    overrides=None,
+    *,
+    publish_target=False,
+    publish_hand=False,
+):
+    params = dict(SEARCH_PARAMS)
+    if overrides:
+        params.update(overrides)
+    return make_graph(
+        params,
+        publish_target=publish_target,
+        publish_hand=publish_hand,
+    )
+
+
+def test_view_search_not_started_by_hold_or_when_target_is_fresh(make_graph):
+    g = make_search_graph(make_graph, publish_target=True)
+    assert g.wait_for_target_receipt()
+
+    g.send_view(ViewControlCommand.HOLD, activation=0.0)
+    g.settle(0.1)
+    assert g.state is HandoffState.IDLE
+
+    g.send_view(ViewControlCommand.RIGHT)
+    g.settle(0.1)
+    assert g.state is HandoffState.IDLE
+
+
+def test_target_search_requires_post_stop_target_and_confirm(make_graph):
+    g = make_search_graph(make_graph)
+    g.settle(0.2)
+
+    g.send_view(ViewControlCommand.RIGHT)
+    assert g.wait_for_state(HandoffState.TARGET_SEARCH)
+    assert spin_until(g.nodes, lambda: g.controller._view_motion.velocity > 0.0)
+
+    # This target stops the camera, but cannot itself be used for approach.
+    g.send_target()
+    assert spin_until(
+        g.nodes,
+        lambda: (
+            g.controller._search_phase
+            is SearchPhase.WAITING_FOR_FRESH_OBSERVATION
+        ),
+    )
+    g.send_intent(AssistiveIntent.CONFIRM)
+    g.settle(0.1)
+    assert g.state is HandoffState.TARGET_SEARCH
+
+    # A second source-stamped pose acquired after the confirmed stop locks.
+    g.send_target()
+    assert spin_until(
+        g.nodes,
+        lambda: g.controller._search_phase is SearchPhase.LOCKED,
+    )
+    g.send_intent(AssistiveIntent.CONFIRM)
+    assert g.wait_for_state(HandoffState.READY)
+    assert g.controller._holding_object
+
+
+def test_target_search_watchdog_holds_and_new_command_resumes(make_graph):
+    g = make_search_graph(
+        make_graph,
+        {"view_watchdog_sec": 0.08},
+    )
+    g.settle(0.2)
+    g.send_view(ViewControlCommand.RIGHT)
+    assert g.wait_for_state(HandoffState.TARGET_SEARCH)
+    assert spin_until(g.nodes, lambda: g.controller._view_motion.velocity > 0.0)
+    requested_target = g.controller._last_requested_view_target
+
+    assert spin_until(
+        g.nodes,
+        lambda: not g.controller._view_motion.moving,
+        timeout=1.0,
+    )
+    assert g.state is HandoffState.TARGET_SEARCH
+    assert g.controller._view_motion.position < requested_target
+
+    g.send_view(ViewControlCommand.LEFT)
+    assert spin_until(
+        g.nodes,
+        lambda: g.controller._view_motion.velocity < 0.0,
+    )
+
+
+def test_new_view_command_serializes_preemption(make_graph):
+    g = make_search_graph(
+        make_graph,
+        {"view_watchdog_sec": 1.0},
+    )
+    g.settle(0.2)
+    g.send_view(ViewControlCommand.RIGHT)
+    assert g.wait_for_state(HandoffState.TARGET_SEARCH)
+    assert spin_until(g.nodes, lambda: g.controller._view_motion.velocity > 0.0)
+
+    g.send_view(ViewControlCommand.LEFT)
+    g.settle(0.03)
+    motion = g.controller._view_motion
+    selected = (
+        motion.pending_target
+        if motion.pending_target is not None
+        else motion.active_target
+    )
+    assert selected is not None and selected < 0.0
+    assert motion.goal_count <= 1
+
+
+def test_stale_low_quality_and_duplicate_view_commands_are_ignored(make_graph):
+    g = make_search_graph(make_graph)
+    g.settle(0.2)
+
+    g.send_view(ViewControlCommand.RIGHT, age_sec=1.0)
+    g.settle(0.1)
+    assert g.state is HandoffState.IDLE
+
+    g.send_view(ViewControlCommand.RIGHT, signal_quality=0.1)
+    g.settle(0.1)
+    assert g.state is HandoffState.IDLE
+
+    g.send_view(ViewControlCommand.RIGHT)
+    assert g.wait_for_state(HandoffState.TARGET_SEARCH)
+    assert spin_until(g.nodes, lambda: g.controller._view_motion.velocity > 0.0)
+    accepted_sequence = g.controller._last_view_sequence
+
+    g.send_view(ViewControlCommand.LEFT, sequence=accepted_sequence)
+    g.settle(0.05)
+    assert g.controller._last_view_sequence == accepted_sequence
+    assert g.controller._view_candidate_direction == 1
+
+
+def test_abort_in_target_search_emergency_stops_and_returns_home(make_graph):
+    g = make_search_graph(make_graph)
+    g.settle(0.2)
+    g.send_view(ViewControlCommand.RIGHT)
+    assert g.wait_for_state(HandoffState.TARGET_SEARCH)
+    assert spin_until(g.nodes, lambda: g.controller._view_motion.velocity > 0.0)
+
+    g.send_intent(AssistiveIntent.ABORT)
+    assert g.wait_for_state(HandoffState.RETURN_HOME)
+    assert not g.controller._view_motion.moving
+    assert g.wait_for_state(HandoffState.IDLE)
+
+
+def test_handoff_search_refused_without_held_object(make_graph):
+    g = make_search_graph(make_graph)
+    g.controller._transition(HandoffState.HANDOFF_SEARCH)
+
+    assert g.state is HandoffState.IDLE
+    assert not g.controller._holding_object
+
+
+def test_handoff_search_uses_loaded_limits_and_post_stop_hand(make_graph):
+    g = make_search_graph(
+        make_graph,
+        publish_target=True,
+        publish_hand=False,
+    )
+    g.confirm_to_ready()
+    assert g.controller._holding_object
+
+    g.send_view(ViewControlCommand.RIGHT)
+    assert g.wait_for_state(HandoffState.HANDOFF_SEARCH)
+    assert g.controller._active_search_profile.relative_limit == pytest.approx(
+        SEARCH_PARAMS["handoff_search_relative_limit"]
+    )
+    assert g.controller._active_search_profile.nominal_speed == pytest.approx(
+        SEARCH_PARAMS["handoff_search_nominal_speed"]
+    )
+    assert spin_until(g.nodes, lambda: g.controller._view_motion.velocity > 0.0)
+
+    g.send_hand()
+    assert spin_until(
+        g.nodes,
+        lambda: (
+            g.controller._search_phase
+            is SearchPhase.WAITING_FOR_FRESH_OBSERVATION
+        ),
+    )
+    assert g.state is HandoffState.HANDOFF_SEARCH
+
+    g.send_hand()
+    assert g.wait_for_state(HandoffState.READY)
+    assert g.controller._holding_object
+
+
+def test_search_timeout_stops_view_before_return_home(make_graph):
+    g = make_search_graph(
+        make_graph,
+        {
+            "search_timeout_sec": 0.12,
+            "view_watchdog_sec": 1.0,
+        },
+    )
+    g.settle(0.2)
+    g.send_view(ViewControlCommand.RIGHT)
+    assert g.wait_for_state(HandoffState.TARGET_SEARCH)
+
+    assert g.wait_for_state(HandoffState.RETURN_HOME)
+    assert not g.controller._view_motion.moving
+    assert g.wait_for_state(HandoffState.IDLE)
 
 
 if __name__ == "__main__":

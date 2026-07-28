@@ -11,6 +11,13 @@ setup(
         ("share/" + package_name, ["package.xml"]),
     ],
     install_requires=["setuptools"],
+    extras_require={
+        "vision": [
+            "mediapipe==1.0.0",
+            "numpy<2",
+            "opencv-contrib-python==4.11.0.86",
+        ],
+    },
     zip_safe=True,
     maintainer="Jiayu Yang",
     maintainer_email="jarrodyang227@gmail.com",
@@ -21,6 +28,8 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
+            "hand_detector_demo = "
+            "stereo_hand_observer.hand_detector_demo:main",
             "live_observer = "
             "stereo_hand_observer.live_observer:main",
             "synthetic_observer = "

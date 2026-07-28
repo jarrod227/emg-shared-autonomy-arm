@@ -50,7 +50,7 @@ def fake_mediapipe(result):
 def result_with_hands(count):
     """Create a result with count identical 21-landmark hands."""
     hands = [
-        [SimpleNamespace(x=0.25, y=0.5) for _ in range(21)]
+        [SimpleNamespace(x=0.25, y=0.5, z=-0.01) for _ in range(21)]
         for _ in range(count)
     ]
     handedness = [
@@ -63,7 +63,7 @@ def result_with_hands(count):
     )
 
 
-def make_detector(tmp_path, result):
+def make_detector(tmp_path, result, **detector_options):
     """Create the adapter around a fake model file and fake task API."""
     model_path = tmp_path / "hand_landmarker.task"
     model_path.write_bytes(b"fake model")
@@ -74,6 +74,7 @@ def make_detector(tmp_path, result):
         min_hand_presence_confidence=0.7,
         min_tracking_confidence=0.9,
         mediapipe_module=module,
+        **detector_options,
     )
     return detector, landmarker_class
 
@@ -92,6 +93,26 @@ def test_unique_hand_returns_configured_pixel_and_quality_floor(tmp_path):
     assert detection.confidence == 0.7
     assert detection.handedness == "right"
     assert landmarker_class.options.num_hands == 2
+
+
+def test_configured_landmark_is_selected_from_complete_hand(tmp_path):
+    result = result_with_hands(1)
+    result.hand_landmarks[0][5] = SimpleNamespace(
+        x=0.75,
+        y=0.25,
+        z=-0.02,
+    )
+    detector, _ = make_detector(
+        tmp_path,
+        result,
+        landmark_index=5,
+    )
+
+    detection = detector.detect(
+        np.zeros((480, 640, 3), dtype=np.uint8)
+    )
+
+    assert detection.pixel == (480.0, 120.0)
 
 
 @pytest.mark.parametrize("hand_count", (0, 2))

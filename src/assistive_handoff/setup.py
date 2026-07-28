@@ -15,8 +15,8 @@ setup(
     maintainer="Jiayu Yang",
     maintainer_email="jarrodyang227@gmail.com",
     description=(
-        "Completed Phase-0 simulated Objective 4.1 handoff controller with "
-        "freshness gates and fail-safe timeout, ABORT, and fault handling."
+        "Phase-0 Objective 4.1/4.3 handoff controller with bounded simulated "
+        "active-view search, freshness gates, watchdogs, and ABORT handling."
     ),
     license="Apache-2.0",
     tests_require=["pytest"],
@@ -26,6 +26,10 @@ setup(
             "sim_intent_publisher = assistive_handoff.sim_intent_publisher:main",
             "sim_hand_publisher = assistive_handoff.sim_hand_publisher:main",
             "sim_target_publisher = assistive_handoff.sim_target_publisher:main",
+            (
+                "sim_view_control_publisher = "
+                "assistive_handoff.sim_view_control_publisher:main"
+            ),
         ],
     },
 )

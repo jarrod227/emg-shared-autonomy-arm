@@ -4,6 +4,7 @@ install/
 log/
 
 # Python generated files
+.venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
