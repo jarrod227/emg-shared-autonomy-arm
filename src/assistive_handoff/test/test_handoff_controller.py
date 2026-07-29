@@ -1,4 +1,4 @@
-"""The 25 node-level tests for the completed Objective 4.1 Phase-0 controller.
+"""Node-level tests for the Objective 4 simulated handoff controller.
 
 No simulator needed: the test process publishes intent / hand / target
 itself (mirroring the sim publishers) and watches the controller's state.
@@ -384,6 +384,46 @@ def test_release_refused_when_hand_is_stale(make_graph):
     assert g.state is HandoffState.READY, "stale hand accepted for release"
 
 
+def test_release_refused_when_hand_stamp_is_future(make_graph):
+    g = make_graph(
+        {"simulate_stuck_motion": "release"},
+        publish_hand=False,
+    )
+    g.confirm_to_ready()
+    g.send_hand(age_sec=-0.5)
+    assert g.wait_for_hand_receipt(), "future-stamped hand never delivered"
+    g.send_intent(AssistiveIntent.CONFIRM)
+    g.settle(0.5)
+    assert g.state is HandoffState.READY, "future-stamped hand accepted"
+    assert "release" not in g.states
+
+
+@pytest.mark.parametrize(
+    "hand_point",
+    [
+        (float("nan"), HAND_POINT[1], HAND_POINT[2]),
+        (HAND_POINT[0], float("nan"), HAND_POINT[2]),
+        (HAND_POINT[0], HAND_POINT[1], float("nan")),
+        (float("inf"), HAND_POINT[1], HAND_POINT[2]),
+        (float("-inf"), HAND_POINT[1], HAND_POINT[2]),
+    ],
+    ids=["nan-x", "nan-y", "nan-z", "positive-inf", "negative-inf"],
+)
+def test_release_refused_when_hand_point_is_nonfinite(make_graph, hand_point):
+    g = make_graph(
+        {"simulate_stuck_motion": "release"},
+        hand_point=hand_point,
+        publish_hand=False,
+    )
+    g.confirm_to_ready()
+    g.send_hand()
+    assert g.wait_for_hand_receipt(), "non-finite hand never delivered"
+    g.send_intent(AssistiveIntent.CONFIRM)
+    g.settle(0.5)
+    assert g.state is HandoffState.READY, "non-finite hand accepted"
+    assert "release" not in g.states
+
+
 def test_half_second_old_hand_allowed_by_default(make_graph):
     g = make_graph(publish_hand=False)
     g.confirm_to_ready()
@@ -418,6 +458,41 @@ def test_hand_max_age_must_be_positive_and_finite():
                         Parameter("hand_max_age_sec", value=bad)
                     ]
                 )
+    finally:
+        rclpy.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("name", "bad"),
+    [
+        ("max_delivery_distance", 0.0),
+        ("max_delivery_distance", -1.0),
+        ("max_delivery_distance", float("inf")),
+        ("max_delivery_distance", float("nan")),
+        ("delivery_center_x", float("inf")),
+        ("delivery_center_y", float("-inf")),
+        ("delivery_center_z", float("nan")),
+    ],
+)
+def test_delivery_numeric_parameters_must_be_finite(name, bad):
+    rclpy.init()
+    try:
+        with pytest.raises(ValueError):
+            HandoffController(
+                parameter_overrides=[Parameter(name, value=bad)]
+            )
+    finally:
+        rclpy.shutdown()
+
+
+@pytest.mark.parametrize("bad", ["", "   "])
+def test_delivery_frame_must_be_nonempty(bad):
+    rclpy.init()
+    try:
+        with pytest.raises(ValueError):
+            HandoffController(
+                parameter_overrides=[Parameter("delivery_frame", value=bad)]
+            )
     finally:
         rclpy.shutdown()
 
@@ -545,6 +620,20 @@ def test_half_second_old_target_refused_when_max_age_tightened(make_graph):
     g.send_intent(AssistiveIntent.CONFIRM)
     g.settle(0.5)
     assert g.state is HandoffState.IDLE, "stale target accepted"
+
+
+def test_confirm_refused_when_target_stamp_is_future(make_graph):
+    g = make_graph(
+        {"simulate_stuck_motion": "approach"},
+        publish_target=False,
+    )
+    g.settle(0.3)
+    g.send_target(age_sec=-0.5)
+    assert g.wait_for_target_receipt(), "future-stamped target never delivered"
+    g.send_intent(AssistiveIntent.CONFIRM)
+    g.settle(0.5)
+    assert g.state is HandoffState.IDLE, "future-stamped target accepted"
+    assert "approach" not in g.states
 
 
 def test_confirm_refused_when_retained_target_predates_subscriber(make_graph):

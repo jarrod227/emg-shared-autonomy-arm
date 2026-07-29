@@ -159,16 +159,18 @@ class HandoffController(Node):
         self._sim_motion_sec = self.get_parameter("sim_motion_sec").value
         self._motion_timeout_sec = self.get_parameter("motion_timeout_sec").value
         self._ready_timeout_sec = self.get_parameter("ready_timeout_sec").value
-        self._max_delivery_distance = self.get_parameter(
+        self._max_delivery_distance = self._positive_finite_param(
             "max_delivery_distance"
-        ).value
-        self._delivery_center = (
-            self.get_parameter("delivery_center_x").value,
-            self.get_parameter("delivery_center_y").value,
-            self.get_parameter("delivery_center_z").value,
         )
-        self._delivery_frame = self.get_parameter("delivery_frame").value
-        self._target_max_age_sec = self._positive_finite_param("target_max_age_sec")
+        self._delivery_center = (
+            self._finite_param("delivery_center_x"),
+            self._finite_param("delivery_center_y"),
+            self._finite_param("delivery_center_z"),
+        )
+        self._delivery_frame = self._nonempty_string_param("delivery_frame")
+        self._target_max_age_sec = self._positive_finite_param(
+            "target_max_age_sec"
+        )
         self._hand_max_age_sec = self._positive_finite_param("hand_max_age_sec")
         self._simulate_stuck_motion = self.get_parameter(
             "simulate_stuck_motion"
@@ -300,10 +302,6 @@ class HandoffController(Node):
         self._last_hand = msg
         if self._state is HandoffState.HANDOFF_SEARCH:
             usable = self._hand_is_release_ready(msg, log_reasons=False)
-            usable = usable and (
-                self._age_sec(msg.header.stamp)
-                >= -self._view_future_tolerance_sec
-            )
             self._handle_search_observation(msg.header.stamp, usable)
 
     def _on_view_control(self, msg: ViewControlCommand) -> None:
@@ -480,12 +478,10 @@ class HandoffController(Node):
         self._last_requested_view_target = None
 
     def _target_observation_is_usable(self, msg: PoseStamped) -> bool:
-        age = self._age_sec(msg.header.stamp)
-        return (
-            -self._view_future_tolerance_sec
-            <= age
-            <= self._target_max_age_sec
+        _, status = self._observation_age_status(
+            msg.header.stamp, self._target_max_age_sec
         )
+        return status is None
 
     def _handle_search_observation(self, stamp, usable: bool) -> None:
         if not usable or self._search_phase not in (
@@ -653,8 +649,16 @@ class HandoffController(Node):
         if self._last_target is None:
             self.get_logger().warning("CONFIRM refused: no /target_object_pose yet")
             return False
-        age = self._age_sec(self._last_target.header.stamp)
-        if age > self._target_max_age_sec:
+        age, status = self._observation_age_status(
+            self._last_target.header.stamp, self._target_max_age_sec
+        )
+        if status == "future":
+            self.get_logger().warning(
+                f"CONFIRM refused: target stamp is {-age:.2f}s in the future "
+                f"(tolerance {self._view_future_tolerance_sec}s)"
+            )
+            return False
+        if status == "stale":
             self.get_logger().warning(
                 f"CONFIRM refused: target is {age:.2f}s old "
                 f"(max {self._target_max_age_sec}s)"
@@ -663,11 +667,12 @@ class HandoffController(Node):
         return True
 
     def _target_is_available(self) -> bool:
-        return (
-            self._last_target is not None
-            and self._age_sec(self._last_target.header.stamp)
-            <= self._target_max_age_sec
+        if self._last_target is None:
+            return False
+        _, status = self._observation_age_status(
+            self._last_target.header.stamp, self._target_max_age_sec
         )
+        return status is None
 
     def _release_gates_pass(self) -> bool:
         return self._hand_is_release_ready(
@@ -691,8 +696,15 @@ class HandoffController(Node):
             return refuse(
                 "release refused: latest observation is no-hand"
             )
-        age = self._age_sec(hand.header.stamp)
-        if age > self._hand_max_age_sec:
+        age, status = self._observation_age_status(
+            hand.header.stamp, self._hand_max_age_sec
+        )
+        if status == "future":
+            return refuse(
+                f"release refused: hand stamp is {-age:.2f}s in the future "
+                f"(tolerance {self._view_future_tolerance_sec}s)"
+            )
+        if status == "stale":
             return refuse(
                 f"release refused: hand observation is {age:.2f}s old "
                 f"(max {self._hand_max_age_sec}s)"
@@ -703,9 +715,10 @@ class HandoffController(Node):
                 f"release refused: hand frame '{hand.header.frame_id}' != "
                 f"delivery frame '{self._delivery_frame}'"
             )
-        distance = math.dist(
-            (hand.point.x, hand.point.y, hand.point.z), self._delivery_center
-        )
+        point = (hand.point.x, hand.point.y, hand.point.z)
+        if not all(math.isfinite(value) for value in point):
+            return refuse("release refused: hand point contains non-finite values")
+        distance = math.dist(point, self._delivery_center)
         if distance > self._max_delivery_distance:
             return refuse(
                 f"release refused: hand is {distance:.3f}m from delivery "
@@ -715,6 +728,28 @@ class HandoffController(Node):
 
     def _age_sec(self, stamp) -> float:
         return (self.get_clock().now() - Time.from_msg(stamp)).nanoseconds / 1e9
+
+    def _observation_age_status(
+        self, stamp, max_age_sec: float
+    ) -> tuple[float, str | None]:
+        age = self._age_sec(stamp)
+        if age < -self._view_future_tolerance_sec:
+            return age, "future"
+        if age > max_age_sec:
+            return age, "stale"
+        return age, None
+
+    def _finite_param(self, name: str) -> float:
+        value = self.get_parameter(name).value
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite, got {value}")
+        return float(value)
+
+    def _nonempty_string_param(self, name: str) -> str:
+        value = self.get_parameter(name).value
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a nonempty string, got {value!r}")
+        return value
 
     def _positive_finite_param(self, name: str) -> float:
         value = self.get_parameter(name).value
