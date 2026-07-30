@@ -1,0 +1,7 @@
+# Optional Objective 3.2 YOLO runtime, verified on Python 3.12 (CPU only).
+# A venv created with --system-site-packages may reuse ROS/OpenCV/NumPy.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.13.0+cpu
+torchvision==0.28.0+cpu
+ultralytics==8.4.112
+lap==0.5.13
