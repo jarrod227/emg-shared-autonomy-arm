@@ -24,6 +24,10 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
+            (
+                "markerless_candidate_gate = "
+                "target_selector.markerless_candidate_gate_node:main"
+            ),
             "selector_node = target_selector.selector_node:main",
         ],
     },

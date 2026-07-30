@@ -29,6 +29,11 @@ setup(
     entry_points={
         'console_scripts': [
             (
+                'synthetic_candidate_publisher = '
+                'markerless_object_perception.'
+                'synthetic_candidate_publisher:main'
+            ),
+            (
                 'yolo_webcam_demo = '
                 'markerless_object_perception.webcam_segmentation_demo:main'
             ),

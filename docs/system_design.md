@@ -19,9 +19,9 @@ handoff flow plus two search states, simulated providers, freshness/timeout
 checks, `ABORT`, and fail-closed release gating.
 Historical results cover the 23-test Objective 1/2/3.1 baseline and the earlier
 25-test Objective 4.1 controller suite. Seven ROS 2 packages now exist. On
-2026-07-30 `markerless_object_perception` built and passed 44 tests;
-`assistive_interfaces` and `target_selector` built, with 42 selector tests
-passing in an isolated ROS domain. The current stored result summary is 227
+2026-07-30 `markerless_object_perception` built and passed 61 tests;
+`assistive_interfaces` and `target_selector` built, with 48 selector tests
+passing in an isolated ROS domain. The current stored result summary is 250
 tests with zero errors or failures and one optional external-asset skip.
 
 Objective 4.2 has a separate `stereo_hand_observer` package implementing
@@ -37,9 +37,12 @@ bench-stereo validation are still pending.
 Objective 3.2 is active software-first. `markerless_object_perception`
 implements robust mask/aligned-XYZ localization, candidate construction, an
 Ultralytics instance-segmentation/tracking adapter, and a laptop-camera demo.
-`assistive_interfaces` defines the timestamped candidate contract, and
-`target_selector` implements pure multi-track temporal stability. The live ROS
-candidate publisher, real stereo point cloud, trained four-class model,
+Its source-preserving ROS adapter and synthetic `/object_candidates` publisher
+are implemented and runtime-echo verified. `assistive_interfaces` defines the
+timestamped candidate contract, and `target_selector` implements pure
+multi-track temporal stability plus the ROS adapter/subscriber that feeds it.
+Live model/stereo publication, real stereo point clouds, the trained four-class
+model,
 intent-driven target lock, and markerless `/target_object_pose` output remain
 pending.
 
@@ -141,7 +144,8 @@ simulated target/intent/hand inputs --------------------> handoff controller
 OBJECTIVE 3.2 SOFTWARE FOUNDATION / IMPLEMENTED
 image -> YOLO adapter -> class + confidence + mask + temporary track ID
 mask + aligned XYZ -> robust candidates -> ObjectCandidateArray contract
-candidate frames -> pure N-frame stability gate
+synthetic adapter/publisher -> /object_candidates
+/object_candidates -> ROS adapter -> pure N-frame stability gate
 
 PLANNED RUNTIME INTEGRATION
 left/right RGB -> sync/rectify -> disparity/PointCloud2 --------+
@@ -207,9 +211,12 @@ A newer valid command preempts the old search target after a smooth halt;
 
 ### Stereo Sensing Foundation
 
-Two ordinary USB RGB cameras form a passive stereo sensor only after they are
-mounted in one rigid bracket and calibrated. They have no assumed hardware
-trigger. The planned bench interface is:
+The user-reported incoming dual-camera module has two sensors on one board and
+one USB connector, but receipt, output mode, and synchronization remain
+unverified. It becomes a passive stereo sensor only after baseline inspection
+and calibration. One composite paired frame uses one source timestamp and a
+zero or documented skew bound; two video devices retain approximate-time
+pairing. The planned normalized bench interface is:
 
 ```text
 /stereo/left/image_raw       + /stereo/left/camera_info
@@ -238,10 +245,10 @@ old bench extrinsic or the latest TF is invalid.
 | --- | --- | --- |
 | deterministic selected pose | fixed pose publisher | implemented |
 | geometric selected pose | ArUco + current selector | implemented (3.1) |
-| semantic object candidates | instance mask + stereo points | pure builder/contract implemented; ROS/live stereo pending (3.2) |
+| semantic object candidates | instance mask + stereo points | pure builder + synthetic ROS publisher implemented; live model/stereo pending (3.2) |
 | discrete intent | simulated input, then STM32 bridge | simulated source implemented (4.1); STM32 planned (3.5) |
 | bounded search command | simulated input, then STM32 bridge | simulated contract/controller implemented (4.3); STM32 source planned (3.5) |
-| target acquisition and final pose | generalized target selector | N-frame core implemented; ROS intent/lock/pose integration pending |
+| target acquisition and final pose | generalized target selector | N-frame core + ROS candidate subscription implemented; intent/lock/pose pending |
 
 Objective 3.2 is bounded to closed-set instance segmentation plus
 mask-filtered passive-stereo localization:
@@ -268,13 +275,17 @@ this flow without pretending that synthetic aligned XYZ is a camera result:
 - `assistive_interfaces/ObjectCandidate{,Array}` carries source time/frame,
   validity, pair skew, temporary track ID, class/localization confidence, and
   the robust 3D reference point. It does not carry a grasp pose or mask.
+- The ROS adapter preserves integer-nanosecond source time and frame, maps
+  localization confidence to robust 3D inliers divided by mask pixels, and the
+  installed synthetic publisher emits fresh valid or empty observations.
 - `target_selector` has a pure gate for the frozen classes `bottle`, `cup`,
   `cell_phone`, and `medicine_box`. It rejects stale/non-increasing/cross-frame
   histories, long frame gaps, low confidence, and whole-window position span;
   stable outputs are ordered by track ID.
 
-The next boundary is the ROS adapter/publisher for `/object_candidates` using
-synthetic XYZ. Real `PointCloud2` alignment, class-specific grasp templates,
+The `target_selector` ROS adapter/subscription now converts
+`ObjectCandidateArray` into `CandidateFrame` and feeds the pure stability gate. Real `PointCloud2`
+alignment, live model/stereo publication, class-specific grasp templates,
 selected-track lock, last-seen/watchdog handling, intent cycling, TF at the
 source stamp, and final pose publication remain planned.
 
@@ -294,7 +305,7 @@ candidate exists; silence is not treated as a fresh negative observation.
 
 The generalized selector owns candidate identity, minimum confidence, bounded
 position jitter, N-frame stability, selected-track lock, and last-seen time.
-Its pure multi-track stability gate is implemented; the ROS subscriber,
+Its pure multi-track stability gate and ROS subscriber are implemented;
 selected-track lock/last-seen watchdog, intent combination, source-time TF, and
 pose publisher are not. Once integrated, it combines stable candidates with
 `/assistive_intent` and is the sole publisher of `/target_object_pose` for the
@@ -540,9 +551,11 @@ for repeatable learning experiments and LeRobot for real-arm validation. See
 - Preserve camera/source timestamps through approximate pairing, stereo,
   candidate tracking, TF, and target publication. Retention is not freshness,
   and eye-in-hand transforms are resolved at the observation time.
-- Treat two ordinary USB cameras as stereo only after rigid mounting,
-  calibration/rectification, pair-skew checks, and measured working-range
-  error. Do not call them RGB-D or hardware synchronized.
+- Treat the incoming one-board/one-USB module as stereo only after output-mode
+  inspection, calibration/rectification, and measured working-range error. A
+  composite paired frame may share one source timestamp; separate streams
+  retain pair-skew checks. Do not call it RGB-D or hardware synchronized
+  without evidence.
 - Use stop-and-look acquisition for metric localization: halt, settle, reject
   old/excessive-skew pairs, then acquire a fresh stable burst.
 - Keep candidate and observation streams volatile and explicit about empty or
@@ -590,8 +603,8 @@ responsibilities are:
 | bounded active-view search controller | implemented as Objective 4.3 Phase-0 simulated motion; physical view joint deferred to Objective 5 |
 | simulated target/intent/hand providers | implemented (Objective 4.1) |
 | simulated view provider | implemented (Objective 4.3) |
-| markerless object perception | Objective 3.2 active; pure mask/aligned-XYZ localization, YOLO adapter, and mono smoke demo implemented; ROS/live stereo pending |
-| generalized target selector/tracker | Objective 3.2/3.5 integration; multi-track N-frame gate implemented, intent/lock/status/pose wiring pending |
+| markerless object perception | Objective 3.2 active; pure mask/aligned-XYZ localization, YOLO adapter, mono smoke demo, and synthetic ROS candidate publisher implemented; live model/stereo publication pending |
+| generalized target selector/tracker | Objective 3.2/3.5 integration; N-frame gate + ROS candidate subscription implemented, intent/lock/status/pose wiring pending |
 | shared ROS interfaces | `AssistiveIntent`, `HandObservation`, `ViewControlCommand`, `ObjectCandidate`, and `ObjectCandidateArray` implemented; target-status contract remains planned |
 | STM32 EMG firmware | Objective 3.5 (planned STM32CubeIDE C/C++; ADC/DMA, DSP/features, inference, packet producer) |
 | PC EMG tooling | Objective 3.5 (planned Python capture/plot/train/quantize/replay/golden vectors) |

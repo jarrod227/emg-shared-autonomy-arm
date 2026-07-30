@@ -57,6 +57,7 @@ def test_builds_candidate_and_preserves_model_identity():
     assert candidate.class_confidence == pytest.approx(0.91)
     assert candidate.track_id == 7
     assert candidate.point == pytest.approx((0.25, -0.1, 0.7))
+    assert candidate.localization_confidence == pytest.approx(1.0)
     assert candidate.valid_point_count == 16
     assert candidate.inlier_count == 16
     assert candidate.localization_spread_m == pytest.approx(0.0)
@@ -110,6 +111,23 @@ def test_invalid_stereo_points_become_explicit_rejection():
 
     assert not result.candidates
     assert result.rejections[0].reason == 'insufficient_valid_points'
+
+
+def test_localization_confidence_counts_invalid_mask_depth_as_missing_support():
+    xyz = np.full((4, 4, 3), [0.1, 0.0, 0.6], dtype=np.float64)
+    xyz[:2, :, :] = np.nan
+    mask = np.ones((4, 4), dtype=bool)
+
+    result = make_builder().build(
+        [detection('cup', 0.9, 4, mask)],
+        xyz,
+    )
+
+    assert len(result.candidates) == 1
+    candidate = result.candidates[0]
+    assert candidate.valid_point_count == 8
+    assert candidate.inlier_count == 8
+    assert candidate.localization_confidence == pytest.approx(0.5)
 
 
 def test_fresh_empty_detection_set_produces_empty_result():

@@ -56,6 +56,7 @@ class ObjectCandidate:
     class_confidence: float
     track_id: int
     point: tuple[float, float, float]
+    localization_confidence: float
     localization_spread_m: float
     valid_point_count: int
     inlier_count: int
@@ -164,6 +165,10 @@ class CandidateBuilder:
                     class_confidence=detection.confidence,
                     track_id=detection.track_id,
                     point=localization.point,
+                    localization_confidence=(
+                        localization.inlier_count
+                        / localization.masked_point_count
+                    ),
                     localization_spread_m=localization.spread_m,
                     valid_point_count=localization.valid_point_count,
                     inlier_count=localization.inlier_count,
