@@ -1,6 +1,6 @@
 # System Design
 
-## Current Verified Status (2026-07-28)
+## Current Verified Status (2026-07-30)
 
 This section supersedes older scaffold descriptions below. Two interchangeable
 providers feed the retained `PoseStamped` on `/target_object_pose`: the
@@ -18,10 +18,11 @@ Objective 4.1 is also implemented as a separate Phase-0 simulated controller:
 handoff flow plus two search states, simulated providers, freshness/timeout
 checks, `ABORT`, and fail-closed release gating.
 Historical results cover the 23-test Objective 1/2/3.1 baseline and the earlier
-25-test Objective 4.1 controller suite. On 2026-07-28 all six packages built;
-the current result summary is 134 tests with zero errors or failures and one
-optional external-asset smoke test skipped after the global-topic packages
-were rerun sequentially.
+25-test Objective 4.1 controller suite. Seven ROS 2 packages now exist. On
+2026-07-30 `markerless_object_perception` built and passed 44 tests;
+`assistive_interfaces` and `target_selector` built, with 42 selector tests
+passing in an isolated ROS domain. The current stored result summary is 227
+tests with zero errors or failures and one optional external-asset skip.
 
 Objective 4.2 has a separate `stereo_hand_observer` package implementing
 synthetic and live rectified-image paths, `CameraInfo.P` stereo geometry,
@@ -33,6 +34,15 @@ external-asset smoke test skipped; that smoke test separately passed with an
 official model and official single-hand image. Live dual-camera runtime and
 bench-stereo validation are still pending.
 
+Objective 3.2 is active software-first. `markerless_object_perception`
+implements robust mask/aligned-XYZ localization, candidate construction, an
+Ultralytics instance-segmentation/tracking adapter, and a laptop-camera demo.
+`assistive_interfaces` defines the timestamped candidate contract, and
+`target_selector` implements pure multi-track temporal stability. The live ROS
+candidate publisher, real stereo point cloud, trained four-class model,
+intent-driven target lock, and markerless `/target_object_pose` output remain
+pending.
+
 ## Design Status
 
 This document distinguishes the current implementation from the longer-term
@@ -41,8 +51,9 @@ architecture. The execution layer (Objectives 1–2), ArUco perception baseline
 exist today. Objective 4.2 is active and adds stereo-triangulated hand
 keypoints; its live-camera/bench validation remains. Objective 4.3
 Phase-0 bounded search with simulated view commands is implemented. Objective
-3.2 later adds instance-mask/stereo object perception, and Objective 3.5 adds
-STM32 discrete intent plus proportional view control.
+3.2 now has a tested software foundation but still needs ROS/live-stereo and
+selector integration. Objective 3.5 later adds STM32 discrete intent plus
+proportional view control.
 
 ## Current Workspace Layout
 
@@ -52,10 +63,11 @@ assistive_robot_ws/
 ├── src/
 │   ├── object1_demo/          reaching coordinator + fixed-pose provider
 │   ├── marker_pose_provider/  ArUco detection + camera-frame PnP (3.1)
-│   ├── target_selector/       marker selection, grasp offset, TF (3.1)
-│   ├── assistive_interfaces/  intent, hand, and view-command messages (4.1/4.3)
+│   ├── target_selector/       ArUco selection/TF + markerless stability core
+│   ├── assistive_interfaces/  intent, hand, view, and candidate messages
 │   ├── assistive_handoff/     simulated handoff + bounded view search (4.1/4.3)
-│   └── stereo_hand_observer/  stereo geometry/gates + live adapter (4.2)
+│   ├── stereo_hand_observer/  stereo geometry/gates + live adapter (4.2)
+│   └── markerless_object_perception/  mask/XYZ + YOLO adapter (3.2)
 ├── AGENTS.md
 └── TODO.md
 ```
@@ -126,7 +138,12 @@ camera -> ArUco/PnP -> current target_selector --------> /target_object_pose
 simulated target/intent/hand inputs --------------------> handoff controller
                                                           (Phase-0 state/actions)
 
-PLANNED
+OBJECTIVE 3.2 SOFTWARE FOUNDATION / IMPLEMENTED
+image -> YOLO adapter -> class + confidence + mask + temporary track ID
+mask + aligned XYZ -> robust candidates -> ObjectCandidateArray contract
+candidate frames -> pure N-frame stability gate
+
+PLANNED RUNTIME INTEGRATION
 left/right RGB -> sync/rectify -> disparity/PointCloud2 --------+
 left rectified RGB -> instance mask ----------------------------+-> /object_candidates
 STM32 EMG -> USB/UART bridge -> /assistive_intent --------------+-> target selector
@@ -221,10 +238,10 @@ old bench extrinsic or the latest TF is invalid.
 | --- | --- | --- |
 | deterministic selected pose | fixed pose publisher | implemented |
 | geometric selected pose | ArUco + current selector | implemented (3.1) |
-| semantic object candidates | instance mask + stereo point cloud | planned (3.2) |
+| semantic object candidates | instance mask + stereo points | pure builder/contract implemented; ROS/live stereo pending (3.2) |
 | discrete intent | simulated input, then STM32 bridge | simulated source implemented (4.1); STM32 planned (3.5) |
 | bounded search command | simulated input, then STM32 bridge | simulated contract/controller implemented (4.3); STM32 source planned (3.5) |
-| target acquisition and final pose | generalized target selector | planned integration |
+| target acquisition and final pose | generalized target selector | N-frame core implemented; ROS intent/lock/pose integration pending |
 
 Objective 3.2 is bounded to closed-set instance segmentation plus
 mask-filtered passive-stereo localization:
@@ -240,6 +257,26 @@ instance mask ∩ valid stereo points
 -> fixed/class-specific grasp offset, approach height, and orientation
 -> timestamped /object_candidates
 ```
+
+The 2026-07-30 software checkpoint implements the source-independent middle of
+this flow without pretending that synthetic aligned XYZ is a camera result:
+
+- `markerless_object_perception` converts model masks/tracks plus an aligned
+  `HxWx3` XYZ array into robust candidate points and explicit rejection
+  diagnostics. Its Ultralytics adapter and laptop-camera demo verify real 2D
+  inference/tracking only.
+- `assistive_interfaces/ObjectCandidate{,Array}` carries source time/frame,
+  validity, pair skew, temporary track ID, class/localization confidence, and
+  the robust 3D reference point. It does not carry a grasp pose or mask.
+- `target_selector` has a pure gate for the frozen classes `bottle`, `cup`,
+  `cell_phone`, and `medicine_box`. It rejects stale/non-increasing/cross-frame
+  histories, long frame gaps, low confidence, and whole-window position span;
+  stable outputs are ordered by track ID.
+
+The next boundary is the ROS adapter/publisher for `/object_candidates` using
+synthetic XYZ. Real `PointCloud2` alignment, class-specific grasp templates,
+selected-track lock, last-seen/watchdog handling, intent cycling, TF at the
+source stamp, and final pose publication remain planned.
 
 The instance model runs on the host PC or edge-Linux computer. It supplies a
 2D class and mask, not depth. Stereo correspondence supplies metric points only
@@ -257,8 +294,11 @@ candidate exists; silence is not treated as a fresh negative observation.
 
 The generalized selector owns candidate identity, minimum confidence, bounded
 position jitter, N-frame stability, selected-track lock, and last-seen time.
-It combines stable candidates with `/assistive_intent` and is the sole
-publisher of `/target_object_pose` for the integrated markerless path.
+Its pure multi-track stability gate is implemented; the ROS subscriber,
+selected-track lock/last-seen watchdog, intent combination, source-time TF, and
+pose publisher are not. Once integrated, it combines stable candidates with
+`/assistive_intent` and is the sole publisher of `/target_object_pose` for the
+markerless path.
 Candidate streams are volatile. `/target_object_pose` may remain reliable and
 retained only because every consumer checks the preserved source timestamp
 against a configured maximum age. Retention is not freshness.
@@ -357,6 +397,10 @@ robot command abstraction
 -> backend A: MoveIt 2 Panda simulation (Objective 1)
 -> backend B: LeRobot SO-ARM101 real arm, planned/scripted (Objective 5)
 -> backend C: learned ACT policy on SO-ARM101 (Objective 6, Phase 3)
+
+Phase 3 training/evaluation environment
+-> MuJoCo: repeated seeded rollouts for backend C
+-> LeRobot SO-ARM101: real-arm subset validation
 ```
 
 Backend A is the implemented Panda MoveIt path. It uses the verified
@@ -403,6 +447,13 @@ and flags failure-adjacent states for correction-data collection. The
 intervention channel is deliberately low-bandwidth (the same shared-autonomy
 thesis as the intent layer); its cost is the object of study. See
 `docs/proposal.md` Phase 3 and `TODO.md` P3.2.
+
+MuJoCo is the selected Phase 3 simulation and learning-evaluation backend for
+backend C. A thin adapter preserves the policy observation/action contract and
+reproducible scenario seeds without changing the source-independent ROS 2
+interfaces. MuJoCo must first reproduce joint limits, action conventions,
+timing, and deterministic trajectory playback. It does not replace LeRobot
+real-arm execution, MoveIt integration, calibration, or physical validation.
 
 Calibrated geometry and `PREGRASP -> REOBSERVE -> REFINE -> GRASP` remain the
 measured Objective 5 baseline. Backend C may later study bounded residuals or
@@ -470,8 +521,8 @@ required `CONFIRM`. Missing or invalid hand input never permits release.
 Objective 4 release is simulated; Objective 5 gripper release occurs only at a
 fixed delivery zone under the real-hardware safety policy.
 
-Isaac Lab / Isaac Sim RL is cut, not deferred — LeRobot imitation learning
-(Phase 3, conditional) covers the same ground on a real arm. See
+Isaac Lab / Isaac Sim RL is cut, not deferred. Conditional Phase 3 uses MuJoCo
+for repeatable learning experiments and LeRobot for real-arm validation. See
 `docs/proposal.md` §5.
 
 ## Interface Principles
@@ -539,16 +590,17 @@ responsibilities are:
 | bounded active-view search controller | implemented as Objective 4.3 Phase-0 simulated motion; physical view joint deferred to Objective 5 |
 | simulated target/intent/hand providers | implemented (Objective 4.1) |
 | simulated view provider | implemented (Objective 4.3) |
-| markerless object perception | Objective 3.2 (planned host-side instance mask + stereo-point-cloud package) |
-| generalized target selector/tracker | Objective 3.2/3.5 integration (planned; stable candidates + intent -> selected pose/status) |
-| shared ROS interfaces | `AssistiveIntent`, `HandObservation`, and `ViewControlCommand` implemented in `assistive_interfaces`; candidate and target-status contracts remain planned |
+| markerless object perception | Objective 3.2 active; pure mask/aligned-XYZ localization, YOLO adapter, and mono smoke demo implemented; ROS/live stereo pending |
+| generalized target selector/tracker | Objective 3.2/3.5 integration; multi-track N-frame gate implemented, intent/lock/status/pose wiring pending |
+| shared ROS interfaces | `AssistiveIntent`, `HandObservation`, `ViewControlCommand`, `ObjectCandidate`, and `ObjectCandidateArray` implemented; target-status contract remains planned |
 | STM32 EMG firmware | Objective 3.5 (planned STM32CubeIDE C/C++; ADC/DMA, DSP/features, inference, packet producer) |
 | PC EMG tooling | Objective 3.5 (planned Python capture/plot/train/quantize/replay/golden vectors) |
 | EMG USB/UART ROS bridge | Objective 3.5 MVP Python/`rclpy`; optional measured `rclcpp` receiver/parser/ring-buffer rewrite in Phase 3 |
 | SO-ARM101 LeRobot backend (backend B) | Objective 5 (Phase 2; real-arm commands, cancellation, gripper/held-object status) |
 | eye-in-hand calibration and deterministic visual refinement | Objective 5 (stereo remount/recalibration plus `PREGRASP -> REOBSERVE -> REFINE -> GRASP`) |
 | learned ACT policy + EMG intervention layer (backend C) | Objective 6 (Phase 3, PhD research) |
-| one measured rclcpp rewrite (reaching coordinator default; EMG bridge alternative), LeRobot imitation learning | Phase 3 (conditional) |
+| MuJoCo environment + thin policy adapter | Objective 6 (Phase 3; repeated seeded simulation and learning evaluation, not real-arm validation) |
+| one measured rclcpp rewrite (reaching coordinator default; EMG bridge alternative), MuJoCo evaluation, LeRobot imitation learning | Phase 3 (conditional) |
 | evaluation tooling | incremental scripts or package |
 
 Avoid creating these packages until their milestone begins and their interfaces
