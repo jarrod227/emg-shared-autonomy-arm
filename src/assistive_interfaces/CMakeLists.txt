@@ -9,6 +9,8 @@ find_package(geometry_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/AssistiveIntent.msg"
   "msg/HandObservation.msg"
+  "msg/ObjectCandidate.msg"
+  "msg/ObjectCandidateArray.msg"
   "msg/ViewControlCommand.msg"
   DEPENDENCIES std_msgs geometry_msgs
 )
