@@ -1,0 +1,5 @@
+{"sample_id":"session01_bottle_0001","image":"session01/bottle_0001.jpg","session_id":"session01","instances":{"bottle_blue_01":"bottle"}}
+{"sample_id":"session02_cup_0001","image":"session02/cup_0001.jpg","session_id":"session02","instances":{"cup_white_01":"cup"}}
+{"sample_id":"session03_phone_0001","image":"session03/phone_0001.jpg","session_id":"session03","instances":{"phone_black_01":"cell_phone"}}
+{"sample_id":"session04_medicine_0001","image":"session04/medicine_0001.jpg","session_id":"session04","instances":{"medicine_box_01":"medicine_box"}}
+{"sample_id":"session05_negative_0001","image":"session05/negative_0001.jpg","session_id":"session05","instances":{}}

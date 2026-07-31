@@ -13,7 +13,18 @@ setup(
         ),
         (
             'share/' + package_name,
-            ['package.xml', 'requirements-yolo.txt'],
+            [
+                'package.xml',
+                'requirements-yolo.txt',
+                'requirements-yolo-gpu.txt',
+            ],
+        ),
+        (
+            'share/' + package_name + '/config',
+            [
+                'config/objective32_dataset.toml',
+                'config/source_manifest.example.jsonl',
+            ],
         ),
     ],
     install_requires=['setuptools'],
@@ -36,6 +47,14 @@ setup(
             (
                 'yolo_webcam_demo = '
                 'markerless_object_perception.webcam_segmentation_demo:main'
+            ),
+            (
+                'prepare_yolo_dataset = '
+                'markerless_object_perception.prepare_yolo_dataset:main'
+            ),
+            (
+                'train_yolo_segmenter = '
+                'markerless_object_perception.yolo_training:main'
             ),
         ],
     },

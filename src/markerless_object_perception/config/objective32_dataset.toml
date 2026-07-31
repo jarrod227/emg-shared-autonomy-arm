@@ -1,0 +1,10 @@
+schema_version = 1
+classes = ["bottle", "cup", "cell_phone", "medicine_box"]
+manifest = "source_manifest.jsonl"
+minimum_polygon_area = 0.000001
+
+[split]
+seed = 3201
+train = 0.70
+val = 0.15
+test = 0.15

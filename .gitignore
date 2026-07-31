@@ -25,3 +25,11 @@ checkerboard_*.png
 # Local vendor hardware bundles (manuals, videos, installers, and archives)
 docs/SO-ARM101开源6轴机械臂/
 docs/单目相机/
+
+# Local ML datasets and generated training artifacts
+datasets/
+runs/
+weights/
+*.pt
+*.onnx
+*.engine

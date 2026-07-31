@@ -1,8 +1,8 @@
 # System Design
 
-## Current Verified Status (2026-07-30)
+## Current Verified Status (2026-07-31)
 
-This section supersedes older scaffold descriptions below. Two interchangeable
+This section supersedes older scaffold descriptions below. Two baseline
 providers feed the retained `PoseStamped` on `/target_object_pose`: the
 deterministic `fixed_pose_publisher`, and the marker pipeline
 (`marker_pose_provider` detection/PnP -> `target_selector` selection, grasp
@@ -10,7 +10,9 @@ offset, tf2 transform to `world`). `MoveToObjectNode` consumes the interface
 unchanged either way, sends a Cartesian goal for `panda_link8` to MoveIt, and
 returns to the joint-space ready home. Both provider paths are
 runtime-verified end to end; camera-frame accuracy is quantified in
-`docs/objective3_evaluation.md`.
+`docs/objective3_evaluation.md`. Objective 3.2 adds a separately selectable
+markerless selector path whose synthetic candidate-to-pose behavior is
+test-verified; its live vision input is not.
 
 Objective 4.1 is also implemented as a separate Phase-0 simulated controller:
 `assistive_interfaces` defines `AssistiveIntent`, `HandObservation`, and
@@ -18,11 +20,12 @@ Objective 4.1 is also implemented as a separate Phase-0 simulated controller:
 handoff flow plus two search states, simulated providers, freshness/timeout
 checks, `ABORT`, and fail-closed release gating.
 Historical results cover the 23-test Objective 1/2/3.1 baseline and the earlier
-25-test Objective 4.1 controller suite. Seven ROS 2 packages now exist. On
-2026-07-30 `markerless_object_perception` built and passed 61 tests;
-`assistive_interfaces` and `target_selector` built, with 48 selector tests
-passing in an isolated ROS domain. The current stored result summary is 250
-tests with zero errors or failures and one optional external-asset skip.
+25-test Objective 4.1 controller suite. Seven ROS 2 packages now exist. On 2026-07-30 `markerless_object_perception` built and passed 61 focused
+tests. After the offline data/training tools were added, it built and passed 85
+on 2026-07-31. On that date `target_selector` built and passed 77 tests in an
+isolated ROS domain. The latest stored full-workspace result remains the
+2026-07-30 summary of 250 tests with zero errors or failures and one optional
+external-asset skip.
 
 Objective 4.2 has a separate `stereo_hand_observer` package implementing
 synthetic and live rectified-image paths, `CameraInfo.P` stereo geometry,
@@ -40,11 +43,18 @@ Ultralytics instance-segmentation/tracking adapter, and a laptop-camera demo.
 Its source-preserving ROS adapter and synthetic `/object_candidates` publisher
 are implemented and runtime-echo verified. `assistive_interfaces` defines the
 timestamped candidate contract, and `target_selector` implements pure
-multi-track temporal stability plus the ROS adapter/subscriber that feeds it.
-Live model/stereo publication, real stereo point clouds, the trained four-class
-model,
-intent-driven target lock, and markerless `/target_object_pose` output remain
-pending.
+multi-track temporal stability, selected-track lock, last-seen expiry, and the
+ROS candidate/intent subscriptions that feed them. It also resolves the selected point through TF at
+the exact candidate stamp, builds a planning-frame `PoseStamped` from a
+config-driven default or class-specific grasp template, and publishes it only
+for a fresh, confident `CONFIRM` with a wrap-safe newer sequence. The publisher
+uses reliable, transient-local depth-1 QoS. Separately, the offline path now
+validates labeled source data and leakage metadata, creates and verifies a
+deterministic portable bundle, plans training without loading a model, and
+requires explicit CUDA execution plus complete four-class held-out mask
+metrics. Real source data, the actual frozen bundle, GPU training, live
+model/stereo publication, real stereo point clouds, and measured class-specific
+offsets remain pending.
 
 ## Design Status
 
@@ -54,9 +64,10 @@ architecture. The execution layer (Objectives 1–2), ArUco perception baseline
 exist today. Objective 4.2 is active and adds stereo-triangulated hand
 keypoints; its live-camera/bench validation remains. Objective 4.3
 Phase-0 bounded search with simulated view commands is implemented. Objective
-3.2 now has a tested software foundation but still needs ROS/live-stereo and
-selector integration. Objective 3.5 later adds STM32 discrete intent plus
-proportional view control.
+3.2 now has a tested synthetic ROS candidate-to-pose path and tested offline
+data/training tooling, but still needs a real frozen dataset, GPU-trained
+weights, live model/stereo input, and measured real-world performance.
+Objective 3.5 later adds STM32 discrete intent plus proportional view control.
 
 ## Current Workspace Layout
 
@@ -114,9 +125,12 @@ Objective 4.1 `assistive_handoff` package implements the Phase-0 handoff state
 machine without replacing that verified one-shot node.
 
 DDS `TRANSIENT_LOCAL` retention and the application one-shot latch are not
-freshness. The selector/tracker will own N-frame stable acquisition and
-last-seen tracking; the Objective 4.1 controller already owns the Phase-0
-policy response to old targets and stale hand observations.
+freshness. The markerless selector now owns N-frame stable acquisition,
+last-seen tracking, and confirmation-gated publication; the Objective 4.1
+controller owns the Phase-0 policy response to old targets and stale hand
+observations. The legacy `MoveToObjectNode` does not check target age or
+consume `ABORT`, so it remains an Objective 1/3.1 regression demo rather than
+the safe markerless executor.
 
 ## Objective 1 Architecture
 
@@ -248,7 +262,19 @@ old bench extrinsic or the latest TF is invalid.
 | semantic object candidates | instance mask + stereo points | pure builder + synthetic ROS publisher implemented; live model/stereo pending (3.2) |
 | discrete intent | simulated input, then STM32 bridge | simulated source implemented (4.1); STM32 planned (3.5) |
 | bounded search command | simulated input, then STM32 bridge | simulated contract/controller implemented (4.3); STM32 source planned (3.5) |
-| target acquisition and final pose | generalized target selector | N-frame core + ROS candidate subscription implemented; intent/lock/pose pending |
+| target acquisition and final pose | generalized target selector | N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose + confirmation-gated retained publisher implemented; status contract pending |
+
+Objective 3.2 has a separate offline path; it does not add traffic or state to
+the runtime ROS graph:
+
+```text
+labeled images + YOLO polygons + session/physical-object metadata
+-> deterministic leakage-group split (seed 3201)
+-> portable train/val/test bundle + manifest/checksums
+-> zero-side-effect training plan
+-> explicit CUDA train/val + independent held-out test
+-> frozen weights + aggregate/per-class mask metrics
+```
 
 Objective 3.2 is bounded to closed-set instance segmentation plus
 mask-filtered passive-stereo localization:
@@ -261,8 +287,12 @@ left rectified image
 instance mask ∩ valid stereo points
 -> reject invalid disparity, outliers, and tabletop-plane points
 -> robust metric object position
--> fixed/class-specific grasp offset, approach height, and orientation
 -> timestamped /object_candidates
+-> N-frame stability + intent-driven selected-track lock
+-> source-time TF into the planning frame
+-> fixed/class-specific grasp offset, approach height, and orientation
+fresh, confident, newer-sequence CONFIRM
+-> retained /target_object_pose (reliable + transient local, depth 1)
 ```
 
 The 2026-07-30 software checkpoint implements the source-independent middle of
@@ -284,10 +314,18 @@ this flow without pretending that synthetic aligned XYZ is a camera result:
   stable outputs are ordered by track ID.
 
 The `target_selector` ROS adapter/subscription now converts
-`ObjectCandidateArray` into `CandidateFrame` and feeds the pure stability gate. Real `PointCloud2`
-alignment, live model/stereo publication, class-specific grasp templates,
-selected-track lock, last-seen/watchdog handling, intent cycling, TF at the
-source stamp, and final pose publication remain planned.
+`ObjectCandidateArray` into `CandidateFrame` and feeds the pure stability gate.
+Its pure lock manager and ROS intent subscription now keep one stable track,
+cycle current candidates, confirm only a visible fresh lock, expire lost
+tracks, and clear on `ABORT`. Its ROS node now transforms the selected point at
+the exact source stamp, builds a planning-frame pose, and publishes only on a
+fresh, confident `CONFIRM` with a wrap-safe newer sequence. Candidate refresh,
+`NEXT_TARGET`, watchdog processing, and TF recovery do not publish by
+themselves. `ABORT` resets the stability gate and lock while preserving the
+sequence watermark. The installed template config supplies a fixed normalized
+orientation and zero position offset until geometry is measured; the loader
+already supports per-class overrides. Real `PointCloud2` alignment, live
+model/stereo publication, and measured class-specific offsets remain planned.
 
 The instance model runs on the host PC or edge-Linux computer. It supplies a
 2D class and mask, not depth. Stereo correspondence supplies metric points only
@@ -305,14 +343,15 @@ candidate exists; silence is not treated as a fresh negative observation.
 
 The generalized selector owns candidate identity, minimum confidence, bounded
 position jitter, N-frame stability, selected-track lock, and last-seen time.
-Its pure multi-track stability gate and ROS subscriber are implemented;
-selected-track lock/last-seen watchdog, intent combination, source-time TF, and
-pose publisher are not. Once integrated, it combines stable candidates with
-`/assistive_intent` and is the sole publisher of `/target_object_pose` for the
-markerless path.
-Candidate streams are volatile. `/target_object_pose` may remain reliable and
-retained only because every consumer checks the preserved source timestamp
-against a configured maximum age. Retention is not freshness.
+Its pure multi-track stability gate, lock/watchdog, and ROS candidate/intent
+subscriptions are implemented. Exact-source-time TF, grasp-pose construction,
+and the retained pose publisher are also implemented. The selector remains the
+sole publisher of `/target_object_pose` for the markerless path.
+Candidate and intent streams are volatile. `/target_object_pose` uses
+reliable, transient-local depth-1 QoS, so `ABORT` cannot erase an already
+retained DDS sample. Every safety-aware consumer must check the preserved
+source timestamp against a configured maximum age and consume the intent/state
+contract. Retention is not freshness.
 
 The current `PoseArray` marker interface cannot prove the same marker ID across
 frames because IDs are discarded. Objective 3.1 therefore keeps its verified
@@ -603,8 +642,8 @@ responsibilities are:
 | bounded active-view search controller | implemented as Objective 4.3 Phase-0 simulated motion; physical view joint deferred to Objective 5 |
 | simulated target/intent/hand providers | implemented (Objective 4.1) |
 | simulated view provider | implemented (Objective 4.3) |
-| markerless object perception | Objective 3.2 active; pure mask/aligned-XYZ localization, YOLO adapter, mono smoke demo, and synthetic ROS candidate publisher implemented; live model/stereo publication pending |
-| generalized target selector/tracker | Objective 3.2/3.5 integration; N-frame gate + ROS candidate subscription implemented, intent/lock/status/pose wiring pending |
+| markerless object perception | Objective 3.2 active; pure mask/aligned-XYZ localization, YOLO adapter, mono smoke, synthetic ROS publisher, and offline data/freeze/GPU-entry tooling implemented; real bundle/training and live model/stereo publication pending |
+| generalized target selector/tracker | Objective 3.2/3.5 integration; N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose + confirmation-gated retained publisher implemented; status contract pending |
 | shared ROS interfaces | `AssistiveIntent`, `HandObservation`, `ViewControlCommand`, `ObjectCandidate`, and `ObjectCandidateArray` implemented; target-status contract remains planned |
 | STM32 EMG firmware | Objective 3.5 (planned STM32CubeIDE C/C++; ADC/DMA, DSP/features, inference, packet producer) |
 | PC EMG tooling | Objective 3.5 (planned Python capture/plot/train/quantize/replay/golden vectors) |

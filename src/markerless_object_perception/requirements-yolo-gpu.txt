@@ -1,0 +1,5 @@
+# First install the CUDA-enabled PyTorch build matching the GPU driver:
+# https://pytorch.org/get-started/locally/
+# Do not install this file into the existing CPU-only project environment.
+ultralytics==8.4.112
+lap==0.5.13
