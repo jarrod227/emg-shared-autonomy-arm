@@ -1,0 +1,19 @@
+# Markerless candidates provide a 3D reference point, not object orientation.
+# Apply these templates only AFTER transforming that point into the planning
+# frame. Offsets are metres in planning-frame axes; orientation is an xyzw
+# quaternion in the planning frame.
+#
+# This default reuses the Panda fake-system orientation already verified by
+# fixed_pose_publisher. The zero offset is deliberately non-speculative: add
+# measured per-class approach heights before any real-arm grasp validation.
+
+default:
+  position_offset_m: [0.0, 0.0, 0.0]
+  orientation_xyzw: [0.653269, -0.270440, 0.653402, -0.270496]
+
+# Example future form:
+# classes:
+#   bottle:
+#     position_offset_m: [0.0, 0.0, 0.10]
+#     orientation_xyzw: [0.653269, -0.270440, 0.653402, -0.270496]
+classes: {}

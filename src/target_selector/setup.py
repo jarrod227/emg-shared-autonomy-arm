@@ -12,7 +12,11 @@ setup(
         ("share/" + package_name + "/launch", ["launch/extrinsics.launch.py"]),
         (
             "share/" + package_name + "/config",
-            ["config/extrinsics.yaml", "config/grasp_offsets.yaml"],
+            [
+                "config/extrinsics.yaml",
+                "config/grasp_offsets.yaml",
+                "config/markerless_grasp_templates.yaml",
+            ],
         ),
     ],
     install_requires=["setuptools"],
