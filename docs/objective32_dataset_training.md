@@ -1,5 +1,12 @@
 # Objective 3.2 Dataset and GPU Training Guide
 
+> **Scope status (2026-08-09): optional legacy capability.** Objective 3.2 now
+> uses official COCO-pretrained instance-segmentation weights for `bottle`,
+> `cup`, and `cell_phone`. `medicine_box`, custom dataset collection, frozen-
+> bundle generation, and CUDA training are no longer MVP requirements. The
+> guide below documents the already implemented and tested four-class tooling;
+> use it only if measured real-camera performance later justifies fine-tuning.
+
 ## Current boundary (2026-07-31)
 
 The reproducible data-preparation and training entry points are implemented
@@ -14,12 +21,13 @@ torch=2.13.0+cpu
 cuda_available=False
 ```
 
-The next work belongs to the user and Codex together: collect and annotate
-real images, assign capture-session and physical-object identities, review the
-manifest, and generate the frozen bundle. Only then should the bundle and a
-local initial weight file be moved to a CUDA machine.
+At that checkpoint, the planned next work was to collect and annotate real
+images, assign capture-session and physical-object identities, review the
+manifest, generate the frozen bundle, and then move it to a CUDA machine. The
+2026-08-09 scope update supersedes that requirement; the workflow below is now
+optional and should be reopened only after a measured pretrained-model failure.
 
-## Frozen classes
+## Legacy implemented four-class contract
 
 Class names and IDs must not be reordered:
 

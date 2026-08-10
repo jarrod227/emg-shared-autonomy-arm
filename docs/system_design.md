@@ -1,5 +1,14 @@
 # System Design
 
+## Accepted Scope Update (2026-08-09)
+
+The Objective 3.2 runtime baseline is now an official COCO-pretrained
+instance-segmentation model restricted to `bottle`, `cup`, and `cell_phone`.
+Custom dataset collection and CUDA training are not runtime or completion
+dependencies. The existing four-class offline tooling is preserved as an
+optional, historically tested subsystem; its class contract has not yet been
+migrated.
+
 ## Current Verified Status (2026-07-31)
 
 This section supersedes older scaffold descriptions below. Two baseline
@@ -48,13 +57,14 @@ ROS candidate/intent subscriptions that feed them. It also resolves the selected
 the exact candidate stamp, builds a planning-frame `PoseStamped` from a
 config-driven default or class-specific grasp template, and publishes it only
 for a fresh, confident `CONFIRM` with a wrap-safe newer sequence. The publisher
-uses reliable, transient-local depth-1 QoS. Separately, the offline path now
-validates labeled source data and leakage metadata, creates and verifies a
-deterministic portable bundle, plans training without loading a model, and
-requires explicit CUDA execution plus complete four-class held-out mask
-metrics. Real source data, the actual frozen bundle, GPU training, live
-model/stereo publication, real stereo point clouds, and measured class-specific
-offsets remain pending.
+uses reliable, transient-local depth-1 QoS. At that checkpoint, the separately
+implemented offline path validated labeled source data and leakage metadata,
+created and verified a deterministic portable bundle, planned training without
+loading a model, and required explicit CUDA execution plus complete four-class
+held-out mask metrics. No real bundle or GPU-trained weights were produced;
+they are now optional under the 2026-08-09 scope update. Live model/stereo
+publication, real stereo point clouds, and measured class-specific offsets
+remain pending.
 
 ## Design Status
 
@@ -64,9 +74,10 @@ architecture. The execution layer (Objectives 1–2), ArUco perception baseline
 exist today. Objective 4.2 is active and adds stereo-triangulated hand
 keypoints; its live-camera/bench validation remains. Objective 4.3
 Phase-0 bounded search with simulated view commands is implemented. Objective
-3.2 now has a tested synthetic ROS candidate-to-pose path and tested offline
-data/training tooling, but still needs a real frozen dataset, GPU-trained
-weights, live model/stereo input, and measured real-world performance.
+3.2 now has a tested synthetic ROS candidate-to-pose path and tested optional
+offline data/training tooling, but still needs three-class runtime contract
+cleanup, real-camera pretrained-model validation, live model/stereo input, and
+measured real-world performance.
 Objective 3.5 later adds STM32 discrete intent plus proportional view control.
 
 ## Current Workspace Layout
@@ -264,8 +275,9 @@ old bench extrinsic or the latest TF is invalid.
 | bounded search command | simulated input, then STM32 bridge | simulated contract/controller implemented (4.3); STM32 source planned (3.5) |
 | target acquisition and final pose | generalized target selector | N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose + confirmation-gated retained publisher implemented; status contract pending |
 
-Objective 3.2 has a separate offline path; it does not add traffic or state to
-the runtime ROS graph:
+Objective 3.2 has a separately implemented legacy/optional offline path; it
+does not add traffic or state to the runtime ROS graph and is no longer an MVP
+dependency:
 
 ```text
 labeled images + YOLO polygons + session/physical-object metadata
@@ -276,8 +288,9 @@ labeled images + YOLO polygons + session/physical-object metadata
 -> frozen weights + aggregate/per-class mask metrics
 ```
 
-Objective 3.2 is bounded to closed-set instance segmentation plus
-mask-filtered passive-stereo localization:
+The active runtime uses official COCO-pretrained weights restricted to
+`bottle`, `cup`, and `cell_phone`. Objective 3.2 is bounded to closed-set
+instance segmentation plus mask-filtered passive-stereo localization:
 
 ```text
 approximately synchronized rectified left/right images
@@ -308,8 +321,10 @@ this flow without pretending that synthetic aligned XYZ is a camera result:
 - The ROS adapter preserves integer-nanosecond source time and frame, maps
   localization confidence to robust 3D inliers divided by mask pixels, and the
   installed synthetic publisher emits fresh valid or empty observations.
-- `target_selector` has a pure gate for the frozen classes `bottle`, `cup`,
-  `cell_phone`, and `medicine_box`. It rejects stale/non-increasing/cross-frame
+- `target_selector` currently has a pure gate for the legacy frozen classes
+  `bottle`, `cup`, `cell_phone`, and `medicine_box`; migrating that filter and
+  its tests to the accepted three-class runtime contract is pending. It rejects
+  stale/non-increasing/cross-frame
   histories, long frame gaps, low confidence, and whole-window position span;
   stable outputs are ordered by track ID.
 
@@ -642,7 +657,7 @@ responsibilities are:
 | bounded active-view search controller | implemented as Objective 4.3 Phase-0 simulated motion; physical view joint deferred to Objective 5 |
 | simulated target/intent/hand providers | implemented (Objective 4.1) |
 | simulated view provider | implemented (Objective 4.3) |
-| markerless object perception | Objective 3.2 active; pure mask/aligned-XYZ localization, YOLO adapter, mono smoke, synthetic ROS publisher, and offline data/freeze/GPU-entry tooling implemented; real bundle/training and live model/stereo publication pending |
+| markerless object perception | Objective 3.2 active; pure mask/aligned-XYZ localization, YOLO adapter, mono smoke, synthetic ROS publisher, and optional legacy data/freeze/GPU-entry tooling implemented; three-class pretrained validation and live model/stereo publication pending |
 | generalized target selector/tracker | Objective 3.2/3.5 integration; N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose + confirmation-gated retained publisher implemented; status contract pending |
 | shared ROS interfaces | `AssistiveIntent`, `HandObservation`, `ViewControlCommand`, `ObjectCandidate`, and `ObjectCandidateArray` implemented; target-status contract remains planned |
 | STM32 EMG firmware | Objective 3.5 (planned STM32CubeIDE C/C++; ADC/DMA, DSP/features, inference, packet producer) |
