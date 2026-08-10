@@ -236,27 +236,33 @@ A newer valid command preempts the old search target after a smooth halt;
 
 ### Stereo Sensing Foundation
 
-The user-reported incoming dual-camera module has two sensors on one board and
-one USB connector, but receipt, output mode, and synchronization remain
-unverified. It becomes a passive stereo sensor only after baseline inspection
-and calibration. One composite paired frame uses one source timestamp and a
-zero or documented skew bound; two video devices retain approximate-time
-pairing. The planned normalized bench interface is:
+The received DECXIN dual-camera module has two sensors on one rigid board and
+one USB connector. Its verified output is one 2560x960 side-by-side MJPEG
+composite frame configured for 30 FPS. The composite left half maps to the
+rig-left camera and the right half maps to the rig-right camera. The current
+verified bench interface is:
 
 ```text
-/stereo/left/image_raw       + /stereo/left/camera_info
-/stereo/right/image_raw      + /stereo/right/camera_info
--> approximate-time pair with maximum skew
--> stereo rectification
+/stereo/composite/camera/image_raw
+-> composite_stereo_splitter
+-> /stereo/left/image_raw  + /stereo/left/camera_info
+-> /stereo/right/image_raw + /stereo/right/camera_info
+-> two image_proc rectify nodes
 -> /stereo/left/image_rect + /stereo/right/image_rect
--> /stereo/disparity + /stereo/points2
+-> planned: /stereo/disparity + /stereo/points2
 ```
 
-Calibration records each camera's intrinsics, the fixed left/right extrinsic,
-rectification maps, and reprojection matrix. Acquisition is stop-and-look: the
-robot or bench rig is stationary, vibration settles, and a short burst of
-timestamp-checked pairs is processed. Excessive skew, invalid disparity, or
-high reprojection error invalidates the observation.
+Both split views copy the same composite-message timestamp and use distinct
+optical frames. This verifies atomic paired transport at the ROS boundary; it
+does not prove simultaneous sensor exposure. The accepted run-2 calibration
+candidate uses 31 checkerboard pairs, 8x6 inner corners, and 0.025 m squares;
+its stereo RMS is 1.0385 px and calibration-derived baseline is 0.064529 m.
+
+Acquisition remains stop-and-look: the robot or bench rig is stationary,
+vibration settles, and a short fresh burst is processed. Physical exposure
+skew, sustainable full-chain rate, reprojection quality with a target present
+in both views, and working-range 3D error remain acceptance measurements.
+Invalid disparity or high reprojection error invalidates the observation.
 
 Before Objective 5, the bracket may be fixed on a bench and has a static
 planning-frame extrinsic. Objective 5 remounts it on one moving robot link,
@@ -396,10 +402,11 @@ stability, exact source stamping, explicit invalid results, and an unpaired
 stream watchdog. Controller and image-topic refusal integration are verified
 with deterministic injected detections. The actual MediaPipe Tasks frontend
 also passed an official-model/official-single-hand-image smoke test and returned
-all 21 landmarks. Completing Objective 4.2 still requires live dual-camera
-runtime and a rigid calibrated fixed bench stereo pair, then measuring
-timestamp skew and working-range 3D error. Eye-in-hand mounting and the
-resulting stereo/hand-eye recalibration remain Objective 5.
+all 21 landmarks. Completing Objective 4.2 still requires a live two-view hand
+observation from the now running rectified topics, then measurement of physical
+exposure skew, sustainable rate, reprojection quality, and working-range 3D
+error. Eye-in-hand mounting and the resulting stereo/hand-eye recalibration
+remain Objective 5.
 
 The observation reports valid/no-hand status explicitly and carries source
 time, frame, confidence, pair skew, reprojection quality, and the 3D point when
@@ -605,11 +612,10 @@ for repeatable learning experiments and LeRobot for real-arm validation. See
 - Preserve camera/source timestamps through approximate pairing, stereo,
   candidate tracking, TF, and target publication. Retention is not freshness,
   and eye-in-hand transforms are resolved at the observation time.
-- Treat the incoming one-board/one-USB module as stereo only after output-mode
-  inspection, calibration/rectification, and measured working-range error. A
-  composite paired frame may share one source timestamp; separate streams
-  retain pair-skew checks. Do not call it RGB-D or hardware synchronized
-  without evidence.
+- Treat the received one-board/one-USB DECXIN module as a calibrated composite
+  stereo candidate, not as completed RGB-D or hardware-synchronized sensing.
+  The split views share one source timestamp by design, but physical exposure
+  skew and working-range metric error still require measurement.
 - Use stop-and-look acquisition for metric localization: halt, settle, reject
   old/excessive-skew pairs, then acquire a fresh stable burst.
 - Keep candidate and observation streams volatile and explicit about empty or
@@ -652,8 +658,8 @@ responsibilities are:
 | unified `/target_object_pose` interface | implemented and runtime-verified |
 | ArUco pose baseline | implemented (`marker_pose_provider` + `target_selector`), accuracy quantified (3.1) |
 | source-neutral handoff controller | implemented (Objectives 4.1/4.3 Phase-0; simulated actions plus target/intent/hand/view inputs and two bounded search states) |
-| shared stereo acquisition/rectification | Objective 4.2 active; final validation uses two namespaced USB drivers, approximate sync, calibration, and stop-and-look |
-| stereo hand-observation node | Objective 4.2 active; synthetic harness, live rectified-image/CameraInfo sync, reusable MediaPipe Tasks 21-landmark detector, representative-point adapter, quality/volume/stability gates, exact stamps, and watchdog implemented; real still-image smoke verified, live dual-camera and bench validation pending |
+| shared stereo acquisition/rectification | Objective 4.2 active; DECXIN composite capture, same-stamp left/right split, run-2 CameraInfo, and two rectified topics live-verified; disparity/points and measured bench validation pending |
+| stereo hand-observation node | Objective 4.2 active; synthetic harness, live rectified-image/CameraInfo sync, reusable MediaPipe Tasks 21-landmark detector, representative-point adapter, quality/volume/stability gates, exact stamps, and watchdog implemented; real still-image smoke and physical-camera node startup verified, successful live two-view hand/3D validation pending |
 | bounded active-view search controller | implemented as Objective 4.3 Phase-0 simulated motion; physical view joint deferred to Objective 5 |
 | simulated target/intent/hand providers | implemented (Objective 4.1) |
 | simulated view provider | implemented (Objective 4.3) |
