@@ -1,3 +1,5 @@
+from glob import glob
+
 from setuptools import find_packages, setup
 
 package_name = "stereo_hand_observer"
@@ -9,11 +11,13 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
+        ("share/" + package_name + "/config", glob("config/*.yaml")),
+        ("share/" + package_name + "/launch", glob("launch/*.launch.py")),
     ],
     install_requires=["setuptools"],
     extras_require={
         "vision": [
-            "mediapipe==1.0.0",
+            "mediapipe==0.10.35",
             "numpy<2",
             "opencv-contrib-python==4.11.0.86",
         ],
@@ -28,6 +32,8 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
+            "composite_stereo_splitter = "
+            "stereo_hand_observer.composite_stereo_splitter:main",
             "hand_detector_demo = "
             "stereo_hand_observer.hand_detector_demo:main",
             "live_observer = "

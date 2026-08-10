@@ -1,0 +1,32 @@
+# DECXIN bench-stereo calibration candidate, captured 2026-08-09.
+# 8x6 inner corners, 0.025 m squares, 1280x960 per eye.
+# Source archive SHA-256:
+# 2dd50dc9804635aaef1202a3bc5fcdd262de2b02e0046b116ee6beb92c2198e3
+# Stereo RMS: 1.0385000004155596 px. Final acceptance still requires
+# working-range 3D-error validation.
+image_width: 1280
+image_height: 960
+camera_name: decxin_stereo_left_1280x960
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [858.28551, 0.0, 662.76363,
+    0.0, 860.16524, 483.27544,
+    0.0, 0.0, 1.0]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.158299, -0.149720, 0.000070, -0.000889, 0.0]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [0.99994591, 0.00136402, -0.01031142,
+    -0.00139633, 0.99999414, -0.00312703,
+    0.01030709, 0.00314125, 0.99994195]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [914.16483, 0.0, 661.81006, 0.0,
+    0.0, 914.16483, 486.12856, 0.0,
+    0.0, 0.0, 1.0, 0.0]
