@@ -18,7 +18,7 @@ from stereo_hand_observer.observation_gate import (
 )
 from stereo_hand_observer.pipeline import (
     StereoHandPipeline,
-    StereoKeypointPair,
+    StereoKeypointSet,
 )
 from stereo_hand_observer.ros_adapter import hand_observation_from_result
 from stereo_hand_observer.synthetic_observer import rectified_stereo_model
@@ -199,6 +199,14 @@ def make_pipeline(required_frames=3, max_epipolar_error_px=1.5):
     )
 
 
+KNUCKLE_OFFSETS = {
+    5: np.array([-0.03, 0.0, 0.0]),
+    9: np.array([-0.01, 0.01, 0.0]),
+    13: np.array([0.01, -0.01, 0.0]),
+    17: np.array([0.03, 0.0, 0.0]),
+}
+
+
 def make_pair(
     now_sec,
     *,
@@ -209,20 +217,23 @@ def make_pair(
     missing_right=False,
     right_vertical_error_px=0.0,
 ):
-    """Project one synthetic hand point into a timestamped stereo pair."""
+    """Project one synthetic hand into a timestamped multi-knuckle set."""
     point = np.asarray(point, dtype=np.float64)
-    left_pixel = tuple(project_point(LEFT_PROJECTION, point))
-    right_pixel = project_point(RIGHT_PROJECTION, point)
-    right_pixel[1] += right_vertical_error_px
+    left_pixels = {}
+    right_pixels = {}
+    for index, offset in KNUCKLE_OFFSETS.items():
+        knuckle = point + offset
+        left_pixels[index] = tuple(project_point(LEFT_PROJECTION, knuckle))
+        right_pixel = project_point(RIGHT_PROJECTION, knuckle)
+        right_pixel[1] += right_vertical_error_px
+        right_pixels[index] = tuple(right_pixel)
     if missing_right:
-        right_pixel = None
-    else:
-        right_pixel = tuple(right_pixel)
+        right_pixels = None
 
     right_source_time = now_sec - age_sec
-    return StereoKeypointPair(
-        left_pixel=left_pixel,
-        right_pixel=right_pixel,
+    return StereoKeypointSet(
+        left_pixels=left_pixels,
+        right_pixels=right_pixels,
         left_source_time_sec=right_source_time - pair_skew_sec,
         right_source_time_sec=right_source_time,
         left_confidence=confidence,
@@ -243,7 +254,7 @@ def test_release_requires_third_stable_stereo_observation(graph):
 
     for index in range(3):
         now_sec = graph.helper.get_clock().now().nanoseconds / 1e9
-        result = pipeline.process(make_pair(now_sec), now_sec)
+        result = pipeline.process_set(make_pair(now_sec), now_sec)
         reasons.append(result.reason)
         publish_pipeline_result(graph, result)
         graph.send_confirm()
@@ -268,7 +279,7 @@ def test_release_requires_third_stable_stereo_observation(graph):
         ("unstable", "unstable"),
         ("low_confidence", "low_confidence"),
         ("excessive_skew", "excessive_pair_skew"),
-        ("high_reprojection", "geometry_rejected"),
+        ("high_reprojection", "insufficient_consensus"),
     ),
 )
 def test_invalid_stereo_observation_blocks_release(
@@ -292,7 +303,7 @@ def test_invalid_stereo_observation_blocks_release(
         pair = make_pair(now_sec, age_sec=1.0)
     elif case == "unstable":
         first_time = now_sec - 0.02
-        pipeline.process(make_pair(first_time), first_time)
+        pipeline.process_set(make_pair(first_time), first_time)
         pair = make_pair(now_sec, point=(0.48, 0.3, 1.0))
     elif case == "low_confidence":
         pair = make_pair(now_sec, confidence=0.6)
@@ -301,7 +312,7 @@ def test_invalid_stereo_observation_blocks_release(
     else:
         pair = make_pair(now_sec, right_vertical_error_px=6.0)
 
-    result = pipeline.process(pair, now_sec)
+    result = pipeline.process_set(pair, now_sec)
     assert not result.valid
     assert result.reason == expected_reason
     publish_pipeline_result(graph, result)

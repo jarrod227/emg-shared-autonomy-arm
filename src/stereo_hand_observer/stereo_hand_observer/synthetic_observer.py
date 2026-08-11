@@ -19,11 +19,21 @@ from stereo_hand_observer.observation_gate import (
 )
 from stereo_hand_observer.pipeline import (
     StereoHandPipeline,
-    StereoKeypointPair,
+    StereoKeypointSet,
 )
 from stereo_hand_observer.ros_adapter import (
     hand_observation_from_result,
 )
+
+
+# Palm knuckles spread around the configured hand point so that each axis
+# median returns that point exactly, matching the live multi-knuckle path.
+SYNTHETIC_KNUCKLE_OFFSETS = {
+    5: np.array([-0.03, 0.0, 0.0]),
+    9: np.array([-0.01, 0.01, 0.0]),
+    13: np.array([0.01, -0.01, 0.0]),
+    17: np.array([0.03, 0.0, 0.0]),
+}
 
 
 def _finite_parameter(node, name):
@@ -200,24 +210,24 @@ class SyntheticStereoHandObserver(Node):
         self.declare_parameter("simulated_right_vertical_error_px", 0.0)
         self.declare_parameter("simulate_missing_keypoint", False)
 
-    def _synthetic_pair(self, now_sec):
-        left_pixel = tuple(
-            project_point(self._left_projection, self._hand_point)
-        )
-        right_pixel = project_point(
-            self._right_projection,
-            self._hand_point,
-        )
-        right_pixel[1] += self._right_vertical_error_px
+    def _synthetic_keypoint_set(self, now_sec):
+        left_pixels = {}
+        right_pixels = {}
+        for index, offset in SYNTHETIC_KNUCKLE_OFFSETS.items():
+            point = self._hand_point + offset
+            left_pixels[index] = tuple(
+                project_point(self._left_projection, point)
+            )
+            right_pixel = project_point(self._right_projection, point)
+            right_pixel[1] += self._right_vertical_error_px
+            right_pixels[index] = tuple(right_pixel)
         if self._simulate_missing_keypoint:
-            right_pixel = None
-        else:
-            right_pixel = tuple(right_pixel)
+            right_pixels = None
 
         left_time = max(0.0, now_sec - self._simulated_pair_skew_sec)
-        return StereoKeypointPair(
-            left_pixel=left_pixel,
-            right_pixel=right_pixel,
+        return StereoKeypointSet(
+            left_pixels=left_pixels,
+            right_pixels=right_pixels,
             left_source_time_sec=left_time,
             right_source_time_sec=now_sec,
             left_confidence=self._simulated_confidence,
@@ -227,8 +237,8 @@ class SyntheticStereoHandObserver(Node):
     def _publish(self):
         now = self.get_clock().now()
         now_sec = now.nanoseconds / 1e9
-        result = self._pipeline.process(
-            self._synthetic_pair(now_sec),
+        result = self._pipeline.process_set(
+            self._synthetic_keypoint_set(now_sec),
             now_sec,
         )
         message = hand_observation_from_result(result, self._frame_id)

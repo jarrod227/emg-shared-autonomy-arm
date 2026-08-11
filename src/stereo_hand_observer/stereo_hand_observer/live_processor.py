@@ -3,10 +3,10 @@
 import math
 import operator
 
-from stereo_hand_observer.keypoint_detector import HandKeypointDetection
+from stereo_hand_observer.keypoint_detector import HandKeypointsDetection
 from stereo_hand_observer.pipeline import (
     StereoHandPipeline,
-    StereoKeypointPair,
+    StereoKeypointSet,
 )
 
 
@@ -112,7 +112,7 @@ class StereoFrameProcessor:
         for detection in (left_detection, right_detection):
             if (
                 detection is not None
-                and not isinstance(detection, HandKeypointDetection)
+                and not isinstance(detection, HandKeypointsDetection)
             ):
                 return self._pipeline.invalidate(
                     "detector_contract_error",
@@ -126,14 +126,14 @@ class StereoFrameProcessor:
             for detection in detections
         )
         if left_detection is None or right_detection is None:
-            pair = StereoKeypointPair(
-                left_pixel=(
-                    left_detection.pixel
+            keypoint_set = StereoKeypointSet(
+                left_pixels=(
+                    left_detection.pixels
                     if left_detection is not None
                     else None
                 ),
-                right_pixel=(
-                    right_detection.pixel
+                right_pixels=(
+                    right_detection.pixels
                     if right_detection is not None
                     else None
                 ),
@@ -142,7 +142,7 @@ class StereoFrameProcessor:
                 left_confidence=confidences[0],
                 right_confidence=confidences[1],
             )
-            return self._pipeline.process(pair, now_sec)
+            return self._pipeline.process_set(keypoint_set, now_sec)
 
         handedness = (
             left_detection.handedness,
@@ -160,12 +160,12 @@ class StereoFrameProcessor:
                 confidence=min(confidences),
             )
 
-        pair = StereoKeypointPair(
-            left_pixel=left_detection.pixel,
-            right_pixel=right_detection.pixel,
+        keypoint_set = StereoKeypointSet(
+            left_pixels=left_detection.pixels,
+            right_pixels=right_detection.pixels,
             left_source_time_sec=left_source_time_sec,
             right_source_time_sec=right_source_time_sec,
             left_confidence=confidences[0],
             right_confidence=confidences[1],
         )
-        return self._pipeline.process(pair, now_sec)
+        return self._pipeline.process_set(keypoint_set, now_sec)

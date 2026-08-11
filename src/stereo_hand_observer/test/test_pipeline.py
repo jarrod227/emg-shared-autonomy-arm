@@ -9,7 +9,6 @@ from stereo_hand_observer.observation_gate import (
 )
 from stereo_hand_observer.pipeline import (
     StereoHandPipeline,
-    StereoKeypointPair,
     StereoKeypointSet,
 )
 
@@ -74,113 +73,6 @@ def make_pipeline(required_frames=3):
             max_point_step_m=0.05,
         ),
     )
-
-
-def make_pair(
-    *,
-    left_pixel=None,
-    right_pixel=None,
-    left_time=10.0,
-    right_time=10.01,
-    left_confidence=0.9,
-    right_confidence=0.8,
-):
-    """Build one corresponding synthetic stereo keypoint pair."""
-    if left_pixel is None:
-        left_pixel = project_independently(GROUND_TRUTH)
-    if right_pixel is None:
-        right_pixel = project_independently(
-            GROUND_TRUTH,
-            right_camera=True,
-        )
-    return StereoKeypointPair(
-        left_pixel=left_pixel,
-        right_pixel=right_pixel,
-        left_source_time_sec=left_time,
-        right_source_time_sec=right_time,
-        left_confidence=left_confidence,
-        right_confidence=right_confidence,
-    )
-
-
-def test_pipeline_recovers_point_and_becomes_valid_on_third_pair():
-    pipeline = make_pipeline()
-
-    results = []
-    for index in range(3):
-        left_time = 10.0 + index * 0.03
-        pair = make_pair(
-            left_time=left_time,
-            right_time=left_time + 0.01,
-        )
-        results.append(pipeline.process(pair, now_sec=left_time + 0.02))
-
-    assert not results[0].valid
-    assert not results[1].valid
-    assert results[2].valid
-    np.testing.assert_allclose(results[2].point, GROUND_TRUTH)
-    assert results[2].confidence == 0.8
-    assert results[2].pair_skew_sec == pytest.approx(0.01)
-    assert results[2].source_time_sec == pytest.approx(10.06)
-    assert results[2].diagnostic.startswith("epi=0.000px reproj=0.000px")
-    assert "xyz=(0.400, 0.300, 1.000)m" in results[2].diagnostic
-
-
-def test_excessive_pair_skew_is_rejected_before_stability_gate():
-    pipeline = make_pipeline(required_frames=1)
-    pair = make_pair(left_time=10.0, right_time=10.03)
-
-    result = pipeline.process(pair, now_sec=10.04)
-
-    assert not result.valid
-    assert result.reason == "excessive_pair_skew"
-    assert result.pair_skew_sec == pytest.approx(0.03)
-
-
-def test_missing_keypoint_publishes_explicit_invalid_result():
-    pipeline = make_pipeline(required_frames=1)
-    pair = make_pair()
-    pair = StereoKeypointPair(
-        left_pixel=pair.left_pixel,
-        right_pixel=None,
-        left_source_time_sec=pair.left_source_time_sec,
-        right_source_time_sec=pair.right_source_time_sec,
-        left_confidence=pair.left_confidence,
-        right_confidence=pair.right_confidence,
-    )
-
-    result = pipeline.process(pair, now_sec=10.02)
-
-    assert not result.valid
-    assert result.point is None
-    assert result.reason == "missing_keypoint"
-
-
-def test_mismatched_keypoints_are_rejected_by_geometry():
-    pipeline = make_pipeline(required_frames=1)
-    right_pixel = np.asarray(
-        project_independently(GROUND_TRUTH, right_camera=True)
-    )
-    right_pixel[1] += 8.0
-    pair = make_pair(right_pixel=tuple(right_pixel))
-
-    result = pipeline.process(pair, now_sec=10.02)
-
-    assert not result.valid
-    assert result.reason == "geometry_rejected"
-    assert "epipolar-error" in result.diagnostic
-    assert "8.000 px" in result.diagnostic
-
-
-def test_lowest_view_confidence_controls_output_and_validity():
-    pipeline = make_pipeline(required_frames=1)
-    pair = make_pair(left_confidence=0.95, right_confidence=0.6)
-
-    result = pipeline.process(pair, now_sec=10.02)
-
-    assert not result.valid
-    assert result.reason == "low_confidence"
-    assert result.confidence == 0.6
 
 
 def make_keypoint_set(
@@ -346,6 +238,20 @@ def test_disjoint_landmark_indices_cannot_reach_consensus():
     assert "0/3 landmarks passed" in result.diagnostic
 
 
+def test_set_lowest_view_confidence_controls_output_and_validity():
+    pipeline = make_pipeline(required_frames=1)
+    keypoint_set = make_keypoint_set(
+        left_confidence=0.95,
+        right_confidence=0.6,
+    )
+
+    result = pipeline.process_set(keypoint_set, now_sec=10.02)
+
+    assert not result.valid
+    assert result.reason == "low_confidence"
+    assert result.confidence == 0.6
+
+
 def test_set_pair_skew_is_rejected_before_geometry():
     pipeline = make_pipeline(required_frames=1)
     keypoint_set = make_keypoint_set(left_time=10.0, right_time=10.03)
@@ -366,11 +272,14 @@ def test_set_with_non_finite_metadata_is_invalid():
     assert result.reason == "invalid_pair_metadata"
 
 
-def test_process_set_rejects_single_point_pair_type():
+def test_process_set_rejects_a_foreign_payload_type():
     pipeline = make_pipeline()
 
     with pytest.raises(TypeError, match="StereoKeypointSet"):
-        pipeline.process_set(make_pair(), now_sec=10.0)
+        pipeline.process_set(
+            {"left_pixels": {}, "right_pixels": {}},
+            now_sec=10.0,
+        )
 
 
 @pytest.mark.parametrize(

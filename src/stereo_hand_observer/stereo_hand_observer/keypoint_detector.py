@@ -17,37 +17,6 @@ def _landmark_index(value):
 
 
 @dataclass(frozen=True)
-class HandKeypointDetection:
-    """One image-space keypoint and source-local quality metadata."""
-
-    pixel: tuple[float, float]
-    confidence: float
-    handedness: str | None = None
-
-    def __post_init__(self):
-        try:
-            pixel = tuple(float(value) for value in self.pixel)
-        except (TypeError, ValueError) as error:
-            raise ValueError("pixel must contain two numeric values") from error
-        if len(pixel) != 2 or not all(math.isfinite(value) for value in pixel):
-            raise ValueError("pixel must contain two finite values")
-
-        confidence = float(self.confidence)
-        if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
-            raise ValueError("confidence must be finite and in [0, 1]")
-
-        handedness = self.handedness
-        if handedness is not None:
-            if not isinstance(handedness, str) or not handedness.strip():
-                raise ValueError("handedness must be a non-empty string or None")
-            handedness = handedness.strip().lower()
-
-        object.__setattr__(self, "pixel", pixel)
-        object.__setattr__(self, "confidence", confidence)
-        object.__setattr__(self, "handedness", handedness)
-
-
-@dataclass(frozen=True)
 class HandKeypointsDetection:
     """In-frame pixels for several landmarks plus source-local metadata."""
 

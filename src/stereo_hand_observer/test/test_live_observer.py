@@ -13,7 +13,7 @@ from sensor_msgs.msg import CameraInfo, Image
 
 from assistive_interfaces.msg import HandObservation
 from stereo_hand_observer.geometry import project_point
-from stereo_hand_observer.keypoint_detector import HandKeypointDetection
+from stereo_hand_observer.keypoint_detector import HandKeypointsDetection
 from stereo_hand_observer.live_observer import LiveStereoHandObserver
 from stereo_hand_observer.synthetic_observer import rectified_stereo_model
 
@@ -80,8 +80,9 @@ class MutableDetector:
 
 def keypoint(projection):
     """Project the known 3D hand into one detector result."""
-    return HandKeypointDetection(
-        pixel=tuple(project_point(projection, GROUND_TRUTH)),
+    pixel = tuple(project_point(projection, GROUND_TRUTH))
+    return HandKeypointsDetection(
+        pixels={index: pixel for index in (5, 9, 13, 17)},
         confidence=0.9,
         handedness="right",
     )

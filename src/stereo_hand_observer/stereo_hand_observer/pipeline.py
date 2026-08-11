@@ -18,18 +18,6 @@ from stereo_hand_observer.observation_gate import (
 
 
 @dataclass(frozen=True)
-class StereoKeypointPair:
-    """Corresponding hand pixels and metadata from one stereo image pair."""
-
-    left_pixel: tuple[float, float] | None
-    right_pixel: tuple[float, float] | None
-    left_source_time_sec: float
-    right_source_time_sec: float
-    left_confidence: float
-    right_confidence: float
-
-
-@dataclass(frozen=True)
 class StereoKeypointSet:
     """Corresponding multi-landmark pixel sets from one stereo image pair."""
 
@@ -167,106 +155,6 @@ class StereoHandPipeline:
             pair_skew_sec=abs(left_time - right_time),
             reprojection_error_px=0.0,
             source_time_sec=min(left_time, right_time),
-        )
-
-    def process(self, pair, now_sec):
-        """Process one synchronized image pair into hand-observation data."""
-        if not isinstance(pair, StereoKeypointPair):
-            raise TypeError("pair must be a StereoKeypointPair")
-        now_sec = float(now_sec)
-        if not math.isfinite(now_sec):
-            raise ValueError("now_sec must be finite")
-
-        times = (
-            float(pair.left_source_time_sec),
-            float(pair.right_source_time_sec),
-        )
-        confidences = (
-            float(pair.left_confidence),
-            float(pair.right_confidence),
-        )
-        if not all(math.isfinite(value) for value in times + confidences):
-            decision = self._gate.invalidate("invalid_pair_metadata")
-            return self._result(
-                decision,
-                confidence=0.0,
-                pair_skew_sec=0.0,
-                reprojection_error_px=0.0,
-                source_time_sec=now_sec,
-            )
-
-        source_time_sec = min(times)
-        pair_skew_sec = abs(times[0] - times[1])
-        confidence = min(confidences)
-
-        if pair_skew_sec > self._gate_config.max_pair_skew_sec:
-            decision = self._gate.invalidate("excessive_pair_skew")
-            return self._result(
-                decision,
-                confidence=confidence,
-                pair_skew_sec=pair_skew_sec,
-                reprojection_error_px=0.0,
-                source_time_sec=source_time_sec,
-            )
-        if pair.left_pixel is None or pair.right_pixel is None:
-            decision = self._gate.invalidate("missing_keypoint")
-            return self._result(
-                decision,
-                confidence=confidence,
-                pair_skew_sec=pair_skew_sec,
-                reprojection_error_px=0.0,
-                source_time_sec=source_time_sec,
-            )
-
-        try:
-            triangulation = triangulate_keypoint(
-                self._left_projection,
-                self._right_projection,
-                self._fundamental_matrix,
-                pair.left_pixel,
-                pair.right_pixel,
-                max_epipolar_error_px=self._max_epipolar_error_px,
-                max_reprojection_error_px=(
-                    self._gate_config.max_reprojection_error_px
-                ),
-                min_depth_m=self._min_depth_m,
-            )
-        except (StereoGeometryError, TypeError, ValueError) as error:
-            decision = self._gate.invalidate("geometry_rejected")
-            return self._result(
-                decision,
-                confidence=confidence,
-                pair_skew_sec=pair_skew_sec,
-                reprojection_error_px=0.0,
-                source_time_sec=source_time_sec,
-                diagnostic=str(error),
-            )
-
-        reprojection_error_px = (
-            triangulation.max_reprojection_error_px
-        )
-        candidate = HandFrameCandidate(
-            point=tuple(triangulation.point),
-            confidence=confidence,
-            pair_skew_sec=pair_skew_sec,
-            reprojection_error_px=reprojection_error_px,
-            source_time_sec=source_time_sec,
-        )
-        decision = self._gate.update(candidate, now_sec)
-        return self._result(
-            decision,
-            confidence=confidence,
-            pair_skew_sec=pair_skew_sec,
-            reprojection_error_px=reprojection_error_px,
-            source_time_sec=source_time_sec,
-            diagnostic=(
-                f"epi={triangulation.epipolar_error_px:.3f}px "
-                f"reproj={reprojection_error_px:.3f}px "
-                "xyz=("
-                f"{triangulation.point[0]:.3f}, "
-                f"{triangulation.point[1]:.3f}, "
-                f"{triangulation.point[2]:.3f})m"
-            ),
         )
 
     def process_set(self, keypoint_set, now_sec):

@@ -3,7 +3,7 @@
 import numpy as np
 
 from stereo_hand_observer.geometry import project_point
-from stereo_hand_observer.keypoint_detector import HandKeypointDetection
+from stereo_hand_observer.keypoint_detector import HandKeypointsDetection
 from stereo_hand_observer.live_processor import StereoFrameProcessor
 from stereo_hand_observer.observation_gate import (
     DeliveryVolume,
@@ -57,10 +57,14 @@ class StrictTimestampDetector(TimestampDetector):
         return super().detect_at(image, timestamp_ms)
 
 
+KNUCKLE_INDICES = (5, 9, 13, 17)
+
+
 def detection(projection, *, confidence=0.9, handedness="right"):
     """Create one detector result projected from the known 3D point."""
-    return HandKeypointDetection(
-        pixel=tuple(project_point(projection, GROUND_TRUTH)),
+    pixel = tuple(project_point(projection, GROUND_TRUTH))
+    return HandKeypointsDetection(
+        pixels={index: pixel for index in KNUCKLE_INDICES},
         confidence=confidence,
         handedness=handedness,
     )
@@ -206,7 +210,7 @@ def test_detector_exception_fails_closed_and_resets_stability():
 
 def test_detector_contract_error_fails_closed():
     processor = make_processor(
-        "not a HandKeypointDetection",
+        "not a HandKeypointsDetection",
         detection(RIGHT_PROJECTION),
     )
 
