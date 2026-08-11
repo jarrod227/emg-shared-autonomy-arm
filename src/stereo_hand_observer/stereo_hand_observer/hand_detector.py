@@ -277,18 +277,27 @@ def draw_hand_landmarks(
     image_bgr,
     hand,
     *,
-    representative_index=9,
+    representative_indices=(9,),
     cv2_module=None,
 ):
-    """Return a BGR copy with the complete skeleton and chosen point drawn."""
+    """Return a BGR copy with the skeleton and chosen points drawn."""
     if not isinstance(hand, DetectedHand):
         raise TypeError("hand must be a DetectedHand")
-    if (
-        not isinstance(representative_index, int)
-        or isinstance(representative_index, bool)
-        or not 0 <= representative_index < HAND_LANDMARK_COUNT
-    ):
-        raise ValueError("representative_index must be an integer in [0, 20]")
+    try:
+        representative_indices = tuple(representative_indices)
+    except TypeError as error:
+        raise ValueError(
+            "representative_indices must be an iterable of integers"
+        ) from error
+    for index in representative_indices:
+        if (
+            not isinstance(index, int)
+            or isinstance(index, bool)
+            or not 0 <= index < HAND_LANDMARK_COUNT
+        ):
+            raise ValueError(
+                "representative_indices must contain integers in [0, 20]"
+            )
 
     image = np.asarray(image_bgr)
     if image.ndim != 3 or image.shape[2] != 3:
@@ -333,7 +342,8 @@ def draw_hand_landmarks(
         if pixel is not None:
             cv2_module.circle(output, pixel, 2, (255, 0, 0), -1)
 
-    representative = pixels[representative_index]
-    if representative is not None:
-        cv2_module.circle(output, representative, 5, (0, 0, 255), -1)
+    for index in representative_indices:
+        representative = pixels[index]
+        if representative is not None:
+            cv2_module.circle(output, representative, 5, (0, 0, 255), -1)
     return output

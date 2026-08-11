@@ -35,7 +35,9 @@
     debug_image_scale: 0.5
     fallback_frame_id: stereo_left_optical_frame
     model_path: ""
-    landmark_index: 9
+    palm_landmark_indices: [5, 9, 13, 17]
+    min_consensus_points: 3
+    max_palm_span_m: 0.12
     min_detection_confidence: 0.7
     min_hand_presence_confidence: 0.7
     min_tracking_confidence: 0.7
@@ -43,14 +45,29 @@
     require_handedness_match: true
 
     watchdog_timeout_sec: 0.75
-    delivery_center_x: 0.4
-    delivery_center_y: 0.3
-    delivery_center_z: 1.0
-    delivery_radius_m: 0.5
+
+    # Bench volume expressed in the LEFT CAMERA OPTICAL frame, which is the
+    # frame this node publishes in. The (0.4, 0.3, 1.0) world-frame delivery
+    # zone belongs to Objective 4.1; converting between them needs a real
+    # camera-to-world extrinsic, which is still a simulation placeholder, so
+    # that TF step is deferred to Objective 5.
+    delivery_center_x: 0.0
+    delivery_center_y: 0.0
+    delivery_center_z: 0.5
+    delivery_radius_m: 0.4
+
     required_stable_frames: 3
     min_confidence: 0.7
     max_pair_skew_sec: 0.02
-    max_epipolar_error_px: 1.5
-    max_reprojection_error_px: 1.5
+
+    # PROVISIONAL. 1.5 px was calibrated for checkerboard corners and sits
+    # below the ~2 px cross-view noise floor of independent MediaPipe
+    # keypoints, which is why the gate could never latch. Finalize these from
+    # a measured palm-knuckle distribution plus known-distance 3D error.
+    max_epipolar_error_px: 4.0
+    max_reprojection_error_px: 3.0
+
+    # Not yet measured against dual-MediaPipe latency on this machine; if the
+    # bench reports "stale", measure the real end-to-end delay before raising.
     max_age_sec: 0.2
     max_point_step_m: 0.05

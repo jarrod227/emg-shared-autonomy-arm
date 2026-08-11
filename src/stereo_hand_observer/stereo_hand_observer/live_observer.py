@@ -59,6 +59,28 @@ def _integer_parameter(node, name, minimum=1):
     return value
 
 
+def _landmark_indices_parameter(node, name):
+    values = node.get_parameter(name).value
+    if isinstance(values, (str, bytes)) or values is None:
+        raise ValueError(f"{name} must be a list of landmark indices")
+    indices = []
+    for value in values:
+        try:
+            index = operator.index(value)
+        except TypeError as error:
+            raise ValueError(
+                f"{name} must contain integers in [0, 20]"
+            ) from error
+        if not 0 <= index <= 20:
+            raise ValueError(f"{name} must contain integers in [0, 20]")
+        indices.append(index)
+    if not indices:
+        raise ValueError(f"{name} must contain at least one landmark")
+    if len(set(indices)) != len(indices):
+        raise ValueError(f"{name} must not contain duplicates")
+    return tuple(indices)
+
+
 def _string_parameter(node, name):
     value = node.get_parameter(name).value
     if not isinstance(value, str) or not value.strip():
@@ -152,13 +174,20 @@ class LiveStereoHandObserver(Node):
             self,
             "watchdog_timeout_sec",
         )
-        self._landmark_index = _integer_parameter(
+        self._palm_landmark_indices = _landmark_indices_parameter(
             self,
-            "landmark_index",
-            minimum=0,
+            "palm_landmark_indices",
         )
-        if self._landmark_index > 20:
-            raise ValueError("landmark_index must be at most 20")
+        self._min_consensus_points = _integer_parameter(
+            self,
+            "min_consensus_points",
+        )
+        if self._min_consensus_points > len(self._palm_landmark_indices):
+            raise ValueError(
+                "min_consensus_points cannot exceed the number of "
+                "palm_landmark_indices; the gate could never pass"
+            )
+        self._max_palm_span_m = _positive_parameter(self, "max_palm_span_m")
 
         if detector_factory is None:
             detector_factory = self._mediapipe_detector_factory()
@@ -287,7 +316,12 @@ class LiveStereoHandObserver(Node):
             "stereo_left_optical_frame",
         )
         self.declare_parameter("model_path", "")
-        self.declare_parameter("landmark_index", 9)
+        # Palm knuckles are the most cross-view consistent landmarks; a
+        # measured 21-landmark sweep put them near 2 px of epipolar error
+        # while fingertips reached tens of pixels.
+        self.declare_parameter("palm_landmark_indices", [5, 9, 13, 17])
+        self.declare_parameter("min_consensus_points", 3)
+        self.declare_parameter("max_palm_span_m", 0.12)
         self.declare_parameter("min_detection_confidence", 0.7)
         self.declare_parameter("min_hand_presence_confidence", 0.7)
         self.declare_parameter("min_tracking_confidence", 0.7)
@@ -316,7 +350,7 @@ class LiveStereoHandObserver(Node):
                 "model_path must name a MediaPipe hand-landmarker model"
             )
         options = {
-            "landmark_index": self._landmark_index,
+            "landmark_indices": self._palm_landmark_indices,
             "min_detection_confidence": _finite_parameter(
                 self,
                 "min_detection_confidence",
@@ -571,6 +605,8 @@ class LiveStereoHandObserver(Node):
             self._delivery_volume,
             gate_config=self._gate_config,
             max_epipolar_error_px=self._max_epipolar_error_px,
+            min_consensus_points=self._min_consensus_points,
+            max_palm_span_m=self._max_palm_span_m,
         )
         self._processor = StereoFrameProcessor(
             self._pipeline,
@@ -833,7 +869,7 @@ class LiveStereoHandObserver(Node):
                     view = draw_hand_landmarks(
                         view,
                         hand,
-                        representative_index=self._landmark_index,
+                        representative_indices=self._palm_landmark_indices,
                         cv2_module=cv2,
                     )
                 cv2.putText(
