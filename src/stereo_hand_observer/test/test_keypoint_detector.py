@@ -87,7 +87,7 @@ def make_detector(tmp_path, result, **detector_options):
     return detector, landmarker_class
 
 
-def test_unique_hand_returns_configured_pixel_and_quality_floor(tmp_path):
+def test_unique_hand_returns_configured_pixels_and_quality_floor(tmp_path):
     detector, landmarker_class = make_detector(
         tmp_path,
         result_with_hands(1),
@@ -97,7 +97,12 @@ def test_unique_hand_returns_configured_pixel_and_quality_floor(tmp_path):
         np.zeros((480, 640, 3), dtype=np.uint8)
     )
 
-    assert detection.pixel == (160.0, 240.0)
+    assert detection.pixels == {
+        5: (160.0, 240.0),
+        9: (160.0, 240.0),
+        13: (160.0, 240.0),
+        17: (160.0, 240.0),
+    }
     assert detection.confidence == 0.7
     assert detection.handedness == "right"
     assert detector.last_hand is not None
@@ -117,7 +122,7 @@ def test_video_mode_forwards_source_timestamp(tmp_path):
         1234,
     )
 
-    assert detection.pixel == (160.0, 240.0)
+    assert detection.pixels[9] == (160.0, 240.0)
     assert landmarker_class.options.running_mode == "video"
     assert landmarker_class.video_timestamps == [1234]
 
@@ -154,7 +159,7 @@ def test_last_hand_is_cleared_when_latest_detection_is_missing(tmp_path):
     assert detector.last_hand is None
 
 
-def test_configured_landmark_is_selected_from_complete_hand(tmp_path):
+def test_configured_landmarks_are_selected_from_complete_hand(tmp_path):
     result = result_with_hands(1)
     result.hand_landmarks[0][5] = SimpleNamespace(
         x=0.75,
@@ -164,14 +169,14 @@ def test_configured_landmark_is_selected_from_complete_hand(tmp_path):
     detector, _ = make_detector(
         tmp_path,
         result,
-        landmark_index=5,
+        landmark_indices=(5,),
     )
 
     detection = detector.detect(
         np.zeros((480, 640, 3), dtype=np.uint8)
     )
 
-    assert detection.pixel == (480.0, 120.0)
+    assert detection.pixels == {5: (480.0, 120.0)}
 
 
 @pytest.mark.parametrize("hand_count", (0, 2))
@@ -184,6 +189,48 @@ def test_missing_or_ambiguous_hands_fail_closed(tmp_path, hand_count):
     assert detector.detect(
         np.zeros((48, 64, 3), dtype=np.uint8)
     ) is None
+
+
+def test_out_of_frame_landmarks_are_dropped_from_the_pixel_set(tmp_path):
+    result = result_with_hands(1)
+    result.hand_landmarks[0][9] = SimpleNamespace(x=1.25, y=0.5, z=0.0)
+    result.hand_landmarks[0][17] = SimpleNamespace(x=0.5, y=-0.1, z=0.0)
+    detector, _ = make_detector(tmp_path, result)
+
+    detection = detector.detect(
+        np.zeros((480, 640, 3), dtype=np.uint8)
+    )
+
+    assert sorted(detection.pixels) == [5, 13]
+
+
+def test_all_landmarks_out_of_frame_fail_closed(tmp_path):
+    result = result_with_hands(1)
+    for index in (5, 9, 13, 17):
+        result.hand_landmarks[0][index] = SimpleNamespace(
+            x=1.5,
+            y=0.5,
+            z=0.0,
+        )
+    detector, _ = make_detector(tmp_path, result)
+
+    assert detector.detect(
+        np.zeros((480, 640, 3), dtype=np.uint8)
+    ) is None
+    assert detector.last_hand is not None
+
+
+@pytest.mark.parametrize(
+    "indices",
+    ((), (21,), (-1,), (5, 5), (True,), (9.0,)),
+)
+def test_invalid_landmark_indices_are_rejected(tmp_path, indices):
+    with pytest.raises(ValueError):
+        make_detector(
+            tmp_path,
+            result_with_hands(1),
+            landmark_indices=indices,
+        )
 
 
 def test_closed_detector_rejects_further_inference(tmp_path):
