@@ -21,8 +21,13 @@ evaluation in `objective3_evaluation.md`; the two are independent paths.
   claimed.
 - **Exposure skew (real, reported as an upper bound).** Bounded, not proven
   zero. The pair is **not** described as hardware-synchronized.
-- **False/missed readiness-gate rates (not measured).** These need a labelled
-  ground-truth protocol and remain open.
+- **False/missed readiness-gate rates (real, reported).** Measured against a
+  scripted protocol; see the gate-rate section below, including the ground
+  truth that had to be discarded.
+- **Pose-induced position bias (NOT measured).** Three attempts failed
+  because holding a hand at one fixed location while only changing its
+  orientation turned out to be beyond what a human can execute reliably.
+  This is an open gap, not a finding of "no bias".
 
 ## Setup
 
@@ -36,8 +41,9 @@ evaluation in `objective3_evaluation.md`; the two are independent paths.
 - Geometry: the four palm knuckles (landmarks 5, 9, 13, 17) are triangulated
   independently; at least 3 must pass, outliers beyond 0.12 m of the cluster
   median are dropped, and the palm point is the median of the survivors.
-- Hand pose: held upright, palm toward the camera. Pose matters — a hand lying
-  flat on the table is strongly foreshortened and localizes worse.
+- Hand pose: what actually matters is that the hand is **open and steady**,
+  not which way the palm faces. See the gate-rate section — an early reading
+  that palm orientation was the driver did not survive measurement.
 
 ## Why the original thresholds could never pass
 
@@ -118,6 +124,48 @@ At a 1 m/s hand speed this contributes under 0.6 mm, well inside the precision
 floor. The pair behaves as if simultaneously exposed **to within this bound**;
 it is still not evidence of hardware synchronization.
 
+### Readiness-gate rates
+
+Scored against the running node, so these reflect the shipped gate including
+its 3-frame stability requirement. The first and last 3 s of every segment
+are discarded so a human moving into or out of position is never scored.
+
+**False readiness (the safety-critical direction).** With both hands fully
+out of frame, **0 valid frames in ~400** (~40 s). With zero events the
+rule-of-three 95% upper bound is **< 0.75%**.
+
+A first attempt at this segment scored 9.4% valid and was **discarded**: a
+follow-up run showed part of an arm was still in frame, so the ground-truth
+label, not the gate, was wrong. Re-run carefully it produced zero.
+
+**Missed readiness.** Reported per condition, because a single number here
+is misleading — the controller only needs one valid frame while a hand is
+held out, so time-to-first-valid matters more than duty cycle:
+
+| condition | duty cycle | first valid | longest gap |
+| --- | ---: | ---: | ---: |
+| upright, palm to camera, steady | 100.0% | 0.00 s | 0 s |
+| **palm up, fingers spread, steady** (natural receiving pose) | **97.3%** | **0.00 s** | **0.48 s** |
+| continuously rotating between orientations | 28.7% | 0.72 s | 13.39 s |
+| hand pressed flat on the table, back up | degraded — depth scatter 23.5 mm vs 4.8 mm | | |
+
+The 28.7% row is **not** a natural-use figure. That subject was deliberately
+cycling through orientations for the whole segment; its dominant refusal was
+`insufficient_consensus`, consistent with repeatedly passing through
+ambiguous mid-rotation poses.
+
+The operational conclusion is that **an open, steady hand works regardless of
+palm orientation** — the natural receiving pose scores 97.3% with a worst gap
+under half a second. An earlier hypothesis that palm-up was inherently the
+worst case, and that it was also the ergonomically natural one, was tested
+and **disproved**.
+
+Degradation appears when the hand is closed or pressed flat so that fingers
+occlude the knuckles: one view then fails to detect at all, or the knuckle
+positions get inferred rather than observed and depth scatter rises about 5x
+(4.8 mm to 23.5 mm). Even that degraded scatter is ~17x inside the delivery
+volume's 400 mm radius, though only ~2x inside the 50 mm stability step.
+
 ### Timing and throughput
 
 The raw composite is 7.37 MB per frame. Publishing it through DDS backed up
@@ -158,8 +206,27 @@ actually decides on.
 
 ## Still open
 
-- **False/missed readiness-gate rates.** Needs a labelled protocol with known
-  hand-present/absent ground truth; not attempted here.
+These are gaps, not solved problems. Do not read the results above as
+covering them.
+
+- **This objective does not yet connect to Objective 4.1.** The observer
+  publishes in `stereo_left_optical_frame`; the handoff controller requires
+  `delivery_frame` (`world`) and refuses on any mismatch rather than
+  guessing. Bridging them needs a real camera-to-world extrinsic, which is
+  still a simulation placeholder and is deferred to Objective 5. The refusal
+  is correct fail-closed behaviour, but perception-to-control is **not**
+  demonstrated end to end.
+- **Pose-induced position bias was never measured.** Three protocols failed:
+  holding a hand at a fixed location while changing only its orientation is
+  not something a person executes reliably, and every attempt either changed
+  the location too or failed to reach the intended pose. Precision under each
+  pose is reported; systematic offset between poses is unknown.
+- **The camera-frame delivery volume barely discriminates.** With centre
+  (0, 0, 0.5) and radius 0.4 m, and a 70 degree horizontal field of view, the
+  frame is only 0.70 m wide at z = 0.5 m — so a hand cannot leave the sphere
+  sideways while staying visible. The gate currently costs a full 3D estimate
+  while rejecting almost nothing. Tightening it is a design decision tied to
+  what the handoff should actually require.
 - **image_proc rectify-node exit -11 on Ctrl-C.** Only affects the gscam-based
   `decxin_atomic_hand.yaml` path; `direct` mode does not use image_proc.
 - **Absolute position accuracy.** Deliberately not claimed — the palm centre
