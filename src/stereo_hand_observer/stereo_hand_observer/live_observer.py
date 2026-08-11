@@ -119,8 +119,14 @@ def _projection_matrix(message, name):
 class LiveStereoHandObserver(Node):
     """Publish fail-closed observations from topic or composite stereo."""
 
-    def __init__(self, detector_factory=None, **node_kwargs):
+    def __init__(
+        self,
+        detector_factory=None,
+        capture_factory=None,
+        **node_kwargs,
+    ):
         super().__init__("live_stereo_hand_observer", **node_kwargs)
+        self._capture_factory = capture_factory
         self._declare_parameters()
         self._bridge = CvBridge()
 
@@ -166,9 +172,9 @@ class LiveStereoHandObserver(Node):
             )
 
         self._input_mode = _string_parameter(self, "input_mode")
-        if self._input_mode not in {"stereo_topics", "composite"}:
+        if self._input_mode not in {"stereo_topics", "composite", "direct"}:
             raise ValueError(
-                "input_mode must be 'stereo_topics' or 'composite'"
+                "input_mode must be 'stereo_topics', 'composite', or 'direct'"
             )
         self._watchdog_timeout_sec = _positive_parameter(
             self,
@@ -244,6 +250,8 @@ class LiveStereoHandObserver(Node):
         self._right_image_subscriber = None
         self._synchronizer = None
         self._composite_subscription = None
+        self._capture = None
+        self._capture_timer = None
 
         self._latest_source_nanoseconds = {"left": None, "right": None}
         self._latest_arrivals = {"left": None, "right": None}
@@ -251,6 +259,8 @@ class LiveStereoHandObserver(Node):
 
         if self._input_mode == "stereo_topics":
             input_description = self._configure_stereo_topic_input()
+        elif self._input_mode == "direct":
+            input_description = self._configure_direct_input()
         else:
             input_description = self._configure_composite_input()
 
@@ -292,6 +302,17 @@ class LiveStereoHandObserver(Node):
             "stereo_right_optical_frame",
         )
         self.declare_parameter("swap_halves", False)
+        # Direct-capture mode: the observer opens the device itself, so the
+        # 7.4 MB raw composite never crosses ROS transport.
+        self.declare_parameter(
+            "capture_device",
+            "/dev/v4l/by-id/"
+            "usb-DECXIN_DECXIN_Camera_01.00.00-video-index0",
+        )
+        self.declare_parameter("capture_fourcc", "MJPG")
+        self.declare_parameter("capture_fps", 30.0)
+        self.declare_parameter("capture_buffer_size", 1)
+        self.declare_parameter("capture_period_sec", 0.005)
         self.declare_parameter(
             "left_image_topic",
             "/stereo/left/image_rect",
@@ -449,7 +470,8 @@ class LiveStereoHandObserver(Node):
             f"pairing {sync_description}"
         )
 
-    def _configure_composite_input(self):
+    def _read_composite_shape_parameters(self):
+        """Read the side-by-side frame geometry both split modes rely on."""
         self._expected_composite_width = _integer_parameter(
             self,
             "expected_composite_width",
@@ -465,9 +487,16 @@ class LiveStereoHandObserver(Node):
             "expected_composite_encoding",
         )
         self._swap_halves = _boolean_parameter(self, "swap_halves")
+
+    def _load_composite_calibration(self):
+        """Load per-eye calibration and rectification maps from file URLs.
+
+        Shared by the composite-topic and direct-capture modes: both split
+        one side-by-side frame into two calibrated halves, and only the
+        source of that frame differs.
+        """
         left_frame_id = _string_parameter(self, "left_frame_id")
         right_frame_id = _string_parameter(self, "right_frame_id")
-
         try:
             self._left_camera_info_manager = CameraInfoManager(
                 self,
@@ -520,6 +549,10 @@ class LiveStereoHandObserver(Node):
                 f"failed to load composite stereo calibration: {error}"
             ) from error
 
+    def _configure_composite_input(self):
+        self._read_composite_shape_parameters()
+        self._load_composite_calibration()
+
         composite_qos = QoSProfile(
             history=qos_profile_sensor_data.history,
             depth=1,
@@ -536,6 +569,152 @@ class LiveStereoHandObserver(Node):
             "waiting for one atomic composite image stream; "
             "left/right source timestamps are identical by transport"
         )
+
+    def _default_capture_factory(self):
+        """Open the composite device directly, keeping only newest frames."""
+        import cv2
+
+        device = _string_parameter(self, "capture_device")
+        capture = cv2.VideoCapture(device, cv2.CAP_V4L2)
+        if not capture.isOpened():
+            raise ValueError(f"could not open capture device: {device}")
+        fourcc = _string_parameter(self, "capture_fourcc")
+        if len(fourcc) != 4:
+            capture.release()
+            raise ValueError("capture_fourcc must be exactly four characters")
+        capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
+        capture.set(
+            cv2.CAP_PROP_FRAME_WIDTH,
+            self._expected_composite_width,
+        )
+        capture.set(
+            cv2.CAP_PROP_FRAME_HEIGHT,
+            self._expected_composite_height,
+        )
+        capture.set(cv2.CAP_PROP_FPS, _positive_parameter(self, "capture_fps"))
+        # A one-frame driver buffer is what keeps read() returning the
+        # newest frame instead of walking a backlog. Measured on the DECXIN
+        # bench, read() stays near 25 ms, so stamping at read time is a fair
+        # approximation of capture time.
+        capture.set(
+            cv2.CAP_PROP_BUFFERSIZE,
+            _integer_parameter(self, "capture_buffer_size"),
+        )
+        return capture
+
+    def _configure_direct_input(self):
+        self._read_composite_shape_parameters()
+        self._load_composite_calibration()
+
+        factory = self._capture_factory
+        if factory is None:
+            factory = self._default_capture_factory
+        self._capture = factory()
+        for name in ("read", "release"):
+            if not callable(getattr(self._capture, name, None)):
+                raise TypeError(
+                    f"capture_factory must return an object with {name}()"
+                )
+
+        # A short period lets the blocking read/process cycle self-pace:
+        # rclpy does not stack timer callbacks, so the loop simply runs
+        # back to back while leaving room for the watchdog to fire.
+        self._capture_timer = self.create_timer(
+            _positive_parameter(self, "capture_period_sec"),
+            self._on_capture_tick,
+        )
+        return (
+            "capturing the composite stream directly from "
+            f"{_string_parameter(self, 'capture_device')}; "
+            "raw frames never cross ROS transport"
+        )
+
+    def _on_capture_tick(self):
+        """Read one composite frame and run the shared atomic pipeline."""
+        try:
+            ok, frame = self._capture.read()
+        except Exception:
+            ok, frame = False, None
+        arrival = time.monotonic()
+        if not ok or frame is None:
+            self._latest_arrivals["left"] = arrival
+            self._latest_arrivals["right"] = arrival
+            self._last_pair_arrival = arrival
+            source_nanoseconds = self.get_clock().now().nanoseconds
+            self._publish_invalid(
+                "capture_read_failed",
+                source_nanoseconds,
+                source_nanoseconds,
+            )
+            return
+
+        # Direct capture owns its own timestamp; read() has just returned,
+        # so this is the closest honest estimate of exposure time.
+        source_nanoseconds = self.get_clock().now().nanoseconds
+        self._latest_source_nanoseconds["left"] = source_nanoseconds
+        self._latest_source_nanoseconds["right"] = source_nanoseconds
+        self._latest_arrivals["left"] = arrival
+        self._latest_arrivals["right"] = arrival
+        self._last_pair_arrival = arrival
+
+        try:
+            array = np.asarray(frame)
+            if array.ndim != 3 or array.shape[2] != 3:
+                raise ValueError("captured frame must be a colour image")
+            if (
+                array.shape[1] != self._expected_composite_width
+                or array.shape[0] != self._expected_composite_height
+            ):
+                self._publish_invalid(
+                    "composite_image_size_mismatch",
+                    source_nanoseconds,
+                    source_nanoseconds,
+                )
+                return
+            import cv2
+
+            composite_rgb = cv2.cvtColor(array, cv2.COLOR_BGR2RGB)
+            left_raw, right_raw = split_side_by_side(
+                composite_rgb,
+                self._expected_composite_width,
+                self._expected_composite_height,
+                swap_halves=self._swap_halves,
+            )
+        except Exception:
+            self._publish_invalid(
+                "image_conversion_error",
+                source_nanoseconds,
+                source_nanoseconds,
+            )
+            return
+
+        try:
+            left_rgb, right_rgb = rectify_pair(
+                left_raw,
+                right_raw,
+                self._left_rectification_maps,
+                self._right_rectification_maps,
+            )
+        except Exception:
+            self._publish_invalid(
+                "rectification_error",
+                source_nanoseconds,
+                source_nanoseconds,
+            )
+            return
+
+        try:
+            self._process_rgb_pair(
+                left_rgb,
+                right_rgb,
+                left_nanoseconds=source_nanoseconds,
+                right_nanoseconds=source_nanoseconds,
+            )
+        finally:
+            completion = time.monotonic()
+            self._latest_arrivals["left"] = completion
+            self._latest_arrivals["right"] = completion
+            self._last_pair_arrival = completion
 
     def _on_left_camera_info(self, message):
         self._left_info = message
@@ -1044,12 +1223,18 @@ class LiveStereoHandObserver(Node):
             self._last_reason = result.reason
 
     def destroy_node(self):
-        """Release detector resources before destroying the ROS node."""
+        """Release detector and capture resources before destroying."""
         for detector in getattr(self, "_detectors", ()):
             close = getattr(detector, "close", None)
             if callable(close):
                 close()
         self._detectors = ()
+        capture = getattr(self, "_capture", None)
+        if capture is not None:
+            release = getattr(capture, "release", None)
+            if callable(release):
+                release()
+            self._capture = None
         return super().destroy_node()
 
 

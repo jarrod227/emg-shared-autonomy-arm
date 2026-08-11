@@ -420,6 +420,208 @@ class CompositeObserverGraph:
         self.helper.destroy_node()
 
 
+class FakeCapture:
+    """Stand in for cv2.VideoCapture so direct mode needs no hardware."""
+
+    def __init__(self, width, height):
+        self._width = width
+        self._height = height
+        self.reads = 0
+        self.released = False
+        self.ok = True
+        self.frame_shape = None
+        self.raise_on_read = None
+
+    def read(self):
+        """Return one BGR composite frame, mirroring OpenCV's contract."""
+        self.reads += 1
+        if self.raise_on_read is not None:
+            raise self.raise_on_read
+        if not self.ok:
+            return False, None
+        height, width = self.frame_shape or (self._height, self._width)
+        return True, np.zeros((height, width, 3), dtype=np.uint8)
+
+    def release(self):
+        """Record that the device was handed back."""
+        self.released = True
+
+
+class DirectObserverGraph:
+    """One direct-capture observer plus an injected fake device."""
+
+    output_topic = "/test_direct_hand_observation"
+
+    def __init__(self, tmp_path, *, required_frames=3, capture=None):
+        self.detectors = {
+            "left": MutableDetector(keypoint(LEFT_PROJECTION)),
+            "right": MutableDetector(keypoint(RIGHT_PROJECTION)),
+        }
+        self.capture = capture or FakeCapture(WIDTH * 2, HEIGHT)
+        values = {
+            "input_mode": "direct",
+            "capture_device": "/dev/null",
+            "left_camera_info_url": write_camera_info(
+                tmp_path / "left.yaml", "test_direct_left", LEFT_PROJECTION
+            ),
+            "right_camera_info_url": write_camera_info(
+                tmp_path / "right.yaml", "test_direct_right", RIGHT_PROJECTION
+            ),
+            "left_camera_name": "test_direct_left",
+            "right_camera_name": "test_direct_right",
+            "expected_composite_width": WIDTH * 2,
+            "expected_composite_height": HEIGHT,
+            "left_frame_id": "left_optical",
+            "right_frame_id": "right_optical",
+            "observation_topic": self.output_topic,
+            "fallback_frame_id": "fallback_left_optical",
+            "delivery_center_x": float(GROUND_TRUTH[0]),
+            "delivery_center_y": float(GROUND_TRUTH[1]),
+            "delivery_center_z": float(GROUND_TRUTH[2]),
+            "delivery_radius_m": 0.2,
+            "required_stable_frames": required_frames,
+            "max_pair_skew_sec": 0.02,
+            "max_age_sec": 5.0,
+            "watchdog_timeout_sec": 0.5,
+            "capture_period_sec": 0.01,
+        }
+        self.observer = LiveStereoHandObserver(
+            detector_factory=lambda side: self.detectors[side],
+            capture_factory=lambda: self.capture,
+            parameter_overrides=[
+                Parameter(name, value=value)
+                for name, value in values.items()
+            ],
+        )
+        self.helper = rclpy.create_node("direct_observer_test_helper")
+        self.messages = []
+        self.helper.create_subscription(
+            HandObservation,
+            self.output_topic,
+            self.messages.append,
+            10,
+        )
+
+    @property
+    def nodes(self):
+        """Return nodes that need executor progress."""
+        return (self.observer, self.helper)
+
+    def wait_for(self, count):
+        """Spin until the capture timer has produced count observations."""
+        return spin_until(self.nodes, lambda: len(self.messages) >= count)
+
+    def destroy(self):
+        """Destroy nodes and their short-lived ROS entities."""
+        self.observer.destroy_node()
+        self.helper.destroy_node()
+
+
+def test_direct_capture_drives_the_pipeline_without_ros_transport(tmp_path):
+    rclpy.init()
+    test_graph = DirectObserverGraph(tmp_path, required_frames=3)
+    try:
+        assert test_graph.wait_for(3), "capture timer produced no observations"
+        assert test_graph.capture.reads >= 3
+        assert test_graph.messages[-1].valid
+        assert test_graph.messages[-1].header.frame_id == "left_optical"
+        np.testing.assert_allclose(
+            [
+                test_graph.messages[-1].point.x,
+                test_graph.messages[-1].point.y,
+                test_graph.messages[-1].point.z,
+            ],
+            GROUND_TRUTH,
+            atol=1e-6,
+        )
+    finally:
+        test_graph.destroy()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+def test_direct_capture_stamps_each_frame_with_node_time(tmp_path):
+    rclpy.init()
+    test_graph = DirectObserverGraph(tmp_path, required_frames=1)
+    try:
+        assert test_graph.wait_for(2)
+        stamps = [
+            message.header.stamp.sec * 1_000_000_000
+            + message.header.stamp.nanosec
+            for message in test_graph.messages[:2]
+        ]
+        # Direct capture owns its clock, so stamps must advance rather than
+        # repeat the way a copied composite stamp could.
+        assert stamps[1] > stamps[0]
+        assert all(message.pair_skew_sec == 0.0 for message in
+                   test_graph.messages[:2])
+    finally:
+        test_graph.destroy()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_reason"),
+    (
+        ("not_ok", "capture_read_failed"),
+        ("raises", "capture_read_failed"),
+        ("wrong_size", "composite_image_size_mismatch"),
+    ),
+)
+def test_direct_capture_failures_publish_explicit_invalid(
+    tmp_path,
+    failure,
+    expected_reason,
+):
+    rclpy.init()
+    capture = FakeCapture(WIDTH * 2, HEIGHT)
+    if failure == "not_ok":
+        capture.ok = False
+    elif failure == "raises":
+        capture.raise_on_read = RuntimeError("device disappeared")
+    else:
+        capture.frame_shape = (HEIGHT, WIDTH * 2 - 4)
+    test_graph = DirectObserverGraph(
+        tmp_path,
+        required_frames=1,
+        capture=capture,
+    )
+    try:
+        assert test_graph.wait_for(1)
+        assert not test_graph.messages[-1].valid
+        assert test_graph.observer._last_reason == expected_reason
+    finally:
+        test_graph.destroy()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+def test_direct_capture_device_is_released_on_shutdown(tmp_path):
+    rclpy.init()
+    test_graph = DirectObserverGraph(tmp_path, required_frames=1)
+    try:
+        assert test_graph.wait_for(1)
+    finally:
+        test_graph.destroy()
+        if rclpy.ok():
+            rclpy.shutdown()
+    assert test_graph.capture.released
+
+
+def test_capture_factory_contract_is_enforced(tmp_path):
+    rclpy.init()
+    try:
+        with pytest.raises(TypeError, match="read"):
+            DirectObserverGraph(
+                tmp_path,
+                capture=object(),
+            )
+    finally:
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
 @pytest.fixture
 def graph():
     """Provide one isolated ROS graph per test."""
