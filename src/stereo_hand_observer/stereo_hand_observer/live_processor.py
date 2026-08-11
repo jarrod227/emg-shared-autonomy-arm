@@ -1,10 +1,56 @@
 """ROS-independent processing of one synchronized live stereo frame pair."""
 
+import math
+import operator
+
 from stereo_hand_observer.keypoint_detector import HandKeypointDetection
 from stereo_hand_observer.pipeline import (
     StereoHandPipeline,
     StereoKeypointPair,
 )
+
+
+def _source_timestamp_ms(source_time_sec, source_time_nanoseconds=None):
+    if source_time_nanoseconds is not None:
+        if isinstance(source_time_nanoseconds, bool):
+            raise ValueError(
+                "source time nanoseconds must be a non-negative integer"
+            )
+        try:
+            source_time_nanoseconds = operator.index(
+                source_time_nanoseconds
+            )
+        except TypeError as error:
+            raise ValueError(
+                "source time nanoseconds must be a non-negative integer"
+            ) from error
+        if source_time_nanoseconds < 0:
+            raise ValueError(
+                "source time nanoseconds must be a non-negative integer"
+            )
+        return source_time_nanoseconds // 1_000_000
+    source_time_sec = float(source_time_sec)
+    if not math.isfinite(source_time_sec) or source_time_sec < 0.0:
+        raise ValueError("source time must be finite and non-negative")
+    return math.floor(source_time_sec * 1000.0)
+
+
+def _detect(
+    detector,
+    rgb_image,
+    source_time_sec,
+    source_time_nanoseconds,
+):
+    detect_at = getattr(detector, "detect_at", None)
+    if callable(detect_at):
+        return detect_at(
+            rgb_image,
+            _source_timestamp_ms(
+                source_time_sec,
+                source_time_nanoseconds,
+            ),
+        )
+    return detector.detect(rgb_image)
 
 
 class StereoFrameProcessor:
@@ -39,11 +85,23 @@ class StereoFrameProcessor:
         left_source_time_sec,
         right_source_time_sec,
         now_sec,
+        left_source_time_nanoseconds=None,
+        right_source_time_nanoseconds=None,
     ):
         """Detect, associate, triangulate, and gate one image pair."""
         try:
-            left_detection = self._left_detector.detect(left_rgb_image)
-            right_detection = self._right_detector.detect(right_rgb_image)
+            left_detection = _detect(
+                self._left_detector,
+                left_rgb_image,
+                left_source_time_sec,
+                left_source_time_nanoseconds,
+            )
+            right_detection = _detect(
+                self._right_detector,
+                right_rgb_image,
+                right_source_time_sec,
+                right_source_time_nanoseconds,
+            )
         except Exception:
             return self._pipeline.invalidate(
                 "detector_error",

@@ -114,6 +114,8 @@ def test_pipeline_recovers_point_and_becomes_valid_on_third_pair():
     assert results[2].confidence == 0.8
     assert results[2].pair_skew_sec == pytest.approx(0.01)
     assert results[2].source_time_sec == pytest.approx(10.06)
+    assert results[2].diagnostic.startswith("epi=0.000px reproj=0.000px")
+    assert "xyz=(0.400, 0.300, 1.000)m" in results[2].diagnostic
 
 
 def test_excessive_pair_skew_is_rejected_before_stability_gate():
@@ -158,6 +160,8 @@ def test_mismatched_keypoints_are_rejected_by_geometry():
 
     assert not result.valid
     assert result.reason == "geometry_rejected"
+    assert "epipolar-error" in result.diagnostic
+    assert "8.000 px" in result.diagnostic
 
 
 def test_lowest_view_confidence_controls_output_and_validity():

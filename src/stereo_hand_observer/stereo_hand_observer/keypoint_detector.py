@@ -50,6 +50,7 @@ class MediaPipeHandKeypointDetector:
         min_detection_confidence=0.7,
         min_hand_presence_confidence=0.7,
         min_tracking_confidence=0.7,
+        running_mode="image",
         mediapipe_module=None,
     ):
         if (
@@ -65,14 +66,34 @@ class MediaPipeHandKeypointDetector:
             min_detection_confidence=min_detection_confidence,
             min_hand_presence_confidence=min_hand_presence_confidence,
             min_tracking_confidence=min_tracking_confidence,
+            running_mode=running_mode,
             mediapipe_module=mediapipe_module,
         )
+        self._last_hand = None
+
+    @property
+    def last_hand(self):
+        """Return the complete hand from the latest detect() call, if any."""
+        return self._last_hand
 
     def detect(self, rgb_image):
         """Return one bounded pixel or None when no hand is detected."""
-        hand = self._hand_detector.detect(rgb_image)
+        return self._detect(rgb_image)
+
+    def detect_at(self, rgb_image, timestamp_ms):
+        """Detect one keypoint using a source timestamp when supported."""
+        return self._detect(rgb_image, timestamp_ms=timestamp_ms)
+
+    def _detect(self, rgb_image, *, timestamp_ms=None):
+        """Share image- and timestamp-driven complete-hand adaptation."""
+        self._last_hand = None
+        hand = self._hand_detector.detect(
+            rgb_image,
+            timestamp_ms=timestamp_ms,
+        )
         if hand is None:
             return None
+        self._last_hand = hand
 
         image = np.asarray(rgb_image)
         height, width = image.shape[:2]
@@ -88,4 +109,5 @@ class MediaPipeHandKeypointDetector:
 
     def close(self):
         """Release MediaPipe resources; safe to call more than once."""
+        self._last_hand = None
         self._hand_detector.close()

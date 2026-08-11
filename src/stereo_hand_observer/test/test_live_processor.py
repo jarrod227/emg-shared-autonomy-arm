@@ -34,6 +34,29 @@ class FakeDetector:
         return self._result
 
 
+class TimestampDetector(FakeDetector):
+    """Record timestamp-aware calls while reusing the fake result."""
+
+    def __init__(self, result=None, error=None):
+        super().__init__(result, error)
+        self.timestamps = []
+
+    def detect_at(self, image, timestamp_ms):
+        """Record one source timestamp before returning the result."""
+        self.timestamps.append(timestamp_ms)
+        return self.detect(image)
+
+
+class StrictTimestampDetector(TimestampDetector):
+    """Mirror MediaPipe VIDEO's strictly increasing timestamp rule."""
+
+    def detect_at(self, image, timestamp_ms):
+        """Reject a timestamp that does not advance beyond the last call."""
+        if self.timestamps and timestamp_ms <= self.timestamps[-1]:
+            raise ValueError("timestamp_ms must increase strictly")
+        return super().detect_at(image, timestamp_ms)
+
+
 def detection(projection, *, confidence=0.9, handedness="right"):
     """Create one detector result projected from the known 3D point."""
     return HandKeypointDetection(
@@ -43,9 +66,9 @@ def detection(projection, *, confidence=0.9, handedness="right"):
     )
 
 
-def make_processor(left_detection, right_detection, *, left_error=None):
-    """Create a one-frame gate around two fake view detectors."""
-    pipeline = StereoHandPipeline(
+def make_pipeline():
+    """Create a one-frame stereo hand pipeline for processor tests."""
+    return StereoHandPipeline(
         LEFT_PROJECTION,
         RIGHT_PROJECTION,
         FUNDAMENTAL_MATRIX,
@@ -59,8 +82,12 @@ def make_processor(left_detection, right_detection, *, left_error=None):
             max_point_step_m=0.05,
         ),
     )
+
+
+def make_processor(left_detection, right_detection, *, left_error=None):
+    """Create a one-frame gate around two fake view detectors."""
     return StereoFrameProcessor(
-        pipeline,
+        make_pipeline(),
         FakeDetector(left_detection, left_error),
         FakeDetector(right_detection),
     )
@@ -74,6 +101,8 @@ def process(processor):
         left_source_time_sec=10.0,
         right_source_time_sec=10.005,
         now_sec=10.01,
+        left_source_time_nanoseconds=10_000_000_123,
+        right_source_time_nanoseconds=10_005_000_456,
     )
 
 
@@ -89,6 +118,55 @@ def test_corresponding_live_detections_recover_stable_point():
     np.testing.assert_allclose(result.point, GROUND_TRUTH)
     assert result.confidence == 0.8
     assert result.reason == "stable"
+
+
+def test_timestamp_aware_detectors_receive_each_view_source_time():
+    left_detector = TimestampDetector(detection(LEFT_PROJECTION))
+    right_detector = TimestampDetector(detection(RIGHT_PROJECTION))
+    processor = StereoFrameProcessor(
+        make_pipeline(),
+        left_detector,
+        right_detector,
+    )
+
+    result = process(processor)
+
+    assert result.valid
+    assert left_detector.timestamps == [10000]
+    assert right_detector.timestamps == [10005]
+
+
+def test_same_millisecond_fails_closed_then_new_millisecond_recovers():
+    left_detector = StrictTimestampDetector(detection(LEFT_PROJECTION))
+    right_detector = StrictTimestampDetector(detection(RIGHT_PROJECTION))
+    processor = StereoFrameProcessor(
+        make_pipeline(),
+        left_detector,
+        right_detector,
+    )
+
+    def process_at(source_nanoseconds):
+        source_sec = source_nanoseconds / 1e9
+        return processor.process(
+            RGB_IMAGE,
+            RGB_IMAGE,
+            left_source_time_sec=source_sec,
+            right_source_time_sec=source_sec,
+            now_sec=source_sec + 0.01,
+            left_source_time_nanoseconds=source_nanoseconds,
+            right_source_time_nanoseconds=source_nanoseconds,
+        )
+
+    first = process_at(10_000_100_000)
+    same_millisecond = process_at(10_000_900_000)
+    recovered = process_at(10_001_100_000)
+
+    assert first.valid
+    assert not same_millisecond.valid
+    assert same_millisecond.reason == "detector_error"
+    assert recovered.valid
+    assert left_detector.timestamps == [10000, 10001]
+    assert right_detector.timestamps == [10000, 10001]
 
 
 def test_missing_detection_is_an_explicit_invalid_result():

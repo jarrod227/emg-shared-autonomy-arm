@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import math
+import operator
 from pathlib import Path
 
 import numpy as np
@@ -49,6 +50,33 @@ def _rgb_image(image):
     if image.shape[0] < 1 or image.shape[1] < 1:
         raise ValueError("rgb_image dimensions must be positive")
     return image
+
+
+def _running_mode(value):
+    if not isinstance(value, str):
+        raise ValueError("running_mode must be 'image' or 'video'")
+    value = value.strip().lower()
+    if value not in {"image", "video"}:
+        raise ValueError("running_mode must be 'image' or 'video'")
+    return value
+
+
+def _video_timestamp_ms(value):
+    if isinstance(value, bool):
+        raise ValueError(
+            "timestamp_ms must be a non-negative integer in video mode"
+        )
+    try:
+        value = operator.index(value)
+    except TypeError as error:
+        raise ValueError(
+            "timestamp_ms must be a non-negative integer in video mode"
+        ) from error
+    if value < 0:
+        raise ValueError(
+            "timestamp_ms must be a non-negative integer in video mode"
+        )
+    return value
 
 
 @dataclass(frozen=True)
@@ -117,6 +145,7 @@ class MediaPipeHandDetector:
         min_detection_confidence=0.7,
         min_hand_presence_confidence=0.7,
         min_tracking_confidence=0.7,
+        running_mode="image",
         mediapipe_module=None,
     ):
         model_path = Path(model_path)
@@ -142,6 +171,8 @@ class MediaPipeHandDetector:
             presence_floor,
             tracking_floor,
         )
+        self._running_mode = _running_mode(running_mode)
+        self._last_timestamp_ms = None
 
         if mediapipe_module is None:
             try:
@@ -156,9 +187,13 @@ class MediaPipeHandDetector:
         base_options = mediapipe_module.tasks.BaseOptions(
             model_asset_path=str(model_path)
         )
+        mediapipe_running_mode = {
+            "image": mediapipe_module.tasks.vision.RunningMode.IMAGE,
+            "video": mediapipe_module.tasks.vision.RunningMode.VIDEO,
+        }[self._running_mode]
         options = mediapipe_module.tasks.vision.HandLandmarkerOptions(
             base_options=base_options,
-            running_mode=mediapipe_module.tasks.vision.RunningMode.IMAGE,
+            running_mode=mediapipe_running_mode,
             num_hands=2,
             min_hand_detection_confidence=detection_floor,
             min_hand_presence_confidence=presence_floor,
@@ -170,7 +205,7 @@ class MediaPipeHandDetector:
             )
         )
 
-    def detect(self, rgb_image):
+    def detect(self, rgb_image, *, timestamp_ms=None):
         """Return one complete hand or None for missing/ambiguous hands."""
         if self._landmarker is None:
             raise RuntimeError("detector is closed")
@@ -180,7 +215,22 @@ class MediaPipeHandDetector:
             image_format=self._mediapipe.ImageFormat.SRGB,
             data=np.ascontiguousarray(image),
         )
-        result = self._landmarker.detect(media_image)
+        if self._running_mode == "video":
+            timestamp_ms = _video_timestamp_ms(timestamp_ms)
+            if (
+                self._last_timestamp_ms is not None
+                and timestamp_ms <= self._last_timestamp_ms
+            ):
+                raise ValueError(
+                    "timestamp_ms must increase strictly in video mode"
+                )
+            result = self._landmarker.detect_for_video(
+                media_image,
+                timestamp_ms,
+            )
+            self._last_timestamp_ms = timestamp_ms
+        else:
+            result = self._landmarker.detect(media_image)
         hands = tuple(getattr(result, "hand_landmarks", ()) or ())
         if len(hands) != 1:
             return None

@@ -16,6 +16,9 @@ def fake_mediapipe(result):
     class FakeLandmarker:
         options = None
         closed = False
+        current_result = result
+        video_timestamps = []
+        detect_count = 0
 
         @classmethod
         def create_from_options(cls, options):
@@ -23,7 +26,12 @@ def fake_mediapipe(result):
             return cls()
 
         def detect(self, _image):
-            return result
+            type(self).detect_count += 1
+            return type(self).current_result
+
+        def detect_for_video(self, _image, timestamp_ms):
+            type(self).video_timestamps.append(timestamp_ms)
+            return type(self).current_result
 
         def close(self):
             type(self).closed = True
@@ -38,7 +46,7 @@ def fake_mediapipe(result):
         tasks=SimpleNamespace(
             BaseOptions=KeywordOptions,
             vision=SimpleNamespace(
-                RunningMode=SimpleNamespace(IMAGE="image"),
+                RunningMode=SimpleNamespace(IMAGE="image", VIDEO="video"),
                 HandLandmarkerOptions=KeywordOptions,
                 HandLandmarker=FakeLandmarker,
             ),
@@ -92,7 +100,58 @@ def test_unique_hand_returns_configured_pixel_and_quality_floor(tmp_path):
     assert detection.pixel == (160.0, 240.0)
     assert detection.confidence == 0.7
     assert detection.handedness == "right"
+    assert detector.last_hand is not None
+    assert len(detector.last_hand.landmarks) == 21
     assert landmarker_class.options.num_hands == 2
+
+
+def test_video_mode_forwards_source_timestamp(tmp_path):
+    detector, landmarker_class = make_detector(
+        tmp_path,
+        result_with_hands(1),
+        running_mode="video",
+    )
+
+    detection = detector.detect_at(
+        np.zeros((480, 640, 3), dtype=np.uint8),
+        1234,
+    )
+
+    assert detection.pixel == (160.0, 240.0)
+    assert landmarker_class.options.running_mode == "video"
+    assert landmarker_class.video_timestamps == [1234]
+
+
+def test_image_mode_detect_at_keeps_regular_inference_path(tmp_path):
+    detector, landmarker_class = make_detector(
+        tmp_path,
+        result_with_hands(1),
+    )
+
+    detection = detector.detect_at(
+        np.zeros((480, 640, 3), dtype=np.uint8),
+        1234,
+    )
+
+    assert detection is not None
+    assert landmarker_class.options.running_mode == "image"
+    assert landmarker_class.detect_count == 1
+    assert landmarker_class.video_timestamps == []
+
+
+def test_last_hand_is_cleared_when_latest_detection_is_missing(tmp_path):
+    detector, landmarker_class = make_detector(
+        tmp_path,
+        result_with_hands(1),
+    )
+
+    assert detector.last_hand is None
+    assert detector.detect(np.zeros((48, 64, 3), dtype=np.uint8)) is not None
+    assert detector.last_hand is not None
+
+    landmarker_class.current_result = result_with_hands(0)
+    assert detector.detect(np.zeros((48, 64, 3), dtype=np.uint8)) is None
+    assert detector.last_hand is None
 
 
 def test_configured_landmark_is_selected_from_complete_hand(tmp_path):
@@ -136,5 +195,6 @@ def test_closed_detector_rejects_further_inference(tmp_path):
     detector.close()
 
     assert landmarker_class.closed
+    assert detector.last_hand is None
     with pytest.raises(RuntimeError, match="closed"):
         detector.detect(np.zeros((8, 8, 3), dtype=np.uint8))

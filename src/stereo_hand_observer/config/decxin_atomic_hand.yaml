@@ -1,0 +1,56 @@
+/stereo/composite/decxin_gscam:
+  ros__parameters:
+    gscam_config: >-
+      v4l2src
+      device=/dev/v4l/by-id/usb-DECXIN_DECXIN_Camera_01.00.00-video-index0
+      do-timestamp=true !
+      image/jpeg,width=2560,height=960,framerate=30/1 !
+      jpegdec ! videoconvert ! videorate drop-only=true max-rate=5 !
+      video/x-raw,format=RGB,framerate=5/1
+    camera_name: decxin_composite
+    frame_id: decxin_composite_optical_frame
+    image_encoding: rgb8
+    use_gst_timestamps: true
+    sync_sink: false
+
+/live_stereo_hand_observer:
+  ros__parameters:
+    input_mode: composite
+    composite_image_topic: /stereo/composite/camera/image_raw
+    left_camera_info_url: >-
+      package://stereo_hand_observer/config/decxin_left.yaml
+    right_camera_info_url: >-
+      package://stereo_hand_observer/config/decxin_right.yaml
+    left_camera_name: decxin_stereo_left_1280x960
+    right_camera_name: decxin_stereo_right_1280x960
+    expected_composite_width: 2560
+    expected_composite_height: 960
+    expected_composite_encoding: rgb8
+    left_frame_id: stereo_left_optical_frame
+    right_frame_id: stereo_right_optical_frame
+    swap_halves: false
+
+    observation_topic: /hand_observation
+    debug_image_topic: /stereo/hand_debug
+    debug_image_scale: 0.5
+    fallback_frame_id: stereo_left_optical_frame
+    model_path: ""
+    landmark_index: 9
+    min_detection_confidence: 0.7
+    min_hand_presence_confidence: 0.7
+    min_tracking_confidence: 0.7
+    mediapipe_running_mode: video
+    require_handedness_match: true
+
+    watchdog_timeout_sec: 0.75
+    delivery_center_x: 0.4
+    delivery_center_y: 0.3
+    delivery_center_z: 1.0
+    delivery_radius_m: 0.5
+    required_stable_frames: 3
+    min_confidence: 0.7
+    max_pair_skew_sec: 0.02
+    max_epipolar_error_px: 1.5
+    max_reprojection_error_px: 1.5
+    max_age_sec: 0.2
+    max_point_step_m: 0.05

@@ -22,6 +22,7 @@ def fake_mediapipe(result):
         closed = False
         create_count = 0
         detect_count = 0
+        video_timestamps = []
 
         @classmethod
         def create_from_options(cls, options):
@@ -31,6 +32,10 @@ def fake_mediapipe(result):
 
         def detect(self, _image):
             type(self).detect_count += 1
+            return result
+
+        def detect_for_video(self, _image, timestamp_ms):
+            type(self).video_timestamps.append(timestamp_ms)
             return result
 
         def close(self):
@@ -46,7 +51,7 @@ def fake_mediapipe(result):
         tasks=SimpleNamespace(
             BaseOptions=KeywordOptions,
             vision=SimpleNamespace(
-                RunningMode=SimpleNamespace(IMAGE="image"),
+                RunningMode=SimpleNamespace(IMAGE="image", VIDEO="video"),
                 HandLandmarkerOptions=KeywordOptions,
                 HandLandmarker=FakeLandmarker,
             ),
@@ -79,7 +84,7 @@ def result_with_hands(count, *, landmark_count=21):
     )
 
 
-def make_detector(tmp_path, result):
+def make_detector(tmp_path, result, **detector_options):
     """Create a full-hand detector around a fake model and task API."""
     model_path = tmp_path / "hand_landmarker.task"
     model_path.write_bytes(b"fake model")
@@ -90,6 +95,7 @@ def make_detector(tmp_path, result):
         min_hand_presence_confidence=0.7,
         min_tracking_confidence=0.9,
         mediapipe_module=module,
+        **detector_options,
     )
     return detector, landmarker_class
 
@@ -114,8 +120,67 @@ def test_unique_hand_returns_complete_21_landmark_contract(tmp_path):
     assert first.handedness == "right"
     assert second == first
     assert landmarker_class.options.num_hands == 2
+    assert landmarker_class.options.running_mode == "image"
     assert landmarker_class.create_count == 1
     assert landmarker_class.detect_count == 2
+
+
+def test_video_mode_uses_timestamped_tracking_inference(tmp_path):
+    detector, landmarker_class = make_detector(
+        tmp_path,
+        result_with_hands(1),
+        running_mode="video",
+    )
+    image = np.zeros((48, 64, 3), dtype=np.uint8)
+
+    first = detector.detect(image, timestamp_ms=1000)
+    second = detector.detect(image, timestamp_ms=1200)
+
+    assert first == second
+    assert landmarker_class.options.running_mode == "video"
+    assert landmarker_class.detect_count == 0
+    assert landmarker_class.video_timestamps == [1000, 1200]
+
+
+@pytest.mark.parametrize("timestamp_ms", (None, -1, 1.5, True))
+def test_video_mode_rejects_invalid_timestamps(tmp_path, timestamp_ms):
+    detector, landmarker_class = make_detector(
+        tmp_path,
+        result_with_hands(1),
+        running_mode="video",
+    )
+
+    with pytest.raises(ValueError, match="timestamp_ms"):
+        detector.detect(
+            np.zeros((48, 64, 3), dtype=np.uint8),
+            timestamp_ms=timestamp_ms,
+        )
+    assert landmarker_class.video_timestamps == []
+
+
+def test_video_mode_rejects_repeated_or_older_timestamps(tmp_path):
+    detector, landmarker_class = make_detector(
+        tmp_path,
+        result_with_hands(1),
+        running_mode="video",
+    )
+    image = np.zeros((48, 64, 3), dtype=np.uint8)
+    detector.detect(image, timestamp_ms=1000)
+
+    for timestamp_ms in (1000, 999):
+        with pytest.raises(ValueError, match="increase strictly"):
+            detector.detect(image, timestamp_ms=timestamp_ms)
+    assert landmarker_class.video_timestamps == [1000]
+
+
+@pytest.mark.parametrize("running_mode", (None, "stream", 1))
+def test_unknown_running_mode_is_rejected(tmp_path, running_mode):
+    with pytest.raises(ValueError, match="running_mode"):
+        make_detector(
+            tmp_path,
+            result_with_hands(1),
+            running_mode=running_mode,
+        )
 
 
 @pytest.mark.parametrize("hand_count", (0, 2))

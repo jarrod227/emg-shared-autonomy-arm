@@ -38,6 +38,7 @@ class PipelineResult:
     source_time_sec: float
     stable_frames: int
     reason: str
+    diagnostic: str = ""
 
 
 class StereoHandPipeline:
@@ -86,6 +87,7 @@ class StereoHandPipeline:
         pair_skew_sec,
         reprojection_error_px,
         source_time_sec,
+        diagnostic="",
     ):
         return PipelineResult(
             valid=decision.valid,
@@ -96,6 +98,7 @@ class StereoHandPipeline:
             source_time_sec=source_time_sec,
             stable_frames=decision.stable_frames,
             reason=decision.reason,
+            diagnostic=diagnostic,
         )
 
     def invalidate(
@@ -198,7 +201,7 @@ class StereoHandPipeline:
                 ),
                 min_depth_m=self._min_depth_m,
             )
-        except (StereoGeometryError, TypeError, ValueError):
+        except (StereoGeometryError, TypeError, ValueError) as error:
             decision = self._gate.invalidate("geometry_rejected")
             return self._result(
                 decision,
@@ -206,6 +209,7 @@ class StereoHandPipeline:
                 pair_skew_sec=pair_skew_sec,
                 reprojection_error_px=0.0,
                 source_time_sec=source_time_sec,
+                diagnostic=str(error),
             )
 
         reprojection_error_px = (
@@ -225,4 +229,12 @@ class StereoHandPipeline:
             pair_skew_sec=pair_skew_sec,
             reprojection_error_px=reprojection_error_px,
             source_time_sec=source_time_sec,
+            diagnostic=(
+                f"epi={triangulation.epipolar_error_px:.3f}px "
+                f"reproj={reprojection_error_px:.3f}px "
+                "xyz=("
+                f"{triangulation.point[0]:.3f}, "
+                f"{triangulation.point[1]:.3f}, "
+                f"{triangulation.point[2]:.3f})m"
+            ),
         )
