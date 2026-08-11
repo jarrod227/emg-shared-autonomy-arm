@@ -242,6 +242,14 @@ used as factual support.
 | [Rolling Shutter Camera Synchronization with Sub-millisecond Accuracy](https://arxiv.org/abs/1902.11084) | May support the distinction between timestamp pairing and exposure synchronization for ordinary USB cameras. | Verify final venue and metadata; read the method/limitations against this project's stop-and-look use. |
 | [Multi-View Picking: Next-best-view Reaching for Improved Grasping in Clutter](https://arxiv.org/abs/1809.08564) | May establish active viewpoint selection as prior work for Objective 5 refinement/search. | Verify final publication record and identify the exact baseline claim needed. |
 | Hand-eye calibration primary source | Needed before formal claims about `base -> end_effector -> stereo_reference` calibration. | Select and read an appropriate primary method/comparison rather than citing an OpenCV API alone. |
+| [ISO 13482 — Personal care robots](https://www.iso.org/standard/53820.html) | The **nearest-scoped** standard for an assistive device, and therefore the one to read first — not the industrial pair below. | Confirm current edition and scope. Read which hazard classes actually apply to a fixed-delivery-zone handoff before any design text leans on it. |
+| [ISO/TS 15066 — Collaborative robots](https://www.iso.org/standard/62996.html) | Sometimes cited for power/force limiting in human-robot contact. | Scoped to **industrial** robots; confirm whether anything in it legitimately transfers to a service/assistive context, or whether citing it would overclaim. |
+| [ISO 10218-2 — Industrial robot systems and integration](https://www.iso.org/standard/73934.html) | Sometimes cited for whole-system safety integration. | Same industrial-scope caveat. Verify the 2025 edition's status and whether it explicitly excludes service/personal-care robots. |
+
+None of the three standards above may be used to imply that this project is
+safety-certified or safety-rated. The stereo hand cue is documented as an
+explicitly non-safety-rated signal, and that stays true regardless of which
+standard is eventually read.
 
 ## Maintenance checklist
 
