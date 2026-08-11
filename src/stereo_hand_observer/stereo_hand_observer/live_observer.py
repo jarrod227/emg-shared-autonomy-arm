@@ -359,7 +359,11 @@ class LiveStereoHandObserver(Node):
         self.declare_parameter("required_stable_frames", 3)
         self.declare_parameter("min_confidence", 0.7)
         self.declare_parameter("max_pair_skew_sec", 0.02)
-        self.declare_parameter("max_epipolar_error_px", 1.5)
+        # 1.5 px suits checkerboard corners, not learned hand keypoints:
+        # measured palm-knuckle epipolar error runs a ~2 px median with
+        # single-frame peaks near 9 px, so that limit starves the consensus
+        # median and measurably worsens the recovered 3D point.
+        self.declare_parameter("max_epipolar_error_px", 6.0)
         self.declare_parameter("max_reprojection_error_px", 1.5)
         self.declare_parameter("max_age_sec", 0.2)
         self.declare_parameter("max_point_step_m", 0.05)
