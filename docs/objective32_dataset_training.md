@@ -1,8 +1,10 @@
 # Objective 3.2 Dataset and GPU Training Guide
 
-> **Scope status (2026-08-09): optional legacy capability.** Objective 3.2 now
-> uses official COCO-pretrained instance-segmentation weights for `bottle`,
-> `cup`, and `cell_phone`. `medicine_box`, custom dataset collection, frozen-
+> **Scope status (2026-08-11): optional legacy capability.** Objective 3.2 now
+> uses official COCO-pretrained instance-segmentation weights for the
+> provisional runtime set `bottle`, `cup`, and `apple` at a `0.50` threshold.
+> Real-apple validation remains pending. `medicine_box`, custom dataset
+> collection, frozen-
 > bundle generation, and CUDA training are no longer MVP requirements. The
 > guide below documents the already implemented and tested four-class tooling;
 > use it only if measured real-camera performance later justifies fine-tuning.

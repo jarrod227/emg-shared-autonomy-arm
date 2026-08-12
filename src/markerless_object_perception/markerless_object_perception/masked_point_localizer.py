@@ -80,24 +80,34 @@ class MaskedPointLocalizer:
             raise ValueError('mask must be a boolean array')
 
         try:
-            xyz_array = np.asarray(xyz_points, dtype=np.float64)
+            xyz_array = np.asarray(xyz_points)
         except (TypeError, ValueError) as error:
             raise ValueError('xyz_points must contain numeric values') from error
         if xyz_array.ndim != 3 or xyz_array.shape[2] != 3:
             raise ValueError('xyz_points must have shape HxWx3')
         if xyz_array.shape[:2] != mask_array.shape:
             raise ValueError('mask and xyz_points image shapes must match')
+        if not np.issubdtype(xyz_array.dtype, np.number):
+            try:
+                xyz_array = np.asarray(xyz_points, dtype=np.float64)
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    'xyz_points must contain numeric values'
+                ) from error
 
         masked_point_count = int(np.count_nonzero(mask_array))
-        finite = np.all(np.isfinite(xyz_array), axis=2)
-        depth = xyz_array[:, :, 2]
+        masked_points = np.asarray(
+            xyz_array[mask_array],
+            dtype=np.float64,
+        )
+        finite = np.all(np.isfinite(masked_points), axis=1)
+        depth = masked_points[:, 2]
         valid_mask = (
-            mask_array
-            & finite
+            finite
             & (depth >= self._config.min_depth_m)
             & (depth <= self._config.max_depth_m)
         )
-        valid_points = xyz_array[valid_mask]
+        valid_points = masked_points[valid_mask]
         valid_point_count = int(valid_points.shape[0])
         if valid_point_count < self._config.min_valid_points:
             return _invalid_result(

@@ -77,6 +77,61 @@ def test_track_converts_masks_metadata_and_persistent_ids():
     assert model.calls[0]['retina_masks'] is True
     assert model.calls[0]['tracker'] == 'bytetrack.yaml'
     assert model.calls[0]['device'] == 'cpu'
+    assert model.calls[0]['imgsz'] == 480
+
+
+def test_track_filters_non_targets_for_current_closed_set():
+    masks = np.ones((3, 4, 6), dtype=np.float32)
+    model = FakeModel(
+        fake_result(
+            classes=[0, 1, 2],
+            confidences=[0.81, 0.87, 0.85],
+            track_ids=[48, 2, 20],
+            masks=masks,
+            names={0: 'apple', 1: 'tv', 2: 'bottle'},
+        )
+    )
+
+    detections = YoloInstanceSegmenter(model=model).track(
+        np.zeros((4, 6, 3), dtype=np.uint8)
+    )
+
+    assert [item.class_label for item in detections] == [
+        'apple',
+        'bottle',
+    ]
+    assert [item.track_id for item in detections] == [48, 20]
+
+
+def test_default_closed_set_and_confidence_match_provisional_contract():
+    config = YoloSegmenterConfig()
+
+    assert config.allowed_classes == ('bottle', 'cup', 'apple')
+    assert config.min_confidence == pytest.approx(0.5)
+    assert config.inference_size == 480
+
+
+def test_track_can_return_all_classes_for_diagnostics():
+    masks = np.ones((2, 4, 6), dtype=np.float32)
+    model = FakeModel(
+        fake_result(
+            classes=[0, 1],
+            confidences=[0.81, 0.87],
+            track_ids=[48, 2],
+            masks=masks,
+            names={0: 'sports ball', 1: 'tv'},
+        )
+    )
+    config = YoloSegmenterConfig(filter_classes=False)
+
+    detections = YoloInstanceSegmenter(config, model=model).track(
+        np.zeros((4, 6, 3), dtype=np.uint8)
+    )
+
+    assert [item.class_label for item in detections] == [
+        'sports_ball',
+        'tv',
+    ]
 
 
 def test_non_retina_mask_shape_is_rejected():
@@ -212,6 +267,7 @@ def test_camera_is_released_when_open_fails(monkeypatch):
         confidence=0.5,
         tracker='bytetrack.yaml',
         inference_device='cpu',
+        all_classes=False,
         camera=0,
         width=1280,
         height=720,
@@ -223,6 +279,46 @@ def test_camera_is_released_when_open_fails(monkeypatch):
 
     assert capture.released
     assert destroyed == [True]
+
+
+def test_select_input_view_returns_decxin_left_half():
+    frame = np.zeros((3, 8, 3), dtype=np.uint8)
+    frame[:, :4] = 17
+    frame[:, 4:] = 83
+
+    selected = webcam_segmentation_demo.select_input_view(frame, 'left')
+
+    assert selected.shape == (3, 4, 3)
+    assert np.all(selected == 17)
+    assert selected.flags.c_contiguous
+
+
+def test_select_input_view_returns_decxin_right_half():
+    frame = np.zeros((3, 8, 3), dtype=np.uint8)
+    frame[:, :4] = 17
+    frame[:, 4:] = 83
+
+    selected = webcam_segmentation_demo.select_input_view(frame, 'right')
+
+    assert selected.shape == (3, 4, 3)
+    assert np.all(selected == 83)
+    assert selected.flags.c_contiguous
+
+
+def test_select_input_view_preserves_normal_camera_frame():
+    frame = np.zeros((3, 5, 3), dtype=np.uint8)
+
+    selected = webcam_segmentation_demo.select_input_view(frame, 'none')
+
+    assert selected is frame
+
+
+@pytest.mark.parametrize('stereo_half', ['left', 'right'])
+def test_select_input_view_rejects_odd_stereo_width(stereo_half):
+    frame = np.zeros((3, 7, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match='width must be even'):
+        webcam_segmentation_demo.select_input_view(frame, stereo_half)
 
 
 @pytest.mark.parametrize(
@@ -247,6 +343,14 @@ def test_invalid_camera_frame_shape_is_rejected(frame):
         {'iou_threshold': 1.1},
         {'tracker': ''},
         {'device': ''},
+        {'inference_size': 0},
+        {'inference_size': -1},
+        {'inference_size': True},
+        {'allowed_classes': ()},
+        {'allowed_classes': ('cup', 'cup')},
+        {'allowed_classes': ('cup', ' ')},
+        {'allowed_classes': 'cup'},
+        {'filter_classes': 1},
     ],
 )
 def test_invalid_yolo_configuration_is_rejected(overrides):

@@ -11,8 +11,7 @@ from statistics import median
 DEFAULT_OBJECT_CLASSES = (
     'bottle',
     'cup',
-    'cell_phone',
-    'medicine_box',
+    'apple',
 )
 
 

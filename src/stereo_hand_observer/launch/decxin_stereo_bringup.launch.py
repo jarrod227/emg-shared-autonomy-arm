@@ -1,4 +1,4 @@
-"""Launch DECXIN capture, stereo splitting, and image rectification."""
+"""Launch DECXIN capture, splitter-side rectification, and stereo depth."""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -17,7 +17,6 @@ def generate_launch_description():
         ]
     )
     config_file = LaunchConfiguration("config_file")
-
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -41,27 +40,32 @@ def generate_launch_description():
                 parameters=[config_file],
             ),
             Node(
-                package="image_proc",
-                executable="rectify_node",
-                namespace="stereo/left",
-                name="rectify",
+                package="stereo_image_proc",
+                executable="disparity_node",
+                namespace="stereo",
+                name="disparity_node",
                 output="screen",
-                remappings=[
-                    ("image", "image_raw"),
-                    ("camera_info", "camera_info"),
-                    ("image_rect", "image_rect"),
+                parameters=[
+                    {
+                        "approximate_sync": False,
+                    }
                 ],
             ),
             Node(
-                package="image_proc",
-                executable="rectify_node",
-                namespace="stereo/right",
-                name="rectify",
+                package="stereo_image_proc",
+                executable="point_cloud_node",
+                namespace="stereo",
+                name="point_cloud_node",
                 output="screen",
+                parameters=[
+                    {
+                        "approximate_sync": False,
+                        "avoid_point_cloud_padding": True,
+                        "use_color": False,
+                    }
+                ],
                 remappings=[
-                    ("image", "image_raw"),
-                    ("camera_info", "camera_info"),
-                    ("image_rect", "image_rect"),
+                    ("left/image_rect_color", "left/image_rect"),
                 ],
             ),
         ]

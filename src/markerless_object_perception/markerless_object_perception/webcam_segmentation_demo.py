@@ -12,9 +12,46 @@ import numpy as np
 
 
 WINDOW_NAME = 'Objective 3.2 YOLO segmentation - Q/ESC to close'
+STEREO_HALF_CHOICES = ('none', 'left', 'right')
 
 
-def draw_detections(frame, detections, fps: float):
+def select_input_view(frame, stereo_half: str):
+    """Return one eye from a side-by-side frame, or the original frame."""
+    if stereo_half not in STEREO_HALF_CHOICES:
+        raise ValueError(
+            f'stereo_half must be one of {STEREO_HALF_CHOICES}'
+        )
+
+    frame_array = np.asarray(frame)
+    if stereo_half == 'none':
+        return frame_array
+    if (
+        frame_array.ndim != 3
+        or frame_array.shape[2] != 3
+        or frame_array.size == 0
+    ):
+        raise ValueError('frame must have shape HxWx3')
+
+    width = frame_array.shape[1]
+    if width % 2 != 0:
+        raise ValueError(
+            'side-by-side stereo frame width must be even'
+        )
+    midpoint = width // 2
+    if stereo_half == 'left':
+        selected = frame_array[:, :midpoint]
+    else:
+        selected = frame_array[:, midpoint:]
+    return np.ascontiguousarray(selected)
+
+
+def draw_detections(
+    frame,
+    detections,
+    fps: float,
+    *,
+    status_text: str | None = None,
+):
     """Overlay masks, class labels, confidence, and track IDs."""
     annotated = frame.copy()
     for detection in detections:
@@ -53,9 +90,11 @@ def draw_detections(frame, detections, fps: float):
                 cv2.LINE_AA,
             )
 
+    if status_text is None:
+        status_text = f'2D YOLO only | {fps:.1f} FPS | stereo XYZ pending'
     cv2.putText(
         annotated,
-        f'2D YOLO only | {fps:.1f} FPS | stereo XYZ pending',
+        status_text,
         (12, 28),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7,
@@ -74,6 +113,7 @@ def run_demo(args) -> None:
             min_confidence=args.confidence,
             tracker=args.tracker,
             device=args.inference_device,
+            filter_classes=not args.all_classes,
         )
     )
 
@@ -94,7 +134,8 @@ def run_demo(args) -> None:
             if not ok:
                 raise RuntimeError('camera stopped returning frames')
 
-            detections = segmenter.track(frame)
+            input_view = select_input_view(frame, args.stereo_half)
+            detections = segmenter.track(input_view)
             now = time.perf_counter()
             instant_fps = 1.0 / max(now - previous_time, 1.0e-6)
             previous_time = now
@@ -103,7 +144,11 @@ def run_demo(args) -> None:
                 if smoothed_fps == 0.0
                 else 0.9 * smoothed_fps + 0.1 * instant_fps
             )
-            annotated = draw_detections(frame, detections, smoothed_fps)
+            annotated = draw_detections(
+                input_view,
+                detections,
+                smoothed_fps,
+            )
             cv2.imshow(WINDOW_NAME, annotated)
 
             frame_count += 1
@@ -138,6 +183,20 @@ def _parse_args():
     parser.add_argument('--width', type=int, default=1280)
     parser.add_argument('--height', type=int, default=720)
     parser.add_argument('--fps', type=int, default=30)
+    parser.add_argument(
+        '--all-classes',
+        action='store_true',
+        help='Show every model class for diagnosis; never use for candidates.',
+    )
+    parser.add_argument(
+        '--stereo-half',
+        choices=STEREO_HALF_CHOICES,
+        default='none',
+        help=(
+            'Select one eye from a side-by-side stereo frame before '
+            'inference; use left for the DECXIN rig.'
+        ),
+    )
     parser.add_argument(
         '--max-frames',
         type=int,

@@ -10,6 +10,13 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image
 
+from stereo_hand_observer.stereo_rectification import (
+    build_rectification_maps,
+    rectify_pair,
+    resize_rectified_pair,
+    scale_camera_info,
+)
+
 
 def split_side_by_side(
     image,
@@ -109,6 +116,18 @@ class CompositeStereoSplitter(Node):
             "swap_halves",
             False,
         ).value
+        self._rectify_images = self.declare_parameter(
+            "rectify_images",
+            False,
+        ).value
+        self._output_width = self.declare_parameter(
+            "output_width",
+            0,
+        ).value
+        self._output_height = self.declare_parameter(
+            "output_height",
+            0,
+        ).value
 
         self._validate_parameters()
         self._camera_info_enabled = bool(
@@ -116,6 +135,10 @@ class CompositeStereoSplitter(Node):
         )
         self._bridge = CvBridge()
         self._last_rejection = None
+        self._left_rectification_maps = None
+        self._right_rectification_maps = None
+        self._left_camera_info_template = None
+        self._right_camera_info_template = None
         self._left_publisher = self.create_publisher(
             Image,
             self._left_topic,
@@ -138,13 +161,17 @@ class CompositeStereoSplitter(Node):
             self._on_composite_image,
             qos_profile_sensor_data,
         )
+        output_kind = "rectified" if self._rectify_images else "raw"
+        output_width = self._output_width or self._expected_width // 2
+        output_height = self._output_height or self._expected_height
         self.get_logger().info(
-            "Splitting %dx%d composite images into %dx%d stereo pairs"
+            "Splitting %dx%d composite images into %dx%d %s stereo pairs"
             % (
                 self._expected_width,
                 self._expected_height,
-                self._expected_width // 2,
-                self._expected_height,
+                output_width,
+                output_height,
+                output_kind,
             )
         )
 
@@ -170,6 +197,19 @@ class CompositeStereoSplitter(Node):
             raise ValueError("expected_height must be a positive integer")
         if not isinstance(self._swap_halves, bool):
             raise ValueError("swap_halves must be a boolean")
+        if not isinstance(self._rectify_images, bool):
+            raise ValueError("rectify_images must be a boolean")
+        output_dimensions = (self._output_width, self._output_height)
+        if any(isinstance(value, bool) for value in output_dimensions):
+            raise ValueError("output dimensions must be integers")
+        if not all(isinstance(value, int) for value in output_dimensions):
+            raise ValueError("output dimensions must be integers")
+        if (self._output_width == 0) != (self._output_height == 0):
+            raise ValueError("output dimensions must both be zero or positive")
+        if self._output_width < 0 or self._output_height < 0:
+            raise ValueError("output dimensions must both be zero or positive")
+        if self._output_width > 0 and not self._rectify_images:
+            raise ValueError("resized output requires rectify_images")
         camera_info_urls = (
             self._left_camera_info_url,
             self._right_camera_info_url,
@@ -181,6 +221,10 @@ class CompositeStereoSplitter(Node):
         ):
             raise ValueError(
                 "left and right camera-info URLs must both be set or both empty"
+            )
+        if self._rectify_images and not camera_info_urls[0].strip():
+            raise ValueError(
+                "rectify_images requires both camera-info URLs"
             )
 
     def _configure_camera_info(self):
@@ -200,6 +244,28 @@ class CompositeStereoSplitter(Node):
             self._left_camera_info_manager.loadCameraInfo()
             self._right_camera_info_manager.loadCameraInfo()
             baseline = self._validated_camera_info_pair()
+            left_info = self._left_camera_info_manager.getCameraInfo()
+            right_info = self._right_camera_info_manager.getCameraInfo()
+            if self._rectify_images:
+                self._left_rectification_maps = build_rectification_maps(
+                    left_info
+                )
+                self._right_rectification_maps = build_rectification_maps(
+                    right_info
+                )
+            if self._output_width > 0:
+                left_info = scale_camera_info(
+                    left_info,
+                    self._output_width,
+                    self._output_height,
+                )
+                right_info = scale_camera_info(
+                    right_info,
+                    self._output_width,
+                    self._output_height,
+                )
+            self._left_camera_info_template = deepcopy(left_info)
+            self._right_camera_info_template = deepcopy(right_info)
         except (CameraInfoMissingError, TypeError, ValueError) as error:
             raise ValueError(
                 f"failed to load stereo camera calibration: {error}"
@@ -266,13 +332,8 @@ class CompositeStereoSplitter(Node):
         return baseline
 
     def _stamped_camera_info_pair(self, stamp):
-        self._validated_camera_info_pair()
-        left_info = deepcopy(
-            self._left_camera_info_manager.getCameraInfo()
-        )
-        right_info = deepcopy(
-            self._right_camera_info_manager.getCameraInfo()
-        )
+        left_info = deepcopy(self._left_camera_info_template)
+        right_info = deepcopy(self._right_camera_info_template)
         self._copy_stamp(stamp, left_info.header.stamp)
         self._copy_stamp(stamp, right_info.header.stamp)
         left_info.header.frame_id = self._left_frame_id
@@ -321,6 +382,20 @@ class CompositeStereoSplitter(Node):
                 self._expected_height,
                 self._swap_halves,
             )
+            if self._rectify_images:
+                left, right = rectify_pair(
+                    left,
+                    right,
+                    self._left_rectification_maps,
+                    self._right_rectification_maps,
+                )
+            if self._output_width > 0:
+                left, right = resize_rectified_pair(
+                    left,
+                    right,
+                    self._output_width,
+                    self._output_height,
+                )
             left_message = self._bridge.cv2_to_imgmsg(
                 left,
                 encoding=self._expected_encoding,

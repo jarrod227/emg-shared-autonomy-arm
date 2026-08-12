@@ -64,6 +64,22 @@ def test_mask_excludes_background_points():
     assert result.masked_point_count == 9
 
 
+def test_float32_masked_points_keep_localization_precision():
+    expected = np.array([0.2, 0.1, 0.6], dtype=np.float32)
+    points = np.full((5, 5, 3), [9.0, 9.0, 9.0], dtype=np.float32)
+    points[1:4, 1:4] = expected
+    mask = np.zeros((5, 5), dtype=bool)
+    mask[1:4, 1:4] = True
+
+    result = make_localizer().localize(mask, points)
+
+    assert result.valid
+    assert result.point == pytest.approx(
+        tuple(float(value) for value in expected)
+    )
+    assert result.valid_point_count == 9
+
+
 def test_invalid_depth_and_far_outlier_do_not_pollute_center():
     expected = np.array([0.1, -0.2, 0.8])
     points = np.broadcast_to(expected, (6, 6, 3)).copy()

@@ -49,6 +49,10 @@ setup(
                 'markerless_object_perception.webcam_segmentation_demo:main'
             ),
             (
+                'live_candidate_publisher = '
+                'markerless_object_perception.live_candidate_publisher:main'
+            ),
+            (
                 'prepare_yolo_dataset = '
                 'markerless_object_perception.prepare_yolo_dataset:main'
             ),

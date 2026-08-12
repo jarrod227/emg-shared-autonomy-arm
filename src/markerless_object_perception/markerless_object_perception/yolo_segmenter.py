@@ -10,6 +10,13 @@ from markerless_object_perception.candidate_builder import (
 import numpy as np
 
 
+DEFAULT_OBJECT_CLASSES = ('bottle', 'cup', 'apple')
+MODEL_CLASS_ALIASES = {
+    'cell phone': 'cell_phone',
+    'sports ball': 'sports_ball',
+}
+
+
 @dataclass(frozen=True)
 class YoloSegmenterConfig:
     """Runtime options for the lightweight closed-set segmentation frontend."""
@@ -19,6 +26,9 @@ class YoloSegmenterConfig:
     iou_threshold: float = 0.7
     tracker: str = 'bytetrack.yaml'
     device: str = 'cpu'
+    inference_size: int = 480
+    allowed_classes: tuple[str, ...] = DEFAULT_OBJECT_CLASSES
+    filter_classes: bool = True
 
     def __post_init__(self) -> None:
         model_path = str(self.model_path).strip()
@@ -30,6 +40,14 @@ class YoloSegmenterConfig:
             raise ValueError('tracker must not be empty')
         if not device:
             raise ValueError('device must not be empty')
+        if (
+            isinstance(self.inference_size, bool)
+            or not isinstance(self.inference_size, int)
+            or self.inference_size <= 0
+        ):
+            raise ValueError('inference_size must be a positive integer')
+        if not isinstance(self.filter_classes, bool):
+            raise ValueError('filter_classes must be a boolean')
 
         min_confidence = _unit_interval(
             self.min_confidence,
@@ -39,12 +57,14 @@ class YoloSegmenterConfig:
             self.iou_threshold,
             'iou_threshold',
         )
+        allowed_classes = _class_names(self.allowed_classes)
 
         object.__setattr__(self, 'model_path', model_path)
         object.__setattr__(self, 'min_confidence', min_confidence)
         object.__setattr__(self, 'iou_threshold', iou_threshold)
         object.__setattr__(self, 'tracker', tracker)
         object.__setattr__(self, 'device', device)
+        object.__setattr__(self, 'allowed_classes', allowed_classes)
 
 
 class YoloInstanceSegmenter:
@@ -80,6 +100,7 @@ class YoloInstanceSegmenter:
             iou=self._config.iou_threshold,
             tracker=self._config.tracker,
             device=self._config.device,
+            imgsz=self._config.inference_size,
             retina_masks=True,
             verbose=False,
         )
@@ -124,9 +145,18 @@ class YoloInstanceSegmenter:
                 raise RuntimeError(
                     'YOLO retina mask shape does not match the source frame'
                 )
+            class_label = _canonical_class_name(
+                names,
+                int(class_ids[index]),
+            )
+            if (
+                self._config.filter_classes
+                and class_label not in self._config.allowed_classes
+            ):
+                continue
             detections.append(
                 InstanceMaskDetection(
-                    class_label=_class_name(names, int(class_ids[index])),
+                    class_label=class_label,
                     confidence=float(confidences[index]),
                     track_id=int(track_ids[index]),
                     mask=mask,
@@ -166,6 +196,35 @@ def _class_name(names, class_id: int) -> str:
         raise RuntimeError(
             f'YOLO result has no name for class ID {class_id}'
         ) from error
+
+
+def _canonical_class_name(names, class_id: int) -> str:
+    """Map model-specific names onto the project's class contract."""
+    class_name = _class_name(names, class_id).strip()
+    return MODEL_CLASS_ALIASES.get(class_name, class_name)
+
+
+def _class_names(values) -> tuple[str, ...]:
+    """Validate and normalize the configured closed-set class names."""
+    if isinstance(values, str):
+        raise ValueError('allowed_classes must be a sequence of class names')
+    try:
+        class_names = tuple(values)
+    except TypeError as error:
+        raise ValueError(
+            'allowed_classes must be a sequence of class names'
+        ) from error
+    if not class_names:
+        raise ValueError('allowed_classes must not be empty')
+    if any(
+        not isinstance(name, str) or not name.strip()
+        for name in class_names
+    ):
+        raise ValueError('allowed_classes must contain non-empty strings')
+    class_names = tuple(name.strip() for name in class_names)
+    if len(set(class_names)) != len(class_names):
+        raise ValueError('allowed_classes must not contain duplicates')
+    return class_names
 
 
 def _unit_interval(value, name: str) -> float:

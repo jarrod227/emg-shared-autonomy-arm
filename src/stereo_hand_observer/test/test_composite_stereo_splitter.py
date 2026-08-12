@@ -167,7 +167,15 @@ class SplitterGraph:
     left_info_topic = "/test_stereo/left/camera_info"
     right_info_topic = "/test_stereo/right/camera_info"
 
-    def __init__(self, left_camera_info_url, right_camera_info_url):
+    def __init__(
+        self,
+        left_camera_info_url,
+        right_camera_info_url,
+        *,
+        rectify_images=False,
+        output_width=0,
+        output_height=0,
+    ):
         values = {
             "input_topic": self.input_topic,
             "left_topic": self.left_topic,
@@ -184,6 +192,9 @@ class SplitterGraph:
             "left_frame_id": "test_left_optical_frame",
             "right_frame_id": "test_right_optical_frame",
             "swap_halves": False,
+            "rectify_images": rectify_images,
+            "output_width": output_width,
+            "output_height": output_height,
         }
         self.splitter = CompositeStereoSplitter(
             parameter_overrides=[
@@ -382,6 +393,91 @@ def test_ros_splitter_preserves_pixels_metadata_and_exact_stamp(graph):
     )
     assert np.all(left_array == (10, 20, 30))
     assert np.all(right_array == (40, 50, 60))
+
+
+def test_ros_splitter_can_rectify_before_publishing(tmp_path, monkeypatch):
+    left_url = write_camera_info(
+        tmp_path / "left_rectified.yaml",
+        "test_left_camera",
+        SplitterGraph.width // 2,
+        SplitterGraph.height,
+        0.0,
+    )
+    right_url = write_camera_info(
+        tmp_path / "right_rectified.yaml",
+        "test_right_camera",
+        SplitterGraph.width // 2,
+        SplitterGraph.height,
+        -6.4,
+    )
+    calls = []
+
+    def fake_rectify_pair(left, right, left_maps, right_maps):
+        calls.append((left_maps, right_maps))
+        return left + 1, right + 2
+
+    monkeypatch.setattr(
+        "stereo_hand_observer.composite_stereo_splitter.rectify_pair",
+        fake_rectify_pair,
+    )
+    rclpy.init()
+    test_graph = SplitterGraph(
+        left_url,
+        right_url,
+        rectify_images=True,
+        output_width=2,
+        output_height=2,
+    )
+    try:
+        assert test_graph.wait_for_connections()
+        composite = np.zeros(
+            (test_graph.height, test_graph.width, 3),
+            dtype=np.uint8,
+        )
+        composite[:, : test_graph.width // 2] = 10
+        composite[:, test_graph.width // 2 :] = 20
+        source = test_graph.image_message(composite)
+
+        test_graph.publisher.publish(source)
+        assert spin_until(
+            test_graph.nodes,
+            lambda: (
+                test_graph.left_messages
+                and test_graph.right_messages
+                and test_graph.left_info_messages
+                and test_graph.right_info_messages
+            ),
+        )
+
+        left = np.frombuffer(
+            test_graph.left_messages[-1].data,
+            dtype=np.uint8,
+        ).reshape(2, 2, 3)
+        right = np.frombuffer(
+            test_graph.right_messages[-1].data,
+            dtype=np.uint8,
+        ).reshape(2, 2, 3)
+        assert len(calls) == 1
+        assert np.all(left == 11)
+        assert np.all(right == 22)
+        assert (
+            test_graph.left_messages[-1].width,
+            test_graph.left_messages[-1].height,
+            test_graph.left_info_messages[-1].width,
+            test_graph.left_info_messages[-1].height,
+        ) == (2, 2, 2, 2)
+        assert test_graph.left_info_messages[-1].k[0] == pytest.approx(50.0)
+        assert test_graph.right_info_messages[-1].p[3] == pytest.approx(-3.2)
+        assert (
+            -test_graph.right_info_messages[-1].p[3]
+            / test_graph.right_info_messages[-1].p[0]
+        ) == pytest.approx(0.064)
+        assert test_graph.left_messages[-1].header.stamp == source.header.stamp
+        assert test_graph.right_messages[-1].header.stamp == source.header.stamp
+    finally:
+        test_graph.destroy()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 def test_ros_splitter_publishes_neither_side_for_bad_input(graph):

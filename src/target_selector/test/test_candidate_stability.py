@@ -62,8 +62,7 @@ def test_default_closed_set_matches_selected_project_objects():
     assert DEFAULT_OBJECT_CLASSES == (
         'bottle',
         'cup',
-        'cell_phone',
-        'medicine_box',
+        'apple',
     )
 
 
@@ -109,7 +108,7 @@ def test_multiple_tracks_become_stable_independently():
                 source_time,
                 candidate(
                     track_id=2,
-                    class_label='cell_phone',
+                    class_label='apple',
                     position=(0.5, 0.1, 0.75),
                 ),
                 candidate(track_id=1, class_label='bottle'),
