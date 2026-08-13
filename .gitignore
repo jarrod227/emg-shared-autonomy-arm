@@ -33,8 +33,10 @@ docs/serialplot-*/
 # file instead of against what the C encoder currently produces.
 firmware/test/test_emg_packet
 firmware/test/test_emg_filter
+firmware/test/test_emg_features
 firmware/test/fixture.bin
 firmware/test/golden.bin
+firmware/test/features.bin
 
 # One-off calibration aids (not build artifacts of the workspace)
 checkerboard_*.png

@@ -223,6 +223,32 @@ The CubeMX project will land in a subdirectory of its own once the toolchain
 is installed; nothing in `src/` should acquire a HAL dependency, because that
 is what keeps it testable on a workstation.
 
+## What is written, and what is not
+
+| Piece | State |
+| --- | --- |
+| Packet framing + CRC (`src/emg_packet.c`) | done, host-tested |
+| Band-pass filter (`src/emg_filter.c`) | done, golden-vector checked against scipy |
+| Feature extraction (`src/emg_features.c`) | done, golden-vector checked for exact equality |
+| ADC + DMA acquisition | **not started — needs CubeMX** |
+| 2 kHz timer trigger | **not started — needs CubeMX** |
+| USB CDC transmission | **not started — needs CubeMX and ST middleware** |
+| Main loop tying those together | not started |
+| Wear-detect GPIO reads | not started |
+| Classifier inference | not started — needs a trained model, which needs data |
+| Host: training pipeline, ROS 2 bridge | not started |
+
+What exists is the part that can be written and verified without hardware:
+pure logic with no HAL calls. It is roughly a quarter of the firmware, and the
+easy quarter. None of it samples or transmits anything, so flashing it alone
+would produce a chip that does nothing.
+
+The classifier order is set in `TODO.md` and is deliberate: the Hudgins
+feature set with an LDA/SVM baseline first, and a quantized MLP only if it
+measurably beats that. The part can carry either — a 12-feature, 16-hidden,
+4-class int8 MLP is 256 weights — so the constraint is not the silicon, it is
+that a model with no baseline to beat cannot be judged.
+
 ## Tests
 
 Neither suite needs the ARM toolchain or the board.

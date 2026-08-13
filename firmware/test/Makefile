@@ -14,15 +14,19 @@ LDLIBS_FILTER := -lm
 
 PACKET_BINARY := test_emg_packet
 FILTER_BINARY := test_emg_filter
-FIXTURES := fixture.bin golden.bin
+FEATURES_BINARY := test_emg_features
+BINARIES := $(PACKET_BINARY) $(FILTER_BINARY) $(FEATURES_BINARY)
+FIXTURES := fixture.bin golden.bin features.bin
 
 .PHONY: check clean
 
-check: $(PACKET_BINARY) $(FILTER_BINARY)
+check: $(BINARIES)
 	./$(PACKET_BINARY)
 	./$(PACKET_BINARY) --emit fixture.bin
 	./$(FILTER_BINARY)
 	./$(FILTER_BINARY) --emit golden.bin
+	./$(FEATURES_BINARY)
+	./$(FEATURES_BINARY) --emit features.bin
 
 $(PACKET_BINARY): test_emg_packet.c ../src/emg_packet.c ../src/emg_packet.h
 	$(CC) $(CFLAGS) -o $@ test_emg_packet.c ../src/emg_packet.c
@@ -30,5 +34,8 @@ $(PACKET_BINARY): test_emg_packet.c ../src/emg_packet.c ../src/emg_packet.h
 $(FILTER_BINARY): test_emg_filter.c ../src/emg_filter.c ../src/emg_filter.h
 	$(CC) $(CFLAGS) -o $@ test_emg_filter.c ../src/emg_filter.c $(LDLIBS_FILTER)
 
+$(FEATURES_BINARY): test_emg_features.c ../src/emg_features.c ../src/emg_features.h
+	$(CC) $(CFLAGS) -o $@ test_emg_features.c ../src/emg_features.c $(LDLIBS_FILTER)
+
 clean:
-	rm -f $(PACKET_BINARY) $(FILTER_BINARY) $(FIXTURES)
+	rm -f $(BINARIES) $(FIXTURES)
