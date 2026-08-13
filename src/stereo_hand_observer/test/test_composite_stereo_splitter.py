@@ -175,8 +175,13 @@ class SplitterGraph:
         rectify_images=False,
         output_width=0,
         output_height=0,
+        input_mode="topic",
+        capture_factory=None,
+        capture_period_sec=0.01,
     ):
+        self.input_mode = input_mode
         values = {
+            "input_mode": input_mode,
             "input_topic": self.input_topic,
             "left_topic": self.left_topic,
             "right_topic": self.right_topic,
@@ -195,8 +200,14 @@ class SplitterGraph:
             "rectify_images": rectify_images,
             "output_width": output_width,
             "output_height": output_height,
+            "capture_device": "/dev/test-video",
+            "capture_fourcc": "MJPG",
+            "capture_fps": 30.0,
+            "capture_buffer_size": 1,
+            "capture_period_sec": capture_period_sec,
         }
         self.splitter = CompositeStereoSplitter(
+            capture_factory=capture_factory,
             parameter_overrides=[
                 Parameter(name, value=value)
                 for name, value in values.items()
@@ -247,7 +258,10 @@ class SplitterGraph:
         return spin_until(
             self.nodes,
             lambda: (
-                self.publisher.get_subscription_count() > 0
+                (
+                    self.input_mode == "direct"
+                    or self.publisher.get_subscription_count() > 0
+                )
                 and self.helper.count_publishers(self.left_topic) > 0
                 and self.helper.count_publishers(self.right_topic) > 0
                 and self.helper.count_publishers(self.left_info_topic) > 0
@@ -478,6 +492,91 @@ def test_ros_splitter_can_rectify_before_publishing(tmp_path, monkeypatch):
         test_graph.destroy()
         if rclpy.ok():
             rclpy.shutdown()
+
+
+class FakeCapture:
+    """Return one deterministic OpenCV BGR frame for direct-input tests."""
+
+    def __init__(self, frame):
+        self._frame = frame
+        self.released = False
+
+    def read(self):
+        return True, self._frame.copy()
+
+    def release(self):
+        self.released = True
+
+
+def test_ros_splitter_direct_capture_avoids_composite_topic(tmp_path):
+    left_url = write_camera_info(
+        tmp_path / "left_direct.yaml",
+        "test_left_camera",
+        SplitterGraph.width // 2,
+        SplitterGraph.height,
+        0.0,
+    )
+    right_url = write_camera_info(
+        tmp_path / "right_direct.yaml",
+        "test_right_camera",
+        SplitterGraph.width // 2,
+        SplitterGraph.height,
+        -6.4,
+    )
+    frame = np.zeros(
+        (SplitterGraph.height, SplitterGraph.width, 3),
+        dtype=np.uint8,
+    )
+    frame[:, : SplitterGraph.width // 2] = (10, 20, 30)
+    frame[:, SplitterGraph.width // 2 :] = (40, 50, 60)
+    capture = FakeCapture(frame)
+
+    rclpy.init()
+    test_graph = SplitterGraph(
+        left_url,
+        right_url,
+        input_mode="direct",
+        capture_factory=lambda: capture,
+    )
+    try:
+        assert test_graph.wait_for_connections()
+        assert test_graph.splitter.count_subscribers(
+            test_graph.input_topic
+        ) == 0
+        assert spin_until(
+            test_graph.nodes,
+            lambda: (
+                test_graph.left_messages
+                and test_graph.right_messages
+                and test_graph.left_info_messages
+                and test_graph.right_info_messages
+            ),
+        )
+
+        left = test_graph.left_messages[-1]
+        right = test_graph.right_messages[-1]
+        left_array = np.frombuffer(left.data, dtype=np.uint8).reshape(
+            SplitterGraph.height,
+            SplitterGraph.width // 2,
+            3,
+        )
+        right_array = np.frombuffer(right.data, dtype=np.uint8).reshape(
+            SplitterGraph.height,
+            SplitterGraph.width // 2,
+            3,
+        )
+        assert np.all(left_array == (30, 20, 10))
+        assert np.all(right_array == (60, 50, 40))
+        assert left.header.stamp == right.header.stamp
+        assert left.header.stamp == test_graph.left_info_messages[-1].header.stamp
+        assert right.header.stamp == test_graph.right_info_messages[-1].header.stamp
+        assert (left.header.stamp.sec, left.header.stamp.nanosec) != (0, 0)
+    finally:
+        test_graph.destroy()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+    assert capture.released
 
 
 def test_ros_splitter_publishes_neither_side_for_bad_input(graph):

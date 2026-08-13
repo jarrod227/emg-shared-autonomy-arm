@@ -212,18 +212,19 @@ class LiveObjectCandidatePublisher(Node):
             candidate_topic,
             _candidate_qos(),
         )
-        sensor_qos = _sensor_qos(sync_queue_size)
+        image_qos = _sensor_qos(sync_queue_size)
+        point_cloud_qos = _point_cloud_qos()
         self._image_subscriber = Subscriber(
             self,
             Image,
             image_topic,
-            qos_profile=sensor_qos,
+            qos_profile=image_qos,
         )
         self._point_cloud_subscriber = Subscriber(
             self,
             PointCloud2,
             point_cloud_topic,
-            qos_profile=sensor_qos,
+            qos_profile=point_cloud_qos,
         )
         self._synchronizer = TimeSynchronizer(
             [self._image_subscriber, self._point_cloud_subscriber],
@@ -361,6 +362,16 @@ def _sensor_qos(depth):
         history=HistoryPolicy.KEEP_LAST,
         depth=depth,
         reliability=ReliabilityPolicy.BEST_EFFORT,
+        durability=DurabilityPolicy.VOLATILE,
+    )
+
+
+def _point_cloud_qos():
+    """Match stereo_image_proc's reliable large-message publisher."""
+    return QoSProfile(
+        history=HistoryPolicy.KEEP_LAST,
+        depth=1,
+        reliability=ReliabilityPolicy.RELIABLE,
         durability=DurabilityPolicy.VOLATILE,
     )
 

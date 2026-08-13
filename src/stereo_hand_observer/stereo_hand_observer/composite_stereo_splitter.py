@@ -1,8 +1,10 @@
 """Split a composite stereo image and publish matched calibration metadata."""
 
 from copy import deepcopy
+import math
 
 from camera_info_manager import CameraInfoManager, CameraInfoMissingError
+import cv2
 import numpy as np
 import rclpy
 from cv_bridge import CvBridge, CvBridgeError
@@ -53,9 +55,14 @@ def split_side_by_side(
 class CompositeStereoSplitter(Node):
     """Convert one atomic composite frame into a matched stereo pair."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, *, capture_factory=None, **kwargs):
         super().__init__("composite_stereo_splitter", **kwargs)
 
+        self._capture_factory = capture_factory
+        self._input_mode = self.declare_parameter(
+            "input_mode",
+            "topic",
+        ).value
         self._input_topic = self.declare_parameter(
             "input_topic",
             "/stereo/composite/camera/image_raw",
@@ -128,6 +135,26 @@ class CompositeStereoSplitter(Node):
             "output_height",
             0,
         ).value
+        self._capture_device = self.declare_parameter(
+            "capture_device",
+            "/dev/video0",
+        ).value
+        self._capture_fourcc = self.declare_parameter(
+            "capture_fourcc",
+            "MJPG",
+        ).value
+        self._capture_fps = self.declare_parameter(
+            "capture_fps",
+            30.0,
+        ).value
+        self._capture_buffer_size = self.declare_parameter(
+            "capture_buffer_size",
+            1,
+        ).value
+        self._capture_period_sec = self.declare_parameter(
+            "capture_period_sec",
+            0.1,
+        ).value
 
         self._validate_parameters()
         self._camera_info_enabled = bool(
@@ -153,20 +180,30 @@ class CompositeStereoSplitter(Node):
         self._right_camera_info_publisher = None
         self._left_camera_info_manager = None
         self._right_camera_info_manager = None
+        self._subscription = None
+        self._capture = None
+        self._capture_timer = None
         if self._camera_info_enabled:
             self._configure_camera_info()
-        self._subscription = self.create_subscription(
-            Image,
-            self._input_topic,
-            self._on_composite_image,
-            qos_profile_sensor_data,
-        )
+        if self._input_mode == "topic":
+            self._subscription = self.create_subscription(
+                Image,
+                self._input_topic,
+                self._on_composite_image,
+                qos_profile_sensor_data,
+            )
+            input_description = f"topic {self._input_topic}"
+        else:
+            self._configure_direct_input()
+            input_description = f"device {self._capture_device}"
         output_kind = "rectified" if self._rectify_images else "raw"
         output_width = self._output_width or self._expected_width // 2
         output_height = self._output_height or self._expected_height
         self.get_logger().info(
-            "Splitting %dx%d composite images into %dx%d %s stereo pairs"
+            "Reading %s; splitting %dx%d composite images into "
+            "%dx%d %s stereo pairs"
             % (
+                input_description,
                 self._expected_width,
                 self._expected_height,
                 output_width,
@@ -177,6 +214,7 @@ class CompositeStereoSplitter(Node):
 
     def _validate_parameters(self):
         string_parameters = {
+            "input_mode": self._input_mode,
             "input_topic": self._input_topic,
             "left_topic": self._left_topic,
             "right_topic": self._right_topic,
@@ -191,6 +229,8 @@ class CompositeStereoSplitter(Node):
         for name, value in string_parameters.items():
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
+        if self._input_mode not in {"topic", "direct"}:
+            raise ValueError("input_mode must be 'topic' or 'direct'")
         if self._expected_width <= 0 or self._expected_width % 2:
             raise ValueError("expected_width must be a positive even integer")
         if self._expected_height <= 0:
@@ -226,6 +266,88 @@ class CompositeStereoSplitter(Node):
             raise ValueError(
                 "rectify_images requires both camera-info URLs"
             )
+        if self._input_mode == "direct":
+            if (
+                not isinstance(self._capture_device, str)
+                or not self._capture_device.strip()
+            ):
+                raise ValueError("capture_device must be a non-empty string")
+            if (
+                not isinstance(self._capture_fourcc, str)
+                or len(self._capture_fourcc) != 4
+            ):
+                raise ValueError(
+                    "capture_fourcc must be exactly four characters"
+                )
+            if self._expected_encoding not in {"rgb8", "bgr8"}:
+                raise ValueError(
+                    "direct input requires expected_encoding rgb8 or bgr8"
+                )
+            self._validate_positive_number(
+                self._capture_fps,
+                "capture_fps",
+            )
+            self._validate_positive_number(
+                self._capture_period_sec,
+                "capture_period_sec",
+            )
+            if (
+                isinstance(self._capture_buffer_size, bool)
+                or not isinstance(self._capture_buffer_size, int)
+                or self._capture_buffer_size <= 0
+            ):
+                raise ValueError(
+                    "capture_buffer_size must be a positive integer"
+                )
+
+    @staticmethod
+    def _validate_positive_number(value, name):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) <= 0.0
+        ):
+            raise ValueError(f"{name} must be a positive finite number")
+
+    def _default_capture_factory(self):
+        """Open the composite device and keep only its newest frame."""
+        capture = cv2.VideoCapture(self._capture_device, cv2.CAP_V4L2)
+        if not capture.isOpened():
+            capture.release()
+            raise ValueError(
+                f"could not open capture device: {self._capture_device}"
+            )
+        capture.set(
+            cv2.CAP_PROP_FOURCC,
+            cv2.VideoWriter_fourcc(*self._capture_fourcc),
+        )
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, self._expected_width)
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self._expected_height)
+        capture.set(cv2.CAP_PROP_FPS, float(self._capture_fps))
+        capture.set(cv2.CAP_PROP_BUFFERSIZE, self._capture_buffer_size)
+        return capture
+
+    def _configure_direct_input(self):
+        factory = self._capture_factory or self._default_capture_factory
+        self._capture = factory()
+        try:
+            for name in ("read", "release"):
+                if not callable(getattr(self._capture, name, None)):
+                    raise TypeError(
+                        "capture_factory must return an object with "
+                        f"{name}()"
+                    )
+        except Exception:
+            release = getattr(self._capture, "release", None)
+            if callable(release):
+                release()
+            self._capture = None
+            raise
+        self._capture_timer = self.create_timer(
+            float(self._capture_period_sec),
+            self._on_capture_tick,
+        )
 
     def _configure_camera_info(self):
         try:
@@ -343,7 +465,7 @@ class CompositeStereoSplitter(Node):
     def _reject(self, reason):
         if reason != self._last_rejection:
             self.get_logger().warning(
-                f"Rejecting composite image: {reason}"
+                f"Rejecting composite frame: {reason}"
             )
             self._last_rejection = reason
 
@@ -376,6 +498,52 @@ class CompositeStereoSplitter(Node):
                 message,
                 desired_encoding=self._expected_encoding,
             )
+            self._publish_composite_array(
+                composite,
+                message.header.stamp,
+            )
+        except (CvBridgeError, cv2.error, TypeError, ValueError) as error:
+            self._reject(str(error))
+
+    def _on_capture_tick(self):
+        """Read one newest device frame and publish a matched stereo pair."""
+        try:
+            ok, frame = self._capture.read()
+        except Exception as error:
+            self._reject(f"capture read failed: {error}")
+            return
+        if not ok or frame is None:
+            self._reject("capture read failed")
+            return
+
+        try:
+            composite = np.asarray(frame)
+            if (
+                composite.ndim != 3
+                or composite.shape[2] != 3
+                or composite.shape[0] != self._expected_height
+                or composite.shape[1] != self._expected_width
+            ):
+                raise ValueError(
+                    "captured frame must match the configured HxWx3 shape"
+                )
+            if self._expected_encoding == "rgb8":
+                composite = cv2.cvtColor(
+                    composite,
+                    cv2.COLOR_BGR2RGB,
+                )
+            else:
+                composite = np.ascontiguousarray(composite)
+            self._publish_composite_array(
+                composite,
+                self.get_clock().now().to_msg(),
+            )
+        except (cv2.error, TypeError, ValueError) as error:
+            self._reject(str(error))
+
+    def _publish_composite_array(self, composite, stamp):
+        """Split, optionally rectify/resize, and publish one atomic frame."""
+        try:
             left, right = split_side_by_side(
                 composite,
                 self._expected_width,
@@ -407,25 +575,20 @@ class CompositeStereoSplitter(Node):
             camera_info_pair = None
             if self._camera_info_enabled:
                 camera_info_pair = self._stamped_camera_info_pair(
-                    message.header.stamp
+                    stamp
                 )
         except (
             CameraInfoMissingError,
             CvBridgeError,
+            cv2.error,
             TypeError,
             ValueError,
         ) as error:
             self._reject(str(error))
             return
 
-        self._copy_stamp(
-            message.header.stamp,
-            left_message.header.stamp,
-        )
-        self._copy_stamp(
-            message.header.stamp,
-            right_message.header.stamp,
-        )
+        self._copy_stamp(stamp, left_message.header.stamp)
+        self._copy_stamp(stamp, right_message.header.stamp)
         left_message.header.frame_id = self._left_frame_id
         right_message.header.frame_id = self._right_frame_id
 
@@ -436,6 +599,13 @@ class CompositeStereoSplitter(Node):
             self._left_camera_info_publisher.publish(left_info)
             self._right_camera_info_publisher.publish(right_info)
         self._last_rejection = None
+
+    def destroy_node(self):
+        capture = getattr(self, "_capture", None)
+        if capture is not None:
+            capture.release()
+            self._capture = None
+        return super().destroy_node()
 
 
 def main(args=None):

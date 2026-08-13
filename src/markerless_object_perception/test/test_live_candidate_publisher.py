@@ -8,6 +8,7 @@ from markerless_object_perception.live_candidate_pipeline import (
     LiveCandidatePipeline,
 )
 from markerless_object_perception.live_candidate_publisher import (
+    _point_cloud_qos,
     _sensor_qos,
     candidate_observation_from_pair,
 )
@@ -148,4 +149,12 @@ def test_sensor_qos_depth_matches_synchronizer_window():
 
     assert qos.depth == 15
     assert qos.reliability == ReliabilityPolicy.BEST_EFFORT
+    assert qos.durability == DurabilityPolicy.VOLATILE
+
+
+def test_point_cloud_qos_matches_reliable_stereo_publisher_without_backlog():
+    qos = _point_cloud_qos()
+
+    assert qos.depth == 1
+    assert qos.reliability == ReliabilityPolicy.RELIABLE
     assert qos.durability == DurabilityPolicy.VOLATILE

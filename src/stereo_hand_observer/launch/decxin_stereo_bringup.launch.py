@@ -25,14 +25,6 @@ def generate_launch_description():
                 description="DECXIN capture and splitter parameter file",
             ),
             Node(
-                package="gscam",
-                executable="gscam_node",
-                namespace="stereo/composite",
-                name="decxin_gscam",
-                output="screen",
-                parameters=[config_file],
-            ),
-            Node(
                 package="stereo_hand_observer",
                 executable="composite_stereo_splitter",
                 name="composite_stereo_splitter",
