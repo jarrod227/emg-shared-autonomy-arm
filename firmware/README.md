@@ -148,6 +148,46 @@ firmware.
    is probably an unpopulated footprint — this only matters as a fallback.
 3. **Part number**, above: schematic says C6, silicon and marking say C8.
 
+## CubeMX configuration
+
+Not yet applied — the toolchain is still being installed. Each value below has
+a reason attached, because several of them fail silently if set wrong.
+
+**Select `STM32F103C8Tx`, not the `C6Tx` the vendor schematic shows.** C6
+would give the linker a 32 KB / 10 KB budget when the die actually reports
+64 KB / 20 KB.
+
+| Where | Setting | Why |
+| --- | --- | --- |
+| System Core → SYS | Debug: **Serial Wire** | Defaults to `No Debug`, which generates code that reconfigures `PA13`/`PA14` as plain GPIO. Flash that once and ST-Link can no longer connect; recovery means pulling `BOOT0` high and erasing. Set this before anything else. |
+| System Core → RCC | HSE: Crystal/Ceramic Resonator | The 8 MHz `X2` is fitted, and HSI would cap at 64 MHz with an RC oscillator's drift under an acquisition loop that needs a steady rate. |
+| Clock Configuration | HSE 8 MHz → PLL ×9 → **72 MHz** | |
+| Clock Configuration | USB prescaler **/1.5 → 48 MHz** | USB full speed needs exactly 48 MHz. CubeMX flags this one. |
+| Clock Configuration | ADC prescaler **/6 → 12 MHz** | 14 MHz is the hard ADCCLK ceiling. `/4` gives 18 MHz, which compiles, runs, and quietly converts wrong. |
+| Analog → ADC1 | Channels **IN0, IN1, IN4** | Board mapping, not IN0/IN1/IN2 — see the pin table. |
+| Analog → ADC1 | Scan Conversion Mode enabled, Number of Conversions 3, Rank 1/2/3 = IN0/IN1/IN4 | |
+| Analog → ADC1 | Sampling time 28.5 cycles | 28.5 + 12.5 = 41 ADC cycles = 3.4 us per channel at 12 MHz, so a 3-channel sweep is ~10 us. |
+| Analog → ADC1 | External trigger: **TIM3 TRGO** | A timer trigger is what makes the sample rate exact. Free-running continuous mode would drift with whatever else the CPU is doing. |
+| Timers → TIM3 | PSC **35**, ARR **999**, Trigger Event: Update Event | APB1 timers run at 72 MHz here (APB1 is 36 MHz but the timer clock doubles): 72e6 / 36 / 1000 = **2000 Hz**. |
+| ADC1 → DMA Settings | **DMA1 Channel 1**, Circular, Peripheral→Memory, **Half Word** | Channel 1 is the only ADC path on this part. Half Word because conversions are 16-bit. |
+| Connectivity → USB | Device (FS) | |
+| Middleware → USB_DEVICE | Communication Device Class (Virtual Port Com) | |
+| GPIO | `PA8`, `PA2`, `PA3` as inputs | Wear-detect lines for sensor columns A0/A1/A2. |
+
+### Buffer sizing
+
+Circular DMA plus the half-transfer interrupt gives double buffering for free:
+
+```
+buffer = 2 x 32 frames x 3 channels x 2 B = 384 B
+DMA fills the second half -> half-transfer IRQ -> CPU packs the first half
+DMA fills the first half  -> transfer-complete IRQ -> CPU packs the second
+```
+
+The CPU always touches the half the DMA is not writing, so no lock is needed
+and a packet can never contain a torn frame. 32 frames is chosen to match one
+RAW packet in `PROTOCOL.md`, so one interrupt produces exactly one packet.
+
 ## Before the first flash
 
 The factory image is one-shot evidence that this board works, and it may
