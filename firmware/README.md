@@ -55,6 +55,22 @@ Other pins confirmed from the schematic: `SWDIO` = `PA13`, `SWCLK` = `PA14`,
 the part boots from flash normally and the USART1 ROM bootloader is reachable
 by pulling `BOOT0` high.
 
+### USB D+ pull-up is fixed, not GPIO-switched
+
+`R13`, 10K from the 5V rail to `USB_DP`. There is no transistor, so **firmware
+does not have to drive anything for the device to enumerate** — the risk that
+custom firmware would simply never appear on the host is closed.
+
+The value looks wrong against the spec's 1.5K to 3.3V, but the host's 15K
+pull-down makes the two equivalent: 3.3 x 15/16.5 = 3.0 V versus
+5 x 15/25 = 3.0 V, both above the 2.7 V full-speed detection threshold. The
+board already enumerates as `0483:5740`, which settles it regardless.
+
+The consequence is that the pull-up cannot be toggled to force a
+re-enumeration. **After flashing, physically unplug and replug USB** if the
+host still behaves as though the old firmware were running. `R14` and `R15`
+(5.1K each) are the USB-C CC pull-downs and have nothing to do with this.
+
 SWD is the 4-pin header at the top-left of the board, next to the `RST` button,
 silkscreened left to right: `3V3` `GND` `SWDIO` `SWCLK`. Leave `3V3`
 unconnected — the board self-powers over USB-C, and a clone probe's `3V3` pin
@@ -117,18 +133,20 @@ removing that offset is the host's or firmware's job, done explicitly.
 
 ## Open questions
 
-Blocking or near-blocking, worth asking the vendor for a schematic and the
-factory firmware source:
+The vendor schematic closed the two blocking ones: the D+ pull-up is fixed,
+and an 8 MHz HSE crystal is fitted. What remains does not block starting the
+firmware.
 
-1. **USB D+ pull-up.** STM32F103 has no internal pull-up, so the board provides
-   one externally — possibly switched by a GPIO. If it is GPIO-switched and we
-   do not know which pin, custom firmware will never enumerate. This is the
-   most likely cause of a first-flash failure.
-2. **Is an 8 MHz HSE crystal fitted?** HSE reaches 72 MHz; HSI tops out at
-   64 MHz and drifts with temperature, which matters for a stable sampling
-   time base.
-3. **The sEMG module's band-pass cutoffs and gain.** Sets the honest minimum
-   sample rate and lets the recovered amplitudes be interpreted.
+1. **The sEMG module's band-pass cutoffs and gain.** Sets the honest minimum
+   sample rate, and without it the recovered amplitudes have no physical
+   interpretation. The vendor supplied an Arduino library for a different
+   product, so this may have to be measured rather than asked for: drive the
+   module input with a swept sine and record the response.
+2. **Is the USB-TTL bridge on the schematic actually populated?** If it is,
+   `USART1` reaches a host serial port, and the ROM bootloader offers a
+   flashing path with no probe at all. `lsusb` shows no bridge VID/PID, so it
+   is probably an unpopulated footprint — this only matters as a fallback.
+3. **Part number**, above: schematic says C6, silicon and marking say C8.
 
 ## Before the first flash
 
