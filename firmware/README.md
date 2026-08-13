@@ -1,6 +1,11 @@
 # Objective 3.5 — STM32 edge-EMG firmware
 
 Firmware for the Cheez sEMG board and the host-side tools that talk to it.
+
+This file states what is true about the hardware and how it is configured.
+How each fact was established — and what was believed beforehand — is in
+`../docs/objective35_bringup_log.md`, including the errors that would have
+produced plausible data rather than an error message.
 This tree is **not** a colcon package: it is C built with ARM GCC through
 STM32CubeIDE, so `COLCON_IGNORE` keeps `colcon build` from discovering the
 CubeMX-generated `CMakeLists.txt` and trying to compile ARM sources with the
