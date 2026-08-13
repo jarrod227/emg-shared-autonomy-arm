@@ -1,24 +1,24 @@
 # System Design
 
-## Provisional Runtime Update (2026-08-11)
+## Runtime Update (2026-08-12)
 
 The Objective 3.2 runtime baseline is now an official COCO-pretrained
 instance-segmentation model restricted to `bottle`, `cup`, and `apple`, with a
 `0.50` confidence threshold. Bottle has live stereo-3D evidence, cup has live
-mono-2D evidence, and a real apple plus repeatable three-class bursts remain to
-be validated. Tennis-ball label flicker is not apple validation. The earlier
-`cell_phone` detection is historical mono-2D evidence only.
-Custom dataset collection and CUDA training are not runtime or completion
-dependencies. The existing four-class offline tooling is preserved as an
-optional, historically tested subsystem; its legacy class contract is
-intentionally unchanged.
+evidence, and the tennis ball is accepted as a provisional `apple` stand-in.
+A real apple has not been tested and is not a completion blocker. The earlier
+`cell_phone` detection is historical evidence only. The former four-class
+collection, annotation, bundle, fine-tuning, and CUDA-training plan is
+abandoned; unused code may remain but is not current or future Objective 3.2
+work.
 
-The exact-time live left-image/organized-`PointCloud2` path is implemented and
-published one valid bottle candidate near 0.97 m. A three-frame selector lock
-was possible only with a temporary bench-only 5.0 s frame-gap setting. The
-observed 0.62 Hz rate, 3.86 s maximum gap, and roughly 0.315 s delay do not
-satisfy the selector's default 0.2 s gap contract. Tabletop filtering, absolute
-object-XYZ accuracy, class offsets, and selected-pose success remain open.
+Direct DECXIN capture publishes 320x240 rectified pairs and exact-time
+organized `PointCloud2`; the candidate node uses reliable depth-1 point-cloud
+delivery. A 15-second run delivered 150/150 valid candidate frames at 10 Hz,
+with 0.1562 s maximum receipt gap and 0.1113 s maximum source-stamp gap. The
+unchanged 0.2 s gate passed. One measured physical-distance versus candidate-
+XYZ check remains; tabletop filtering, grasp offsets, selected-pose execution,
+and arm-mounted refinement belong to Objective 5.
 
 ## Historical Verified Status (2026-07-31)
 
@@ -68,14 +68,10 @@ ROS candidate/intent subscriptions that feed them. It also resolves the selected
 the exact candidate stamp, builds a planning-frame `PoseStamped` from a
 config-driven default or class-specific grasp template, and publishes it only
 for a fresh, confident `CONFIRM` with a wrap-safe newer sequence. The publisher
-uses reliable, transient-local depth-1 QoS. At that checkpoint, the separately
-implemented offline path validated labeled source data and leakage metadata,
-created and verified a deterministic portable bundle, planned training without
-loading a model, and required explicit CUDA execution plus complete four-class
-held-out mask metrics. No real bundle or GPU-trained weights were produced;
-they are now optional under the 2026-08-09 scope update. Live model/stereo
-publication, real stereo point clouds, and measured class-specific offsets
-remain pending.
+uses reliable, transient-local depth-1 QoS. At that historical checkpoint a
+four-class offline experiment existed, but that plan was later abandoned and
+is not Objective 3.2 work. Live model/stereo publication, real stereo point
+clouds, and measured class-specific offsets were pending then.
 
 ## Design Status
 
@@ -85,11 +81,9 @@ architecture. The execution layer (Objectives 1–2), ArUco perception baseline
 exist today. Objective 4.2 is complete for its fixed-bench scope; connection to
 the handoff controller waits on the Objective 5 extrinsic. Objective 4.3
 Phase-0 bounded search with simulated view commands is implemented. Objective
-3.2 has synthetic and live stereo candidate paths, optional offline data/
-training tooling, and one real bottle metric candidate. It still needs a real
-apple, repeatable class bursts, default-gap-compatible performance or an
-explicitly justified stop-and-look contract, tabletop filtering, and measured
-metric performance.
+3.2 has synthetic and live stereo candidate paths and passes the default
+frame-gap contract at 10 Hz. It needs one measured physical-distance versus
+candidate-XYZ check before closure.
 Objective 3.5 later adds STM32 discrete intent plus proportional view control.
 
 ## Current Workspace Layout
@@ -275,11 +269,12 @@ its stereo RMS is 1.0385 px and calibration-derived baseline is 0.064529 m.
 Acquisition remains stop-and-look: the robot or bench rig is stationary,
 vibration settles, and a short fresh burst is processed. Objective 4.2 has
 completed its fixed-bench hand-observation measurements with documented gaps.
-For Objective 3.2, physical exposure synchronization, repeatable full-chain
-rate, invalid-disparity fraction, and absolute object-XYZ error across the
-working range remain acceptance measurements. The current single-bottle run
-establishes functionality, not those metrics. Invalid disparity or high
-reprojection error invalidates the observation.
+Objective 3.2 has one remaining acceptance measurement: compare one measured
+camera-to-object distance with the published candidate XYZ. Broader physical
+exposure-synchronization proof, an invalid-disparity survey, and a working-range
+error curve are documented limitations or later characterization, not
+Objective 3.2 completion blockers. Invalid disparity or high reprojection
+error still invalidates the affected observation.
 
 Before Objective 5, the bracket may be fixed on a bench and has a static
 planning-frame extrinsic. Objective 5 remounts it on one moving robot link,
@@ -293,23 +288,14 @@ old bench extrinsic or the latest TF is invalid.
 | --- | --- | --- |
 | deterministic selected pose | fixed pose publisher | implemented |
 | geometric selected pose | ArUco + current selector | implemented (3.1) |
-| semantic object candidates | instance mask + stereo points | synthetic and exact-time live publishers implemented; one real bottle metric candidate verified, broader validation pending (3.2) |
+| semantic object candidates | instance mask + stereo points | synthetic and exact-time live publishers implemented; 10 Hz default-gap runtime verified, one XYZ check pending (3.2) |
 | discrete intent | simulated input, then STM32 bridge | simulated source implemented (4.1); STM32 planned (3.5) |
 | bounded search command | simulated input, then STM32 bridge | simulated contract/controller implemented (4.3); STM32 source planned (3.5) |
 | target acquisition and final pose | generalized target selector | N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose + confirmation-gated retained publisher implemented; status contract pending |
 
-Objective 3.2 has a separately implemented legacy/optional offline path; it
-does not add traffic or state to the runtime ROS graph and is no longer an MVP
-dependency:
-
-```text
-labeled images + YOLO polygons + session/physical-object metadata
--> deterministic leakage-group split (seed 3201)
--> portable train/val/test bundle + manifest/checksums
--> zero-side-effect training plan
--> explicit CUDA train/val + independent held-out test
--> frozen weights + aggregate/per-class mask metrics
-```
+The former four-class offline training plan is abandoned. Existing unused code
+does not add traffic or state to the runtime ROS graph and must not be treated
+as current or future Objective 3.2 work.
 
 The active runtime uses official COCO-pretrained weights restricted to
 `bottle`, `cup`, and `apple` at a `0.50` confidence threshold. Objective 3.2 is
@@ -323,7 +309,7 @@ left rectified image
 -> class + confidence + instance mask + temporary track ID
 instance mask ∩ valid stereo points
 -> reject invalid disparity and outliers
--> [planned] reject tabletop-plane points as a support/outlier constraint
+-> [planned Objective 5] reject tabletop-plane points as a support/outlier constraint
 -> robust metric object position
 -> timestamped /object_candidates
 -> N-frame stability + intent-driven selected-track lock
@@ -346,7 +332,7 @@ this flow without pretending that synthetic aligned XYZ is a camera result:
 - The ROS adapter preserves integer-nanosecond source time and frame, maps
   localization confidence to robust 3D inliers divided by mask pixels, and the
   installed synthetic publisher emits fresh valid or empty observations.
-- `target_selector` has a pure gate for the provisional runtime classes
+- `target_selector` has a pure gate for the runtime classes
   `bottle`, `cup`, and `apple`; its default filter and focused tests match the
   model adapter. It rejects
   stale/non-increasing/cross-frame
@@ -363,14 +349,12 @@ fresh, confident `CONFIRM` with a wrap-safe newer sequence. Candidate refresh,
 `NEXT_TARGET`, watchdog processing, and TF recovery do not publish by
 themselves. `ABORT` resets the stability gate and lock while preserving the
 sequence watermark. The installed template config supplies a fixed normalized
-orientation and zero position offset until geometry is measured; the loader
-already supports per-class overrides. Real organized-`PointCloud2` alignment
-and live model/stereo publication are implemented. One bottle yielded a valid
-candidate near 0.97 m; under a temporary bench-only 5.0 s gap setting, the
-selector repeatedly reached its required three-frame lock. The default 0.2 s
-gap rejects the observed approximately 0.62 Hz stream. Real-apple/repeatability,
-tabletop filtering, absolute XYZ accuracy, and measured class-specific offsets
-remain planned.
+orientation and zero position offset until Objective 5 measures grasp
+geometry; the loader already supports per-class overrides. Real organized-
+`PointCloud2` alignment and live model/stereo publication are implemented.
+Direct 320x240 capture and reliable depth-1 point-cloud delivery pass the
+unchanged default 0.2 s frame-gap contract at 10 Hz. One measured physical-
+distance versus candidate-XYZ check remains for Objective 3.2.
 
 The instance model runs on the host PC or edge-Linux computer. It supplies a
 2D class and mask, not depth. Stereo correspondence supplies metric points only
@@ -689,7 +673,7 @@ responsibilities are:
 | bounded active-view search controller | implemented as Objective 4.3 Phase-0 simulated motion; physical view joint deferred to Objective 5 |
 | simulated target/intent/hand providers | implemented (Objective 4.1) |
 | simulated view provider | implemented (Objective 4.3) |
-| markerless object perception | Objective 3.2 active; pure mask/aligned-XYZ localization, YOLO adapter, mono smoke, synthetic and exact-time live stereo publishers, organized-point-cloud adapter, and optional legacy data/freeze/GPU-entry tooling implemented; one bottle stereo candidate verified, real apple/repeatability/default-gap/tabletop/metric validation pending |
+| markerless object perception | Objective 3.2 active; pure mask/aligned-XYZ localization, YOLO adapter, synthetic/exact-time live publishers, organized point cloud, and 10 Hz default-gap runtime verified; one measured XYZ check remains |
 | generalized target selector/tracker | Objective 3.2/3.5 integration; N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose + confirmation-gated retained publisher implemented; status contract pending |
 | shared ROS interfaces | `AssistiveIntent`, `HandObservation`, `ViewControlCommand`, `ObjectCandidate`, and `ObjectCandidateArray` implemented; target-status contract remains planned |
 | STM32 EMG firmware | Objective 3.5 (planned STM32CubeIDE C/C++; ADC/DMA, DSP/features, inference, packet producer) |
