@@ -16,9 +16,10 @@ Direct DECXIN capture publishes 320x240 rectified pairs and exact-time
 organized `PointCloud2`; the candidate node uses reliable depth-1 point-cloud
 delivery. A 15-second run delivered 150/150 valid candidate frames at 10 Hz,
 with 0.1562 s maximum receipt gap and 0.1113 s maximum source-stamp gap. The
-unchanged 0.2 s gate passed. One measured physical-distance versus candidate-
-XYZ check remains; tabletop filtering, grasp offsets, selected-pose execution,
-and arm-mounted refinement belong to Objective 5.
+unchanged 0.2 s gate passed. On 2026-08-13, repeated bottle candidates reported
+`Z = 0.2750 m`, inside the user's approximately `0.27–0.28 m` tape-measured
+interval. This completes Objective 3.2; tabletop filtering, grasp offsets,
+selected-pose execution, and arm-mounted refinement belong to Objective 5.
 
 ## Historical Verified Status (2026-07-31)
 
@@ -57,7 +58,7 @@ external-asset smoke test skipped; that smoke test separately passed with an
 official model and official single-hand image. Live dual-camera runtime and
 bench-stereo validation are still pending.
 
-Objective 3.2 is active software-first. `markerless_object_perception`
+Objective 3.2 is complete. `markerless_object_perception`
 implements robust mask/aligned-XYZ localization, candidate construction, an
 Ultralytics instance-segmentation/tracking adapter, and a laptop-camera demo.
 Its source-preserving ROS adapter and synthetic `/object_candidates` publisher
@@ -81,10 +82,10 @@ architecture. The execution layer (Objectives 1–2), ArUco perception baseline
 exist today. Objective 4.2 is complete for its fixed-bench scope; connection to
 the handoff controller waits on the Objective 5 extrinsic. Objective 4.3
 Phase-0 bounded search with simulated view commands is implemented. Objective
-3.2 has synthetic and live stereo candidate paths and passes the default
-frame-gap contract at 10 Hz. It needs one measured physical-distance versus
-candidate-XYZ check before closure.
-Objective 3.5 later adds STM32 discrete intent plus proportional view control.
+3.2 has synthetic and live stereo candidate paths, passes the default frame-gap
+contract at 10 Hz, and passed its measured bottle-distance check on 2026-08-13.
+Objective 3.5 is now active and adds STM32 discrete intent plus proportional
+view control.
 
 ## Current Workspace Layout
 
@@ -269,11 +270,12 @@ its stereo RMS is 1.0385 px and calibration-derived baseline is 0.064529 m.
 Acquisition remains stop-and-look: the robot or bench rig is stationary,
 vibration settles, and a short fresh burst is processed. Objective 4.2 has
 completed its fixed-bench hand-observation measurements with documented gaps.
-Objective 3.2 has one remaining acceptance measurement: compare one measured
-camera-to-object distance with the published candidate XYZ. Broader physical
-exposure-synchronization proof, an invalid-disparity survey, and a working-range
-error curve are documented limitations or later characterization, not
-Objective 3.2 completion blockers. Invalid disparity or high reprojection
+Objective 3.2's 2026-08-13 acceptance measurement compared repeated bottle
+candidate `Z = 0.2750 m` with the user's approximately `0.27–0.28 m` tape
+measurement; the candidate value fell inside the measured interval. Broader
+physical exposure-synchronization proof, an invalid-disparity survey, and a
+working-range error curve are documented limitations or later characterization,
+not Objective 3.2 completion blockers. Invalid disparity or high reprojection
 error still invalidates the affected observation.
 
 Before Objective 5, the bracket may be fixed on a bench and has a static
@@ -353,8 +355,8 @@ orientation and zero position offset until Objective 5 measures grasp
 geometry; the loader already supports per-class overrides. Real organized-
 `PointCloud2` alignment and live model/stereo publication are implemented.
 Direct 320x240 capture and reliable depth-1 point-cloud delivery pass the
-unchanged default 0.2 s frame-gap contract at 10 Hz. One measured physical-
-distance versus candidate-XYZ check remains for Objective 3.2.
+unchanged default 0.2 s frame-gap contract at 10 Hz. The 2026-08-13 measured
+bottle-distance check completes Objective 3.2.
 
 The instance model runs on the host PC or edge-Linux computer. It supplies a
 2D class and mask, not depth. Stereo correspondence supplies metric points only
@@ -673,7 +675,7 @@ responsibilities are:
 | bounded active-view search controller | implemented as Objective 4.3 Phase-0 simulated motion; physical view joint deferred to Objective 5 |
 | simulated target/intent/hand providers | implemented (Objective 4.1) |
 | simulated view provider | implemented (Objective 4.3) |
-| markerless object perception | Objective 3.2 active; pure mask/aligned-XYZ localization, YOLO adapter, synthetic/exact-time live publishers, organized point cloud, and 10 Hz default-gap runtime verified; one measured XYZ check remains |
+| markerless object perception | Objective 3.2 complete; pure mask/aligned-XYZ localization, YOLO adapter, synthetic/exact-time live publishers, organized point cloud, 10 Hz default-gap runtime, and measured bottle-distance check verified |
 | generalized target selector/tracker | Objective 3.2/3.5 integration; N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose + confirmation-gated retained publisher implemented; status contract pending |
 | shared ROS interfaces | `AssistiveIntent`, `HandObservation`, `ViewControlCommand`, `ObjectCandidate`, and `ObjectCandidateArray` implemented; target-status contract remains planned |
 | STM32 EMG firmware | Objective 3.5 (planned STM32CubeIDE C/C++; ADC/DMA, DSP/features, inference, packet producer) |
