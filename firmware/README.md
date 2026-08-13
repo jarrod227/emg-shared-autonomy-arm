@@ -244,6 +244,19 @@ Host-side, in `tools/`. Neither needs the ARM toolchain.
 | --- | --- |
 | `emg_probe.py` | Fixed-window capture that prints a text summary: sample rate, value distribution, and a per-segment breakdown showing whether contractions register. Terminates on its own. |
 | `emg_scope.py` | Live scrolling plot. Close the window to stop; a text summary is printed on exit so a run leaves evidence even if nobody was watching. |
+| `emg_protocol.py` | Decoder for the v1 wire format, with per-type sequence tracking and resynchronization. |
+| `emg_record.py` | Records the stream to a raw byte log plus a JSON sidecar, or replays an existing log. |
+
+`emg_record.py` stores **bytes, not decoded samples**. A recording of decoded
+values is unrecoverable if the decoder had a bug; a byte log can be re-decoded
+as often as needed, which is what `--replay` is for. It reports the sample
+rate two ways — from the wall clock and from the firmware's own timestamps —
+so a slow reader can be told apart from slow firmware.
+
+```bash
+python3 firmware/tools/emg_record.py --seconds 60 --out session.bin
+python3 firmware/tools/emg_record.py --replay session.bin
+```
 
 Both need `/dev/ttyACM0` access, so the user must be in `dialout` and have
 logged in again since being added.

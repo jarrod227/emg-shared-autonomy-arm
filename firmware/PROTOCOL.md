@@ -132,6 +132,27 @@ unbounded desync.
 magic narrows the search, and CRC plus the length bound are what actually
 validate a candidate packet.
 
+## Known gap: RAW carries no electrode-wear state
+
+Found while writing the recorder. `INTENT` has a `signal_quality` byte, but
+`RAW` has nothing, so a recorded dataset cannot mark which spans had a
+detached electrode — and a detached electrode produces a plausible-looking
+floating signal, not an obviously dead one. Training on it would be training
+on noise labelled as gesture.
+
+The board does provide the information: each sensor column has a wear-detect
+line (`PA8`, `PA2`, `PA3` for columns A0–A2). Three candidate fixes, none
+chosen yet:
+
+1. Prepend a wear bitmask byte to the RAW payload. Cheapest, but changes the
+   payload from pure samples, which the current spec is deliberate about.
+2. Emit `INTENT` alongside `RAW` and correlate by timestamp. No format
+   change, but `signal_quality` is one byte for all channels, not per channel.
+3. Add a fourth packet type carrying per-channel wear at a low rate.
+
+Decide before recording any dataset that will be used for training. Recording
+first and adding the field later means the early sessions are unusable.
+
 ## What this does not do
 
 - **No retransmission and no flow control.** The link is a local USB CDC pipe;
