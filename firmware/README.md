@@ -18,7 +18,8 @@ and `docs/literature_ledger.md` (`DOC-ST-RM0008`) for the manual citations.
 | | |
 | --- | --- |
 | Board | `EX.STM32 V1.0.3`, vendor "Cheez" |
-| MCU | STM32F103C8T6, Cortex-M3, 72 MHz max, **no FPU** |
+| MCU | STM32F103C8T6, Cortex-M3, 72 MHz max, **no FPU** (see the part-number note below) |
+| Clock | 8 MHz HSE crystal fitted (`X2`, `PD0`/`PD1`), plus a 32.768 kHz LSE. 72 MHz and a stable sampling time base are both available. |
 | Flash / SRAM | 64 KB / 20 KB, read from silicon (`st-info --probe`: `flash: 65536`, `sram: 20480`, `chipid: 0x410`, `STM32F1xx_MD`) |
 | ADC | 2 x 12-bit, 1.17 us conversion at 72 MHz, **ADCCLK capped at 14 MHz** |
 | USB | MCU's own device peripheral, ST CDC middleware — `0483:5740`, `iProduct` "Cheez sEMG", enumerates as `/dev/ttyACM0`. There is no USB-UART bridge chip on the board. |
@@ -26,14 +27,47 @@ and `docs/literature_ledger.md` (`DOC-ST-RM0008`) for the manual citations.
 
 ### Pin mapping
 
-Sensor interface columns `A0`–`A5` map to `PA0`–`PA5`, so three channels sit on
-ADC1 inputs 0–2. Each column takes a module on four pins: `DO` / `AI` / `VCC` /
-`GND`. The analog signal is the `AI` row.
+Read from the vendor schematic, **not** from the board silkscreen — the
+Arduino-style `A` numbering does not track the MCU port numbering, and
+assuming it did produced a wrong mapping for four of the six channels.
+
+| Sensor column | Analog (`AI`) | **ADC1 channel** | Wear detect (`DO`) |
+| --- | --- | --- | --- |
+| `A0` | `PA0` | **IN0** | `D2` = `PA8` |
+| `A1` | `PA1` | **IN1** | `D3` = `PA2` |
+| `A2` | **`PA4`** | **IN4** | `D4` = `PA3` |
+| `A3` | `PA5` | IN5 | `D5` = `PB0` |
+| `A4` | `PA6` | IN6 | `D6` = `PB1` |
+| `A5` | `PA7` | IN7 | `D7` = `PB2` |
+
+`PA2` and `PA3` are taken by the digital pins `D3` and `D4`, which is why the
+analog run skips from `PA1` to `PA4`. **The three-channel scan sequence is
+IN0, IN1, IN4.** Configuring IN0/IN1/IN2 instead would sample `PA2`, a digital
+pin, and would still produce plausible-looking varying numbers.
+
+Each column takes a module on four pins: `DO` / `AI` / `VCC` / `GND`. The
+wear-detect line is a real input the protocol's `signal_quality` field should
+be driven from — a detached electrode must invalidate intent rather than be
+classified.
+
+Other pins confirmed from the schematic: `SWDIO` = `PA13`, `SWCLK` = `PA14`,
+`USB_DP` = `PA12`, `USB_DM` = `PA11`, and `BOOT0` carries a 10K pull-down, so
+the part boots from flash normally and the USART1 ROM bootloader is reachable
+by pulling `BOOT0` high.
 
 SWD is the 4-pin header at the top-left of the board, next to the `RST` button,
 silkscreened left to right: `3V3` `GND` `SWDIO` `SWCLK`. Leave `3V3`
 unconnected — the board self-powers over USB-C, and a clone probe's `3V3` pin
 is an output, not a voltage-sense input.
+
+### Part number: sources disagree
+
+The vendor schematic labels the MCU **STM32F103C6Tx** (32 KB Flash, 10 KB
+SRAM). The package marking and `st-info --probe` both say **C8** (64 KB,
+20 KB), and `st-info` reads the factory-programmed size register on the die
+itself. Two independent sources beat one, so the working assumption is C8 and
+64 KB — but if anything inexplicable shows up once the image grows past
+32 KB, come back to this line before debugging anything else.
 
 ## Hard constraints
 
