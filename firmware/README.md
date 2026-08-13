@@ -209,9 +209,15 @@ frequently bricked by the official upgrade. Firmware V2J37S7 works as is.
 | Path | Contents |
 | --- | --- |
 | `PROTOCOL.md` | The wire format. Authoritative for both sides. |
-| `src/` | Firmware C that has no HAL dependency, so it builds for host gcc too. |
+| `src/` | **Firmware C — this is what gets flashed.** It has no HAL dependency, so the same files also build for host gcc. |
 | `test/` | Host tests for `src/`, built with plain gcc. |
-| `tools/` | Host-side Python. |
+| `tools/` | Host-side Python. Never flashed. |
+
+`src/` compiles twice from one source: ARM GCC produces the image on the chip,
+host GCC produces the test binaries. That is the point of keeping it free of
+HAL calls — fixed-point arithmetic and framing are where the mistakes live,
+and finding them with `make check` is far faster than stepping through them
+over a debug probe.
 
 The CubeMX project will land in a subdirectory of its own once the toolchain
 is installed; nothing in `src/` should acquire a HAL dependency, because that

@@ -32,7 +32,9 @@ docs/serialplot-*/
 # committing it would let the cross-implementation check pass against a stale
 # file instead of against what the C encoder currently produces.
 firmware/test/test_emg_packet
+firmware/test/test_emg_filter
 firmware/test/fixture.bin
+firmware/test/golden.bin
 
 # One-off calibration aids (not build artifacts of the workspace)
 checkerboard_*.png
