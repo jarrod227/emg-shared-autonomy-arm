@@ -17,8 +17,11 @@ organized `PointCloud2`; the candidate node uses reliable depth-1 point-cloud
 delivery. A 15-second run delivered 150/150 valid candidate frames at 10 Hz,
 with 0.1562 s maximum receipt gap and 0.1113 s maximum source-stamp gap. The
 unchanged 0.2 s gate passed. On 2026-08-13, repeated bottle candidates reported
-`Z = 0.2750 m`, inside the user's approximately `0.27–0.28 m` tape-measured
-interval. This completes Objective 3.2; tabletop filtering, grasp offsets,
+`Z = 0.2750 m` inside the user's approximately `0.27–0.28 m` tape-measured
+interval, and a second bottle at a tape-measured `0.97 m` reported
+`Z ≈ 0.97 m`. The far point bounds systematic scale error to roughly ±7%
+rather than centimetre precision, since one disparity pixel spans about 64 mm
+there. This completes Objective 3.2; tabletop filtering, grasp offsets,
 selected-pose execution, and arm-mounted refinement belong to Objective 5.
 
 ## Historical Verified Status (2026-07-31)
@@ -272,7 +275,8 @@ vibration settles, and a short fresh burst is processed. Objective 4.2 has
 completed its fixed-bench hand-observation measurements with documented gaps.
 Objective 3.2's 2026-08-13 acceptance measurement compared repeated bottle
 candidate `Z = 0.2750 m` with the user's approximately `0.27–0.28 m` tape
-measurement; the candidate value fell inside the measured interval. Broader
+measurement, and a far bottle candidate `Z ≈ 0.97 m` with a `0.97 m` tape
+measurement; both fell inside the measured intervals. Broader
 physical exposure-synchronization proof, an invalid-disparity survey, and a
 working-range error curve are documented limitations or later characterization,
 not Objective 3.2 completion blockers. Invalid disparity or high reprojection
