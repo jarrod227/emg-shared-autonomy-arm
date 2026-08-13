@@ -112,6 +112,38 @@ firmware.** The ST-LINK/V2 here is a clone — its serial
 `303030303030303030303031` is ASCII `"000000000001"` — and clone probes are
 frequently bricked by the official upgrade. Firmware V2J37S7 works as is.
 
+## Layout
+
+| Path | Contents |
+| --- | --- |
+| `PROTOCOL.md` | The wire format. Authoritative for both sides. |
+| `src/` | Firmware C that has no HAL dependency, so it builds for host gcc too. |
+| `test/` | Host tests for `src/`, built with plain gcc. |
+| `tools/` | Host-side Python. |
+
+The CubeMX project will land in a subdirectory of its own once the toolchain
+is installed; nothing in `src/` should acquire a HAL dependency, because that
+is what keeps it testable on a workstation.
+
+## Tests
+
+Neither suite needs the ARM toolchain or the board.
+
+```bash
+make -C firmware/test check                          # C encoder + fixture.bin
+python3 -m pytest firmware/tools/test_emg_protocol.py  # Python decoder
+```
+
+Run them in that order. `make check` regenerates `fixture.bin`, a stream the
+C encoder produced, and the last Python test decodes it and checks every
+field. The two implementations are written from `PROTOCOL.md` without reading
+each other, so that test is the evidence the spec is unambiguous — if it
+fails, suspect the spec before either implementation.
+
+The fixture deliberately contains leading junk, a RAW sequence jump, and a
+repeated INTENT sequence, so resynchronization and the loss/duplicate counters
+are exercised against real encoder output rather than only hand-built bytes.
+
 ## Tools
 
 Host-side, in `tools/`. Neither needs the ARM toolchain.
