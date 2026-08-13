@@ -105,8 +105,17 @@ These are not preferences; they come from the silicon.
   wrong. Use /6 (12 MHz).
 - **No FPU.** The 20–450 Hz filter must be fixed-point (CMSIS-DSP q15/q31
   biquads), not float.
-- **64 KB Flash is the real budget.** HAL + USB CDC middleware + CMSIS-DSP is
-  roughly 30–40 KB of it. Drop HAL for LL drivers if it gets tight.
+- **Flash turned out not to be the constraint.** Measured on the first build,
+  with HAL, the USB CDC middleware, and the shared sources linked but no
+  application logic yet: **18 700 B at `-Os`** (28.5% of 64 KB) against
+  39 304 B at `-O0 -g3`. An earlier 30–40 KB estimate was reading the debug
+  figure. Develop in Debug and expect it to be tight there; the shipping
+  build is Release.
+- **RAM is the tighter one.** 7 704 B (37.6%) before any of the per-channel
+  state exists, and identical in both build types since static allocation
+  does not depend on optimization. Adding three channels of filter and
+  feature state (2 880 B), the DMA double buffer (384 B), and one transmit
+  buffer (206 B) projects to roughly **11.2 KB, or 55%**.
 
 ## Targets
 
@@ -148,10 +157,28 @@ firmware.
    is probably an unpopulated footprint — this only matters as a fallback.
 3. **Part number**, above: schematic says C6, silicon and marking say C8.
 
+## Building
+
+The CubeMX project lives in `cheez_emg/`. The toolchain is Ubuntu's, not ST's
+STM32CubeCLT: `gcc-arm-none-eabi`, `ninja-build`, and `gdb-multiarch` from apt,
+with `st-flash` and `st-util` from `stlink-tools` for flashing and as a GDB
+server. That covers build, flash, and debug without another ST download; the
+cost is that the VS Code extension's one-click buttons are not wired to it.
+
+```bash
+cd firmware/cheez_emg
+cmake --preset Debug          # or Release
+cmake --build build/Debug
+```
+
+`CMakeLists.txt` pulls `../src/*.c` into the firmware image, so the framing,
+filter, and feature sources are compiled by ARM GCC here and by host GCC under
+`../test` — one set of files, two compilers.
+
 ## CubeMX configuration
 
-Not yet applied — the toolchain is still being installed. Each value below has
-a reason attached, because several of them fail silently if set wrong.
+Applied and verified against the generated sources. Each value below has a
+reason attached, because several of them fail silently if set wrong.
 
 **Select `STM32F103C8Tx`, not the `C6Tx` the vendor schematic shows.** C6
 would give the linker a 32 KB / 10 KB budget when the die actually reports

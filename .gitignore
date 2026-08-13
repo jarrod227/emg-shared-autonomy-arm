@@ -38,6 +38,14 @@ firmware/test/fixture.bin
 firmware/test/golden.bin
 firmware/test/features.bin
 
+# CubeMX project build output. The generated sources and cheez_emg.ioc are
+# tracked -- the .ioc is the authoritative record of the peripheral
+# configuration, and the copied HAL keeps the project buildable from a clean
+# clone without CubeMX installed.
+firmware/cheez_emg/build/
+firmware/cheez_emg/.vscode/
+compile_commands.json
+
 # One-off calibration aids (not build artifacts of the workspace)
 checkerboard_*.png
 
