@@ -232,6 +232,31 @@ or message-semantics claim.
   certification.
 - Intended use: Objective 4.2 implementation notes.
 
+### `DOC-ST-RM0008`
+
+- Responsible organization: STMicroelectronics
+- Official page: [RM0008 — STM32F101xx/102xx/103xx/105xx/107xx reference
+  manual](https://www.st.com/resource/en/reference_manual/rm0008-stm32f101xx-stm32f102xx-stm32f103xx-stm32f105xx-and-stm32f107xx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
+- Version checked: Rev 21 (local copy `docs/ReferenceManual.pdf`)
+- Verified claim: on this MCU family only ADC1 and ADC3 have DMA capability —
+  "Only ADC1 and ADC3 have this DMA capability. ADC2-converted data can be
+  transferred in dual ADC mode using DMA thanks to master ADC1" (p. 227).
+  Table 78 lists ADC1 on DMA1 channel 1 and contains no ADC2 entry at all.
+  DMA2 "and its relative requests are available only in high-density,
+  XL-density and connectivity line devices", so the medium-density
+  STM32F103C8T6 has neither ADC3 nor DMA2. Scan mode is described as
+  "automatic conversion of channel 0 to channel 'n'", i.e. sequential.
+  Conversion time is "1 µs at 56 MHz (1.17 µs at 72 MHz)" and the clock tree
+  caps ADCCLK at 14 MHz.
+- Claim boundary: this fixes what the silicon can do; it does not establish
+  the sampling rate, inter-channel skew, or dropped-sample behaviour of any
+  firmware actually written for this project. Those remain to be measured.
+  It also says nothing about the purchased Cheez sEMG board's analog front
+  end or channel wiring.
+- Intended use: Objective 3.5 firmware design — the choice of ADC1 scan mode
+  + DMA1 channel 1 for three channels, and the corrected wording of the
+  three-channel acquisition item in `TODO.md`.
+
 ## Candidate queue
 
 These sources are deliberately not in `references.bib` and must not yet be

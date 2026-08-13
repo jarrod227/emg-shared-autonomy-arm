@@ -19,6 +19,11 @@ __pycache__/
 # Scratch dir from the Codex tool (skills under .codex/ stay tracked)
 .codex-tmp/
 
+# Vendor datasheets and reference manuals kept locally for lookup. They are
+# copyrighted, large, and freely downloadable; docs/literature_ledger.md
+# records the official URL, revision, and the exact quoted claims instead.
+docs/*.pdf
+
 # One-off calibration aids (not build artifacts of the workspace)
 checkerboard_*.png
 
