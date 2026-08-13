@@ -24,6 +24,10 @@ __pycache__/
 # records the official URL, revision, and the exact quoted claims instead.
 docs/*.pdf
 
+# Third-party tools dropped here for local reference (e.g. serialplot). They
+# are separately licensed and are not part of this project's source.
+docs/serialplot-*/
+
 # One-off calibration aids (not build artifacts of the workspace)
 checkerboard_*.png
 
