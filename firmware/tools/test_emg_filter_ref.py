@@ -18,6 +18,7 @@ import pytest
 
 from emg_filter_ref import (
     COEFF_BITS,
+    FixedFilter,
     MAX_SECTIONS,
     design_bandpass,
     filter_fixed,
@@ -164,3 +165,41 @@ def test_firmware_output_matches_the_float_reference():
     # within tolerance -- that is what makes the model usable for trying
     # numerical changes before writing them in C.
     assert np.array_equal(filter_fixed(default_sections(), samples), firmware)
+
+
+def test_filtering_in_chunks_equals_filtering_all_at_once():
+    """The property the live scope depends on.
+
+    A filter reset between blocks puts a settling transient at the start of
+    each one; for a 20 Hz high-pass that is a visible swing lasting about a
+    tenth of a second, which on a scrolling plot looks like real signal.
+    """
+    sections = default_sections()
+    steps = np.arange(3000) / 2000.0
+    samples = np.clip(
+        np.round(800 * np.sin(2 * np.pi * 90 * steps) + 600), -2048, 2047
+    ).astype(np.int16)
+
+    whole = FixedFilter(sections).process(samples)
+
+    chunked = FixedFilter(sections)
+    pieces = [chunked.process(samples[start:start + 96])
+              for start in range(0, len(samples), 96)]
+
+    assert np.array_equal(np.concatenate(pieces), whole)
+
+
+def test_a_reset_filter_does_not_continue_the_previous_signal():
+    # The complement of the test above: state really is state, so clearing it
+    # has to change the result rather than being a no-op.
+    sections = default_sections()
+    samples = np.full(200, 1500, dtype=np.int16)
+
+    stateful = FixedFilter(sections)
+    first = stateful.process(samples)
+    continued = stateful.process(samples)
+    stateful.reset()
+    restarted = stateful.process(samples)
+
+    assert not np.array_equal(first, continued)
+    assert np.array_equal(first, restarted)

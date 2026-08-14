@@ -70,30 +70,50 @@ def filter_float(sos, samples):
                    np.asarray(samples, dtype=np.float64))
 
 
-def filter_fixed(sections, samples, coeff_bits=COEFF_BITS,
-                 state_bits=STATE_BITS):
-    """Bit-exact model of emg_filter_step, including its rounding.
+class FixedFilter:
+    """Stateful bit-exact model of emg_filter_step, including its rounding.
+
+    Stateful because the firmware is: a filter reset between blocks puts a
+    settling transient at the start of every block, which for a 20 Hz
+    high-pass is a visible swing lasting about a tenth of a second. Anything
+    processing a live stream in chunks has to carry the state across them.
 
     Python's `>>` floors like C's does on negative values, so the explicit
     half-quantum add reproduces the C rather than merely approximating it.
     """
-    state = [[0, 0, 0, 0] for _ in sections]
-    coeff_half = 1 << (coeff_bits - 1)
-    state_half = 1 << (state_bits - 1)
-    output = np.empty(len(samples), dtype=np.int64)
 
-    for index, sample in enumerate(samples):
-        value = int(sample) << state_bits
-        for coeffs, history in zip(sections, state):
-            b0, b1, b2, a1, a2 = coeffs
-            accumulator = (b0 * value + b1 * history[0] + b2 * history[1]
-                           - a1 * history[2] - a2 * history[3])
-            result = (accumulator + coeff_half) >> coeff_bits
-            history[1], history[0] = history[0], value
-            history[3], history[2] = history[2], result
-            value = result
-        output[index] = (value + state_half) >> state_bits
-    return output
+    def __init__(self, sections, coeff_bits=COEFF_BITS, state_bits=STATE_BITS):
+        self._sections = [tuple(int(value) for value in row) for row in sections]
+        self._coeff_bits = coeff_bits
+        self._state_bits = state_bits
+        self._coeff_half = 1 << (coeff_bits - 1)
+        self._state_half = 1 << (state_bits - 1)
+        self.reset()
+
+    def reset(self):
+        self._state = [[0, 0, 0, 0] for _ in self._sections]
+
+    def process(self, samples):
+        """Filter one block, carrying state into the next call."""
+        output = np.empty(len(samples), dtype=np.int64)
+        for index, sample in enumerate(samples):
+            value = int(sample) << self._state_bits
+            for coeffs, history in zip(self._sections, self._state):
+                b0, b1, b2, a1, a2 = coeffs
+                accumulator = (b0 * value + b1 * history[0] + b2 * history[1]
+                               - a1 * history[2] - a2 * history[3])
+                result = (accumulator + self._coeff_half) >> self._coeff_bits
+                history[1], history[0] = history[0], value
+                history[3], history[2] = history[2], result
+                value = result
+            output[index] = (value + self._state_half) >> self._state_bits
+        return output
+
+
+def filter_fixed(sections, samples, coeff_bits=COEFF_BITS,
+                 state_bits=STATE_BITS):
+    """Filter a complete signal from a cleared state."""
+    return FixedFilter(sections, coeff_bits, state_bits).process(samples)
 
 
 def format_c_initializer(sections, name="emg_filter_bandpass_20_450_at_2000"):
