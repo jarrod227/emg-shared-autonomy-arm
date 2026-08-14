@@ -14,6 +14,7 @@ import pytest
 
 from emg_analyze import (
     DISTINCT_BELOW,
+    mains_fraction,
     WARMUP_SECONDS,
     REDUNDANT_ABOVE,
     channel_quality,
@@ -229,3 +230,35 @@ def test_a_silent_channel_blocks_the_verdict(tmp_path):
     envelopes = np.vstack([mav_series(s, sections, float(info.sample_rate_hz)) for s in columns])
     matrix = np.corrcoef(envelopes)
     assert abs(matrix[0][2]) < DISTINCT_BELOW
+
+
+def test_mains_hum_is_measured_and_blocks_the_verdict(tmp_path):
+    """Found in real data: rest was 99% mains, not muscle.
+
+    50 Hz sits in the middle of the 20-450 Hz band, so the filter passes it
+    and it appears as a large steady MAV. By amplitude alone that is
+    indistinguishable from muscle tone, which is how three sessions in a row
+    produced confident placement verdicts measuring the room.
+    """
+    rng = np.random.default_rng(4)
+    samples = RATE * SECONDS
+    times = np.arange(samples) / RATE
+
+    hum = np.clip(2048 + 400 * np.sin(2 * np.pi * 50 * times), 0, 4095).astype(np.uint16)
+    muscle = synthetic_channel(envelope([2, 5], samples), rng)
+
+    assert mains_fraction(hum, RATE, 50.0) > 0.9
+    assert mains_fraction(muscle, RATE, 50.0) < 0.3
+
+    problems = quality_of(tmp_path, [muscle, hum, muscle])
+    assert 1 in problems and "mains" in problems[1]
+    assert 0 not in problems and 2 not in problems
+
+
+def test_mains_detection_finds_sixty_hertz_too():
+    times = np.arange(RATE * SECONDS) / RATE
+    hum = np.clip(2048 + 400 * np.sin(2 * np.pi * 60 * times), 0, 4095).astype(np.uint16)
+
+    # Whichever region the recording came from, the gate has to catch it.
+    assert mains_fraction(hum, RATE, 60.0) > 0.9
+    assert mains_fraction(hum, RATE, 50.0) < 0.3

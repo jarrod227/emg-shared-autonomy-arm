@@ -51,6 +51,14 @@ MIN_AMPLITUDE_RATIO = 0.1
 # the 20 Hz section's settling.
 WARMUP_SECONDS = 1.0
 
+# Mains hum lands at 50 or 60 Hz, squarely inside the 20-450 Hz band, so the
+# filter passes it untouched and it shows up as a large, steady MAV that is
+# indistinguishable from muscle tone by amplitude alone. Above this share of
+# in-band power the channel is measuring the room, not the arm.
+MAX_MAINS_FRACTION = 0.30
+MAINS_HARMONICS = 5
+MAINS_HALF_WIDTH_HZ = 2.0
+
 
 def load_session(path):
     """Return (info, channel sample arrays, parser stats, wear counts)."""
@@ -102,7 +110,27 @@ def mav_series(samples, sections, rate_hz=2000.0):
     ], dtype=np.float64)
 
 
-def channel_quality(columns, envelopes):
+def mains_fraction(samples, rate_hz, mains_hz):
+    """Share of in-band power sitting on a mains frequency and its harmonics."""
+    values = np.asarray(samples, dtype=np.float64)
+    values = (values - values.mean()) * np.hanning(len(values))
+    freqs = np.fft.rfftfreq(len(values), 1.0 / rate_hz)
+    power = np.abs(np.fft.rfft(values)) ** 2
+    in_band = power[(freqs >= 20.0) & (freqs <= 450.0)].sum()
+    if in_band <= 0.0:
+        return 0.0
+    hum = 0.0
+    for harmonic in range(1, MAINS_HARMONICS + 1):
+        centre = mains_hz * harmonic
+        if centre > 450.0:
+            break
+        window = (freqs >= centre - MAINS_HALF_WIDTH_HZ) & (
+            freqs <= centre + MAINS_HALF_WIDTH_HZ)
+        hum += power[window].sum()
+    return float(hum / in_band)
+
+
+def channel_quality(columns, envelopes, rate_hz=2000.0):
     """Flag channels whose correlations cannot mean anything.
 
     A dead channel correlates with nothing, which reads as "usefully
@@ -114,8 +142,13 @@ def channel_quality(columns, envelopes):
     for channel, samples in enumerate(columns):
         clipped = np.count_nonzero((samples <= 0) | (samples >= 4095)) / len(samples)
         loudness = float(envelopes[channel].max()) / strongest
+        hum = max(mains_fraction(samples, rate_hz, 50.0),
+                  mains_fraction(samples, rate_hz, 60.0))
         if clipped > MAX_CLIPPED_FRACTION:
             problems[channel] = f"clipped ({100 * clipped:.2f}% at the rails)"
+        elif hum > MAX_MAINS_FRACTION:
+            problems[channel] = (f"mains-dominated ({100 * hum:.0f}% of in-band "
+                                 "power is at 50/60 Hz and harmonics)")
         elif loudness < MIN_AMPLITUDE_RATIO:
             problems[channel] = (f"near its noise floor (peak MAV is "
                                  f"{100 * loudness:.0f}% of the loudest channel)")
@@ -180,9 +213,10 @@ def report_correlation(envelopes, problems):
         print("   VERDICT WITHHELD. These channels cannot support one:")
         for channel, reason in sorted(problems.items()):
             print(f"     ch{channel}: {reason}")
-        print("   A clipped channel reports wrong amplitudes, and a silent one")
-        print("   correlates with nothing — which looks identical to being")
-        print("   usefully independent. Fix the channels first, then re-record.")
+        print("   A clipped channel reports wrong amplitudes, a silent one")
+        print("   correlates with nothing, and a mains-dominated one measures")
+        print("   the room -- all three look identical to a good placement")
+        print("   from amplitude alone. Fix the channels, then re-record.")
         return matrix
     if worst > REDUNDANT_ABOVE:
         print("   VERDICT: at least one pair is redundant. Move those two bands")
@@ -247,7 +281,9 @@ def main():
         for samples in columns
     ])
 
-    report_correlation(envelopes, channel_quality(columns, envelopes))
+    report_correlation(envelopes,
+                       channel_quality(columns, envelopes,
+                                       float(info.sample_rate_hz)))
     report_segments(envelopes, info)
     return 0
 
