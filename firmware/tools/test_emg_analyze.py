@@ -185,7 +185,7 @@ def quality_of(tmp_path, channels):
     sections = to_fixed(design_bandpass(rate_hz=float(info.sample_rate_hz)))
     envelopes = np.vstack([mav_series(samples, sections, float(info.sample_rate_hz))
                        for samples in columns])
-    return channel_quality(columns, envelopes)
+    return channel_quality(columns, envelopes, float(RATE), sections)
 
 
 def test_clean_channels_raise_no_quality_problems(tmp_path):

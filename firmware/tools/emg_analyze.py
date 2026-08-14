@@ -26,7 +26,7 @@ import sys
 import numpy as np
 
 from emg_features_ref import HOP, WINDOW, mean_absolute_value
-from emg_filter_ref import design_bandpass, filter_fixed, to_fixed
+from emg_filter_ref import design_emg_filter, filter_fixed, to_fixed
 from emg_protocol import TYPE_INFO, TYPE_RAW, PacketParser, decode_info, decode_raw
 
 # Above this, two channels are telling the same story and one of them is
@@ -51,10 +51,12 @@ MIN_AMPLITUDE_RATIO = 0.1
 # the 20 Hz section's settling.
 WARMUP_SECONDS = 1.0
 
-# Mains hum lands at 50 or 60 Hz, squarely inside the 20-450 Hz band, so the
-# filter passes it untouched and it shows up as a large, steady MAV that is
-# indistinguishable from muscle tone by amplitude alone. Above this share of
-# in-band power the channel is measuring the room, not the arm.
+# Mains hum is measured on the *filtered* signal, because that is what the
+# envelopes are computed from. The raw fraction is reported separately: a
+# channel can be 97% mains before the notches and perfectly usable after,
+# which is exactly what the first sessions turned out to be. A high raw
+# fraction still means poor electrode contact and wasted ADC range, so it is
+# worth saying, but it is not grounds for withholding a verdict.
 MAX_MAINS_FRACTION = 0.30
 MAINS_HARMONICS = 5
 MAINS_HALF_WIDTH_HZ = 2.0
@@ -130,7 +132,7 @@ def mains_fraction(samples, rate_hz, mains_hz):
     return float(hum / in_band)
 
 
-def channel_quality(columns, envelopes, rate_hz=2000.0):
+def channel_quality(columns, envelopes, rate_hz=2000.0, sections=None):
     """Flag channels whose correlations cannot mean anything.
 
     A dead channel correlates with nothing, which reads as "usefully
@@ -142,13 +144,15 @@ def channel_quality(columns, envelopes, rate_hz=2000.0):
     for channel, samples in enumerate(columns):
         clipped = np.count_nonzero((samples <= 0) | (samples >= 4095)) / len(samples)
         loudness = float(envelopes[channel].max()) / strongest
-        hum = max(mains_fraction(samples, rate_hz, 50.0),
-                  mains_fraction(samples, rate_hz, 60.0))
+        measured = samples if sections is None else filter_fixed(
+            sections, np.clip(samples, -32768, 32767).astype(np.int16))
+        hum = max(mains_fraction(measured, rate_hz, 50.0),
+                  mains_fraction(measured, rate_hz, 60.0))
         if clipped > MAX_CLIPPED_FRACTION:
             problems[channel] = f"clipped ({100 * clipped:.2f}% at the rails)"
         elif hum > MAX_MAINS_FRACTION:
-            problems[channel] = (f"mains-dominated ({100 * hum:.0f}% of in-band "
-                                 "power is at 50/60 Hz and harmonics)")
+            problems[channel] = (f"still mains-dominated after the notches "
+                                 f"({100 * hum:.0f}% of in-band power)")
         elif loudness < MIN_AMPLITUDE_RATIO:
             problems[channel] = (f"near its noise floor (peak MAV is "
                                  f"{100 * loudness:.0f}% of the loudest channel)")
@@ -170,6 +174,11 @@ def describe_channels(info, columns, wear_counts, total_frames):
         # perfectly reasonable-looking MAV, just a wrong one. The analog gain
         # is fixed on the module, so the fix is a looser electrode or a
         # gentler contraction, not a software change.
+        raw_hum = 100.0 * max(mains_fraction(samples, info.sample_rate_hz, 50.0),
+                              mains_fraction(samples, info.sample_rate_hz, 60.0))
+        note = "  (removed by the notches)" if raw_hum > 30 else ""
+        print(f"       mains before filtering: {raw_hum:.0f}% of in-band power"
+              f"{note}")
         clipped = int(np.count_nonzero((samples <= 0) | (samples >= 4095)))
         clipped_share = 100.0 * clipped / len(samples)
         if clipped_share > 0.1:
@@ -275,7 +284,7 @@ def main():
 
     describe_channels(info, columns, wear_counts, total_frames)
 
-    sections = to_fixed(design_bandpass(rate_hz=float(info.sample_rate_hz)))
+    sections = to_fixed(design_emg_filter(rate_hz=float(info.sample_rate_hz)))
     envelopes = np.vstack([
         mav_series(samples, sections, float(info.sample_rate_hz))
         for samples in columns
@@ -283,7 +292,7 @@ def main():
 
     report_correlation(envelopes,
                        channel_quality(columns, envelopes,
-                                       float(info.sample_rate_hz)))
+                                       float(info.sample_rate_hz), sections))
     report_segments(envelopes, info)
     return 0
 

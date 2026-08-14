@@ -40,7 +40,7 @@
  * quantum: max 0.50 counts, RMS 0.29. */
 #define EMG_FILTER_STATE_BITS 12
 
-#define EMG_FILTER_MAX_SECTIONS 4
+#define EMG_FILTER_MAX_SECTIONS 6
 
 typedef struct {
     int32_t b0;
@@ -63,12 +63,22 @@ typedef struct {
     uint8_t section_count;
 } emg_filter_t;
 
-/* 4th-order Butterworth band-pass, 20-450 Hz at 2000 Hz. Regenerate with
- * `python3 tools/emg_filter_ref.py --emit-c` if the rate or band changes;
- * the host test fails if this table and scipy disagree. */
-#define EMG_FILTER_BANDPASS_SECTIONS 2
+/* 4th-order Butterworth band-pass, 20-450 Hz at 2000 Hz, followed by notches
+ * on the 50 Hz mains fundamental and its third harmonic.
+ *
+ * The notches are not optional polish. Mains hum lands inside the pass band,
+ * so the band-pass cannot touch it, and on a real session it was 96.6% of one
+ * channel's in-band power -- the rest-to-contraction contrast was 1.5x, which
+ * is no signal at all. With these notches the same recording gives 7.3% and
+ * 6.4x. The second harmonic was measured and contributed almost nothing, so
+ * it is omitted and the cascade stays at four sections.
+ *
+ * Regenerate with `python3 tools/emg_filter_ref.py --emit-c` if the rate,
+ * band, or mains frequency changes -- 60 Hz regions need --mains 60. The host
+ * test fails if this table and scipy disagree. */
+#define EMG_FILTER_DEFAULT_SECTIONS 4
 extern const emg_biquad_coeffs_t
-    emg_filter_bandpass_20_450_at_2000[EMG_FILTER_BANDPASS_SECTIONS];
+    emg_filter_20_450_notch50_at_2000[EMG_FILTER_DEFAULT_SECTIONS];
 
 /* Copies the sections in and clears the state. Returns false for a null
  * pointer, a zero count, or more sections than EMG_FILTER_MAX_SECTIONS. */

@@ -21,6 +21,7 @@ from emg_filter_ref import (
     FixedFilter,
     MAX_SECTIONS,
     design_bandpass,
+    design_emg_filter,
     filter_fixed,
     filter_float,
     format_c_initializer,
@@ -37,7 +38,8 @@ TOLERANCE_COUNTS = 2.0
 
 
 def default_sections():
-    return to_fixed(design_bandpass())
+    """The cascade the firmware ships: band-pass plus mains notches."""
+    return to_fixed(design_emg_filter())
 
 
 def test_design_returns_two_sections_for_a_fourth_order_bandpass():
@@ -72,7 +74,7 @@ def test_to_fixed_rejects_too_many_sections():
 
 
 def test_fixed_tracks_float_within_the_rounding_quantum():
-    sos = design_bandpass()
+    sos = design_emg_filter()
     steps = np.arange(4000) / 2000.0
     signal = (900 * np.sin(2 * np.pi * 80 * steps)
               + 400 * np.sin(2 * np.pi * 250 * steps) + 600)
@@ -100,8 +102,8 @@ def test_the_band_pass_keeps_in_band_content_and_drops_out_of_band():
         response = filter_fixed(sections, wave.astype(np.int16))
         return np.abs(response[3000:]).max()
 
-    # 100 Hz sits in the pass band; 2 Hz and 900 Hz are well outside it.
-    assert amplitude(100.0) > 900
+    # 80 Hz sits in the pass band; 2 Hz and 900 Hz are well outside it.
+    assert amplitude(80.0) > 900
     assert amplitude(2.0) < 100
     assert amplitude(900.0) < 100
 
@@ -115,7 +117,7 @@ def test_the_c_coefficient_table_matches_scipy():
     """
     source = FILTER_SOURCE.read_text()
     match = re.search(
-        r"emg_filter_bandpass_20_450_at_2000\[[^\]]*\]\s*=\s*\{(.*?)\n\};",
+        r"emg_filter_20_450_notch50_at_2000\[[^\]]*\]\s*=\s*\{(.*?)\n\};",
         source, re.S,
     )
     assert match, "coefficient table not found in emg_filter.c"
@@ -153,7 +155,7 @@ def test_firmware_output_matches_the_float_reference():
     firmware = np.frombuffer(payload, dtype="<i4", count=count,
                              offset=4 + 2 * count).astype(np.int64)
 
-    reference = filter_float(design_bandpass(), samples)
+    reference = filter_float(design_emg_filter(), samples)
     error = firmware - reference
 
     assert np.abs(error).max() < TOLERANCE_COUNTS
@@ -203,3 +205,33 @@ def test_a_reset_filter_does_not_continue_the_previous_signal():
 
     assert not np.array_equal(first, continued)
     assert np.array_equal(first, restarted)
+
+
+def test_the_mains_notches_reject_50_and_150_hz():
+    """The reason the notches exist, asserted after quantization.
+
+    A narrow notch is the most quantization-sensitive filter shape here, so
+    rejection is checked on the fixed-point cascade rather than on the float
+    design it came from.
+    """
+    sections = default_sections()
+    steps = np.arange(8000) / 2000.0
+
+    def amplitude(frequency):
+        wave = np.round(1000 * np.sin(2 * np.pi * frequency * steps))
+        return np.abs(filter_fixed(sections, wave.astype(np.int16))[4000:]).max()
+
+    assert amplitude(50.0) < 20        # mains fundamental, gone
+    assert amplitude(150.0) < 20       # third harmonic, gone
+    # And the notches must be narrow enough to leave the neighbourhood alone.
+    assert amplitude(80.0) > 900
+    assert amplitude(120.0) > 800
+    assert amplitude(200.0) > 800
+
+
+def test_every_quantized_pole_stays_inside_the_unit_circle():
+    """Stability after quantization, which narrow notches can lose."""
+    for index, (_, _, _, a1, a2) in enumerate(default_sections()):
+        scale = float(1 << COEFF_BITS)
+        radius = max(abs(root) for root in np.roots([1.0, a1 / scale, a2 / scale]))
+        assert radius < 1.0, f"section {index} pole radius {radius}"

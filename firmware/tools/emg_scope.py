@@ -25,7 +25,7 @@ import serial
 from matplotlib.animation import FuncAnimation
 
 from emg_features_ref import WINDOW, mean_absolute_value
-from emg_filter_ref import FixedFilter, design_bandpass, to_fixed
+from emg_filter_ref import FixedFilter, design_emg_filter, to_fixed
 from emg_protocol import TYPE_INFO, TYPE_RAW, PacketParser, decode_info, decode_raw
 
 PALETTE = ("#2b8cbe", "#e34a33", "#31a354")
@@ -122,7 +122,7 @@ def main():
 
     info = state["info"]
     span = max(64, int(arguments.seconds * info.sample_rate_hz))
-    sections = to_fixed(design_bandpass(rate_hz=float(info.sample_rate_hz)))
+    sections = to_fixed(design_emg_filter(rate_hz=float(info.sample_rate_hz)))
     state["channels"] = [ChannelStream(sections, span)
                          for _ in range(info.channel_count)]
     print(f"{info.channel_count} channels at {info.sample_rate_hz} Hz. "

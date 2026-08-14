@@ -17,17 +17,27 @@ baked into the firmware as integers, because the Cortex-M3 has no FPU.
 import argparse
 
 import numpy as np
-from scipy.signal import butter, sosfilt
+from scipy.signal import butter, iirnotch, sosfilt, tf2sos
 
 # Must match emg_filter.h.
 COEFF_BITS = 29
 STATE_BITS = 12
-MAX_SECTIONS = 4
+MAX_SECTIONS = 6
 
 DEFAULT_ORDER = 2
 DEFAULT_LOW_HZ = 20.0
 DEFAULT_HIGH_HZ = 450.0
 DEFAULT_RATE_HZ = 2000.0
+
+# Mains hum sits inside the pass band, so the band-pass alone cannot touch it.
+# Measured on a real session, notching the fundamental and third harmonic
+# recovered gesture structure that was completely buried: channel 1 went from
+# 96.6% mains and a 1.5x rest-to-contraction contrast to 7.3% and 6.4x. The
+# second harmonic was measured too and contributed almost nothing, so it is
+# left out and the cascade stays at four sections.
+DEFAULT_MAINS_HZ = 50.0
+DEFAULT_NOTCH_HARMONICS = (1, 3)
+DEFAULT_NOTCH_Q = 30.0
 
 
 def design_bandpass(low_hz=DEFAULT_LOW_HZ, high_hz=DEFAULT_HIGH_HZ,
@@ -41,6 +51,30 @@ def design_bandpass(low_hz=DEFAULT_LOW_HZ, high_hz=DEFAULT_HIGH_HZ,
         raise ValueError("need 0 < low < high < rate/2")
     return butter(order, [low_hz, high_hz], btype="band", fs=rate_hz,
                   output="sos")
+
+
+def design_notches(mains_hz=DEFAULT_MAINS_HZ,
+                   harmonics=DEFAULT_NOTCH_HARMONICS,
+                   rate_hz=DEFAULT_RATE_HZ, quality=DEFAULT_NOTCH_Q):
+    """Narrow notches on the mains fundamental and chosen harmonics."""
+    rows = []
+    for harmonic in harmonics:
+        centre = mains_hz * harmonic
+        if not 0 < centre < rate_hz / 2:
+            raise ValueError(f"notch at {centre} Hz is outside the Nyquist range")
+        rows.append(tf2sos(*iirnotch(centre, quality, rate_hz)))
+    return np.vstack(rows) if rows else np.empty((0, 6))
+
+
+def design_emg_filter(low_hz=DEFAULT_LOW_HZ, high_hz=DEFAULT_HIGH_HZ,
+                      rate_hz=DEFAULT_RATE_HZ, order=DEFAULT_ORDER,
+                      mains_hz=DEFAULT_MAINS_HZ,
+                      harmonics=DEFAULT_NOTCH_HARMONICS,
+                      quality=DEFAULT_NOTCH_Q):
+    """The cascade the firmware actually runs: band-pass then mains notches."""
+    band = design_bandpass(low_hz, high_hz, rate_hz, order)
+    notches = design_notches(mains_hz, harmonics, rate_hz, quality)
+    return np.vstack([band, notches]) if len(notches) else band
 
 
 def to_fixed(sos, coeff_bits=COEFF_BITS):
@@ -116,7 +150,7 @@ def filter_fixed(sections, samples, coeff_bits=COEFF_BITS,
     return FixedFilter(sections, coeff_bits, state_bits).process(samples)
 
 
-def format_c_initializer(sections, name="emg_filter_bandpass_20_450_at_2000"):
+def format_c_initializer(sections, name="emg_filter_20_450_notch50_at_2000"):
     lines = [
         f"const emg_biquad_coeffs_t {name}[{len(sections)}] = {{",
     ]
@@ -134,20 +168,24 @@ def main():
     parser.add_argument("--rate", type=float, default=DEFAULT_RATE_HZ)
     parser.add_argument("--order", type=int, default=DEFAULT_ORDER,
                         help="per edge; the band-pass is twice this")
+    parser.add_argument("--mains", type=float, default=DEFAULT_MAINS_HZ,
+                        help="mains frequency to notch (50 in most of the "
+                             "world, 60 in the Americas)")
     parser.add_argument("--emit-c", action="store_true",
                         help="print the C initializer for emg_filter.c")
     arguments = parser.parse_args()
 
-    sos = design_bandpass(arguments.low, arguments.high, arguments.rate,
-                          arguments.order)
+    sos = design_emg_filter(arguments.low, arguments.high, arguments.rate,
+                            arguments.order, arguments.mains)
     sections = to_fixed(sos)
 
     if arguments.emit_c:
         print(format_c_initializer(sections))
         return 0
 
-    print(f"Butterworth band-pass {arguments.low}-{arguments.high} Hz "
-          f"at {arguments.rate} Hz -> {len(sections)} sections")
+    print(f"Band-pass {arguments.low}-{arguments.high} Hz plus "
+          f"{arguments.mains} Hz notches at {arguments.rate} Hz "
+          f"-> {len(sections)} sections")
     for index, (row, coeffs) in enumerate(zip(sos, sections)):
         print(f"  section {index}")
         print(f"    float  b={row[0]:+.10f} {row[1]:+.10f} {row[2]:+.10f}"
