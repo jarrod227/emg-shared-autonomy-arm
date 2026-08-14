@@ -10,8 +10,8 @@ past, for the live summary and the metadata sidecar only.
     emg_record.py --replay session.bin
 
 Recording writes `session.bin` plus `session.json`, which holds the wall-clock
-start, the INFO packet contents, the parser's error counts, and both the
-wall-clock and device-timestamp estimates of the sample rate. Replay re-parses
+start, the INFO packet contents, the parser's error counts, and the
+wall-clock sample rate. Replay re-parses
 an existing log and prints the same summary, which is also how this tool is
 tested without hardware attached.
 
@@ -58,6 +58,7 @@ class Recording:
         self.first_raw_timestamp_us = None
         self.last_raw_timestamp_us = None
         self._last_raw_frames = 0
+        self.raw_before_info = 0
         self.frames_all_attached = 0
         self.frames_detached = {}
 
@@ -82,11 +83,16 @@ class Recording:
             self._parser.stats._note("info_payload")
 
     def _absorb_raw(self, packet):
+        if self.info is None or self.info.channel_count <= 0:
+            # Channel count is unknown until INFO arrives, so these frames
+            # cannot be counted. Their timestamps must be excluded too:
+            # spanning them while omitting their frames understates every
+            # derived rate, which read 3% low until this was fixed.
+            self.raw_before_info += 1
+            return
         if self.first_raw_timestamp_us is None:
             self.first_raw_timestamp_us = packet.timestamp_us
         self.last_raw_timestamp_us = packet.timestamp_us
-        if self.info is None or self.info.channel_count <= 0:
-            return
         channels = self.info.channel_count
         body = len(packet.payload) - RAW_HEADER_SIZE
         if body < 0:
@@ -108,17 +114,23 @@ class Recording:
                     self.frames_detached.get(channel, 0) + frames
                 )
 
-    def device_sample_rate_hz(self):
-        """Sample rate from the firmware's own timestamps, if derivable.
+    def frames_per_device_second(self):
+        """Frames delivered per unit of the firmware's own clock.
 
-        Independent of host scheduling, so comparing it against the
-        wall-clock figure separates a slow firmware from a slow reader.
+        **This cannot validate the sample rate.** The firmware derives its
+        timestamps from its own frame counter times the nominal period, so
+        dividing frames by that span returns the nominal rate by
+        construction. Only `sample_rate_hz_wall`, measured against the host
+        clock, is an independent measurement of the rate.
+
+        What this does detect is loss on the firmware side: a skipped half
+        advances the timestamp without contributing frames, so the figure
+        falls below nominal by exactly the fraction dropped.
 
         The span runs from the first packet's timestamp to the last one's, so
         it covers every frame except those in the last packet. Counting the
         frames actually present rather than assuming `frames_per_raw_packet`
-        keeps this exact when a packet is short -- a partial final batch, or
-        firmware that varies the batch size.
+        keeps this exact when a packet is short.
         """
         if self.first_raw_timestamp_us is None:
             return None
@@ -176,9 +188,13 @@ class Recording:
                 }
             if elapsed_sec:
                 summary["sample_rate_hz_wall"] = round(self.raw_frames / elapsed_sec, 1)
-        device_rate = self.device_sample_rate_hz()
-        if device_rate is not None:
-            summary["sample_rate_hz_device"] = round(device_rate, 1)
+        if self.info is not None:
+            summary["sample_rate_hz_nominal"] = self.info.sample_rate_hz
+        delivered = self.frames_per_device_second()
+        if delivered is not None:
+            summary["frames_per_device_second"] = round(delivered, 1)
+        if self.raw_before_info:
+            summary["raw_packets_before_info"] = self.raw_before_info
         return summary
 
 
@@ -224,8 +240,9 @@ def write_sidecar(out_path, summary):
 def print_summary(summary):
     print("=" * 58)
     for key in ("elapsed_sec", "bytes", "byte_rate", "frames",
-                "frames_all_attached", "usable_fraction",
-                "sample_rate_hz_wall", "sample_rate_hz_device"):
+                "raw_packets_before_info", "frames_all_attached",
+                "usable_fraction", "sample_rate_hz_nominal",
+                "sample_rate_hz_wall", "frames_per_device_second"):
         if key in summary:
             print(f"  {key:24} {summary[key]}")
     if "frames_detached_by_channel" in summary:

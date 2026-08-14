@@ -95,12 +95,12 @@ def test_raw_before_info_is_not_counted_as_frames():
     assert "frames" not in summary
 
 
-def test_derives_the_sample_rate_from_device_timestamps():
+def test_frames_per_device_second_matches_the_nominal_rate():
     recording = Recording()
     recording.feed(session(packet_count=11))
 
     # Ten inter-packet gaps of 16 ms each carry 10 * 32 frames.
-    assert recording.device_sample_rate_hz() == pytest.approx(SAMPLE_RATE, rel=1e-6)
+    assert recording.frames_per_device_second() == pytest.approx(SAMPLE_RATE, rel=1e-6)
 
 
 def test_device_rate_counts_real_frames_not_the_declared_batch_size():
@@ -121,10 +121,10 @@ def test_device_rate_counts_real_frames_not_the_declared_batch_size():
 
     assert recording.raw_frames == 3 * FRAMES_PER_PACKET + 1
     # Span covers the first three full packets only: 96 frames over 48 ms.
-    assert recording.device_sample_rate_hz() == pytest.approx(SAMPLE_RATE, rel=1e-6)
+    assert recording.frames_per_device_second() == pytest.approx(SAMPLE_RATE, rel=1e-6)
 
 
-def test_wall_and_device_rates_are_reported_separately():
+def test_wall_rate_and_delivered_rate_are_reported_separately():
     recording = Recording()
     recording.feed(session(packet_count=11))
 
@@ -132,7 +132,7 @@ def test_wall_and_device_rates_are_reported_separately():
     # the discrepancy rather than average it away.
     summary = recording.summary(elapsed_sec=0.32)
 
-    assert summary["sample_rate_hz_device"] == pytest.approx(2000.0, abs=0.1)
+    assert summary["frames_per_device_second"] == pytest.approx(2000.0, abs=0.1)
     assert summary["sample_rate_hz_wall"] == pytest.approx(1100.0, abs=0.1)
 
 
@@ -231,3 +231,28 @@ def test_a_fully_detached_recording_reports_nothing_usable():
     assert summary["frames_all_attached"] == 0
     assert summary["usable_fraction"] == 0.0
     assert set(summary["frames_detached_by_channel"]) == {"0", "1", "2"}
+
+
+def test_raw_packets_before_info_do_not_skew_the_rate():
+    """Regression: a capture started mid-stream read 3% slow.
+
+    RAW packets arriving before the first INFO cannot be turned into frames,
+    because the channel count is still unknown. Letting their timestamps into
+    the span while omitting their frames stretches the denominator without
+    the numerator, and every derived rate comes out low.
+    """
+    recording = Recording()
+    stream = bytearray()
+    # Nineteen orphans first, matching what a real mid-stream capture saw.
+    for index in range(19):
+        stream += raw_packet(index, index * PACKET_PERIOD_US)
+    stream += info_packet()
+    for index in range(19, 19 + 11):
+        stream += raw_packet(index, index * PACKET_PERIOD_US)
+
+    recording.feed(bytes(stream))
+    summary = recording.summary(1.0)
+
+    assert summary["raw_packets_before_info"] == 19
+    assert summary["frames"] == 11 * FRAMES_PER_PACKET
+    assert recording.frames_per_device_second() == pytest.approx(SAMPLE_RATE, rel=1e-6)
