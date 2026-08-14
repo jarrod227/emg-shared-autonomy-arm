@@ -233,13 +233,15 @@ def test_a_fully_detached_recording_reports_nothing_usable():
     assert set(summary["frames_detached_by_channel"]) == {"0", "1", "2"}
 
 
-def test_raw_packets_before_info_do_not_skew_the_rate():
-    """Regression: a capture started mid-stream read 3% slow.
+def test_raw_packets_before_info_are_replayed_once_it_arrives():
+    """Regression: a capture started mid-stream read low, twice.
 
-    RAW packets arriving before the first INFO cannot be turned into frames,
-    because the channel count is still unknown. Letting their timestamps into
-    the span while omitting their frames stretches the denominator without
-    the numerator, and every derived rate comes out low.
+    RAW packets arriving before the first INFO cannot be split into channels
+    yet, but they are perfectly good data. Discarding them while still
+    counting the wall-clock time they occupied understates every derived
+    rate -- 3% in the first real capture, 10% in the second. Holding them and
+    replaying them once the channel count is known keeps frames matched to
+    the time that produced them.
     """
     recording = Recording()
     stream = bytearray()
@@ -247,12 +249,30 @@ def test_raw_packets_before_info_do_not_skew_the_rate():
     for index in range(19):
         stream += raw_packet(index, index * PACKET_PERIOD_US)
     stream += info_packet()
-    for index in range(19, 19 + 11):
+    for index in range(19, 30):
         stream += raw_packet(index, index * PACKET_PERIOD_US)
 
     recording.feed(bytes(stream))
+    summary = recording.summary(30 * PACKET_PERIOD_US / 1e6)
+
+    # Still reported, because a large count means the capture missed the
+    # start of a session and the operator may want to know.
+    assert summary["raw_packets_before_info"] == 19
+    # Every packet counted, including the held ones.
+    assert summary["frames"] == 30 * FRAMES_PER_PACKET
+    assert summary["sample_rate_hz_wall"] == pytest.approx(SAMPLE_RATE, rel=1e-3)
+    assert recording.frames_per_device_second() == pytest.approx(SAMPLE_RATE, rel=1e-6)
+
+
+def test_held_packets_keep_their_wear_state(tmp_path):
+    # The held packets must go through the same accounting, not a shortcut
+    # that counts frames but forgets what they were recorded under.
+    recording = Recording()
+    stream = raw_packet(0, 0, wear=0b101) + info_packet() + raw_packet(1, PACKET_PERIOD_US)
+
+    recording.feed(stream)
     summary = recording.summary(1.0)
 
-    assert summary["raw_packets_before_info"] == 19
-    assert summary["frames"] == 11 * FRAMES_PER_PACKET
-    assert recording.frames_per_device_second() == pytest.approx(SAMPLE_RATE, rel=1e-6)
+    assert summary["frames"] == 2 * FRAMES_PER_PACKET
+    assert summary["frames_all_attached"] == FRAMES_PER_PACKET
+    assert summary["frames_detached_by_channel"] == {"1": FRAMES_PER_PACKET}

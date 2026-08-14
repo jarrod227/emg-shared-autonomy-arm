@@ -44,19 +44,27 @@ def load_session(path):
     info = None
     columns = None
     wear_counts = {}
+    pending = []
+
+    def absorb(packet):
+        block = decode_raw(packet.payload, info.channel_count)
+        for channel in range(info.channel_count):
+            if block.channel_attached(channel):
+                wear_counts[channel] = wear_counts.get(channel, 0) + len(block.frames)
+            columns[channel].extend(frame[channel] for frame in block.frames)
 
     for packet in parser.feed(pathlib.Path(path).read_bytes()):
         if packet.type == TYPE_INFO and info is None:
             info = decode_info(packet.payload)
             columns = [[] for _ in range(info.channel_count)]
-        elif packet.type == TYPE_RAW and info is not None:
-            block = decode_raw(packet.payload, info.channel_count)
-            for channel in range(info.channel_count):
-                attached = block.channel_attached(channel)
-                wear_counts[channel] = wear_counts.get(channel, 0) + (
-                    len(block.frames) if attached else 0
-                )
-                columns[channel].extend(frame[channel] for frame in block.frames)
+            # A capture started mid-stream sees RAW before INFO. Those samples
+            # are fine, they just could not be split into channels yet, and
+            # dropping them would shift every segment time in the report.
+            for held in pending:
+                absorb(held)
+            pending = []
+        elif packet.type == TYPE_RAW:
+            (absorb if info is not None else pending.append)(packet)
 
     if info is None:
         raise SystemExit("no INFO packet in the log; cannot interpret the samples")

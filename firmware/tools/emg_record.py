@@ -59,6 +59,7 @@ class Recording:
         self.last_raw_timestamp_us = None
         self._last_raw_frames = 0
         self.raw_before_info = 0
+        self._pending = []
         self.frames_all_attached = 0
         self.frames_detached = {}
 
@@ -81,14 +82,22 @@ class Recording:
             # A payload that passed CRC but is the wrong size means the
             # sender disagrees with the spec; count it rather than crash.
             self._parser.stats._note("info_payload")
+            return
+        # Everything captured before INFO is still perfectly good data; it
+        # just could not be interpreted yet. Replaying it now keeps the frame
+        # count matched to the elapsed time that produced it.
+        pending, self._pending = self._pending, []
+        for held in pending:
+            self._absorb_raw(held)
 
     def _absorb_raw(self, packet):
         if self.info is None or self.info.channel_count <= 0:
-            # Channel count is unknown until INFO arrives, so these frames
-            # cannot be counted. Their timestamps must be excluded too:
-            # spanning them while omitting their frames understates every
-            # derived rate, which read 3% low until this was fixed.
+            # The channel count is unknown until INFO arrives, so hold these
+            # rather than dropping them. Counting their elapsed time while
+            # discarding their frames understates every derived rate -- the
+            # bug this replaced, which read 3% then 10% low.
             self.raw_before_info += 1
+            self._pending.append(packet)
             return
         if self.first_raw_timestamp_us is None:
             self.first_raw_timestamp_us = packet.timestamp_us
