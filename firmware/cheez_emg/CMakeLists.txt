@@ -75,3 +75,13 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 
     # Add user defined libraries
 )
+
+# CubeMX generates only the ELF, but st-flash writes a raw image. Producing the
+# .bin here rather than by hand means the flashed file cannot silently be an
+# older build than the one just compiled.
+add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_OBJCOPY} -O binary
+            $<TARGET_FILE:${CMAKE_PROJECT_NAME}>
+            $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/${CMAKE_PROJECT_NAME}.bin
+    COMMENT "Writing ${CMAKE_PROJECT_NAME}.bin for st-flash"
+)
