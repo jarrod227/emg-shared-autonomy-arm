@@ -37,10 +37,22 @@ class ChannelStream:
     def __init__(self, sections, span):
         self.filter = FixedFilter(sections)
         self.samples = collections.deque([0] * span, maxlen=span)
+        self.raw = collections.deque([2048] * span, maxlen=span)
         self.attached = False
 
     def extend(self, values):
+        self.raw.extend(int(value) for value in values)
         self.samples.extend(self.filter.process(values))
+
+    def rail_hits(self):
+        """Raw samples pegged at the ADC limits in the visible window.
+
+        Shown live because clipping is invisible in the filtered trace and in
+        the MAV: a clipped peak still yields a plausible number, just a wrong
+        one. Catching it while adjusting the band beats discovering it after
+        the recording.
+        """
+        return sum(1 for value in self.raw if value <= 0 or value >= 4095)
 
     def mav(self):
         recent = list(self.samples)[-WINDOW:]
@@ -140,8 +152,12 @@ def main():
             limit = max(64, int(1.2 * max(abs(min(data)), abs(max(data)))))
             axis.set_ylim(-limit, limit)
             contact = "attached" if stream.attached else "NO CONTACT"
-            axis.set_title(f"ch{index}   MAV {stream.mav():5d}   [{contact}]",
-                           loc="left", fontsize=10)
+            rails = stream.rail_hits()
+            warning = f"   CLIPPING x{rails}" if rails else ""
+            axis.set_title(
+                f"ch{index}   MAV {stream.mav():5d}   [{contact}]{warning}",
+                loc="left", fontsize=10,
+                color="#b2182b" if (rails or not stream.attached) else "black")
         return traces
 
     animation = FuncAnimation(figure, update, interval=60, blit=False,
@@ -160,8 +176,9 @@ def main():
         data = list(stream.samples)
         spread = statistics.pstdev(data) if len(data) > 1 else 0.0
         contact = "attached" if stream.attached else "NO CONTACT"
+        rails = stream.rail_hits()
         print(f"  ch{index}: last-window MAV {stream.mav()}  sd {spread:.1f}  "
-              f"[{contact}]")
+              f"[{contact}]" + (f"  CLIPPED x{rails}" if rails else ""))
     stats = state.get("stats")
     if stats is not None:
         print(f"  packets accepted={stats.accepted} lost={stats.lost} "

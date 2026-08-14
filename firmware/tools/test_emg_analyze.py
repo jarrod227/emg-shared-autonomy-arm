@@ -12,9 +12,16 @@ import struct
 import numpy as np
 import pytest
 
-from emg_analyze import DISTINCT_BELOW, REDUNDANT_ABOVE, load_session, mav_series
-from emg_features_ref import HOP, WINDOW
-from emg_filter_ref import design_bandpass, to_fixed
+from emg_analyze import (
+    DISTINCT_BELOW,
+    WARMUP_SECONDS,
+    REDUNDANT_ABOVE,
+    channel_quality,
+    load_session,
+    mav_series,
+)
+from emg_features_ref import HOP, WINDOW, mean_absolute_value
+from emg_filter_ref import design_bandpass, filter_fixed, to_fixed
 from emg_protocol import TYPE_INFO, TYPE_RAW
 from test_emg_protocol import build
 
@@ -64,7 +71,8 @@ def write_session(path, channels, wear=0b111):
 def envelopes_of(path):
     info, columns, _, _ = load_session(path)
     sections = to_fixed(design_bandpass(rate_hz=float(info.sample_rate_hz)))
-    return np.vstack([mav_series(samples, sections) for samples in columns])
+    return np.vstack([mav_series(samples, sections, float(info.sample_rate_hz))
+                       for samples in columns])
 
 
 def test_shared_envelopes_are_detected_as_redundant(tmp_path):
@@ -132,7 +140,7 @@ def test_load_session_requires_an_info_packet(tmp_path):
         load_session(path)
 
 
-def test_windows_line_up_with_the_firmware(tmp_path):
+def test_windows_line_up_with_the_firmware_after_the_warmup(tmp_path):
     rng = np.random.default_rng(7)
     samples = RATE * SECONDS
     channels = [synthetic_channel(envelope([2], samples), rng)] * CHANNELS
@@ -140,4 +148,84 @@ def test_windows_line_up_with_the_firmware(tmp_path):
     series = envelopes_of(write_session(tmp_path / "s.bin", channels))
 
     frames = (samples // FRAMES_PER_PACKET) * FRAMES_PER_PACKET
-    assert series.shape == (CHANNELS, (frames - WINDOW) // HOP + 1)
+    usable = frames - int(WARMUP_SECONDS * RATE)
+    assert series.shape == (CHANNELS, (usable - WINDOW) // HOP + 1)
+
+
+def test_the_warmup_transient_would_have_masked_a_dead_channel(tmp_path):
+    """Why the warmup is dropped rather than tolerated.
+
+    The filter starts cleared while the signal starts at the mid-rail bias,
+    so the first output is a decaying response to a ~2048 step. On a channel
+    carrying only a couple of counts of real signal that transient is the
+    largest thing in the record, and taking a peak over all windows would
+    report the dead channel as loud.
+    """
+    rng = np.random.default_rng(2)
+    samples = RATE * SECONDS
+    quiet = synthetic_channel(envelope([3], samples), rng, gain=5.0)
+    path = write_session(tmp_path / "s.bin", [quiet] * CHANNELS)
+
+    info, columns, _, _ = load_session(path)
+    sections = to_fixed(design_bandpass(rate_hz=float(info.sample_rate_hz)))
+
+    trimmed = mav_series(columns[0], sections, float(info.sample_rate_hz))
+    untrimmed = filter_fixed(sections, columns[0].astype(np.int16))
+    early = mean_absolute_value(untrimmed[:WINDOW])
+
+    # The opening window is an order of magnitude above anything real here.
+    assert early > 10 * trimmed.max()
+    assert columns[0].std() < 5.0
+
+
+def quality_of(tmp_path, channels):
+    path = write_session(tmp_path / "s.bin", channels)
+    info, columns, _, _ = load_session(path)
+    sections = to_fixed(design_bandpass(rate_hz=float(info.sample_rate_hz)))
+    envelopes = np.vstack([mav_series(samples, sections, float(info.sample_rate_hz))
+                       for samples in columns])
+    return channel_quality(columns, envelopes)
+
+
+def test_clean_channels_raise_no_quality_problems(tmp_path):
+    rng = np.random.default_rng(2)
+    samples = RATE * SECONDS
+    channels = [synthetic_channel(envelope([c], samples), rng) for c in (1, 3, 5)]
+
+    assert quality_of(tmp_path, channels) == {}
+
+
+def test_a_clipped_channel_blocks_the_verdict(tmp_path):
+    """Clipping makes amplitudes wrong, so correlation cannot mean anything."""
+    rng = np.random.default_rng(2)
+    samples = RATE * SECONDS
+    channels = [synthetic_channel(envelope([c], samples), rng) for c in (1, 3, 5)]
+    # Drive channel 1 hard enough to hit the rails.
+    channels[1] = synthetic_channel(envelope([3], samples), rng, gain=4000.0)
+
+    problems = quality_of(tmp_path, channels)
+
+    assert 1 in problems and "clipped" in problems[1]
+
+
+def test_a_silent_channel_blocks_the_verdict(tmp_path):
+    """The trap this gate exists for.
+
+    A dead channel correlates with nothing, which is indistinguishable from
+    being usefully independent -- so without this it would score as good
+    placement.
+    """
+    rng = np.random.default_rng(2)
+    samples = RATE * SECONDS
+    channels = [synthetic_channel(envelope([c], samples), rng) for c in (1, 5)]
+    channels.append(synthetic_channel(envelope([3], samples), rng, gain=5.0))
+
+    problems = quality_of(tmp_path, channels)
+
+    assert 2 in problems and "noise floor" in problems[2]
+    # And confirm it really would have looked fine: its correlations are low.
+    info, columns, _, _ = load_session(write_session(tmp_path / "t.bin", channels))
+    sections = to_fixed(design_bandpass(rate_hz=float(info.sample_rate_hz)))
+    envelopes = np.vstack([mav_series(s, sections, float(info.sample_rate_hz)) for s in columns])
+    matrix = np.corrcoef(envelopes)
+    assert abs(matrix[0][2]) < DISTINCT_BELOW

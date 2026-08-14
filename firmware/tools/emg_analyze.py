@@ -37,6 +37,20 @@ REDUNDANT_ABOVE = 0.90
 DISTINCT_BELOW = 0.70
 SEGMENTS = 10
 
+# Any clipping at all makes the affected channel's amplitudes wrong, and a
+# channel an order of magnitude quieter than the loudest is sitting at its
+# noise floor. Correlation involving either is uninformative, so the verdict
+# is withheld rather than reported against data that cannot support it.
+MAX_CLIPPED_FRACTION = 0.001
+MIN_AMPLITUDE_RATIO = 0.1
+
+# The filter starts from a cleared state while the signal starts at the
+# ~2048 mid-rail bias, so the first output is a large decaying transient
+# from that step, not muscle. The firmware sees the same thing at boot; it
+# is simply not information about placement. One second is comfortably past
+# the 20 Hz section's settling.
+WARMUP_SECONDS = 1.0
+
 
 def load_session(path):
     """Return (info, channel sample arrays, parser stats, wear counts)."""
@@ -71,13 +85,41 @@ def load_session(path):
     return info, [np.array(c, dtype=np.int64) for c in columns], parser.stats, wear_counts
 
 
-def mav_series(samples, sections):
-    """Band-pass, then MAV per feature window — what the firmware computes."""
+def mav_series(samples, sections, rate_hz=2000.0):
+    """Band-pass, then MAV per feature window — what the firmware computes.
+
+    The filter's settling transient is dropped first. Left in, it dominates
+    the opening windows: on a channel with only a couple of counts of real
+    signal it produced a peak MAV of 77 against a raw standard deviation of
+    1.8, which is enough to make a dead channel look alive.
+    """
     filtered = filter_fixed(sections, np.clip(samples, -32768, 32767).astype(np.int16))
+    warmup = min(int(WARMUP_SECONDS * rate_hz), max(0, len(filtered) - WINDOW))
+    filtered = filtered[warmup:]
     return np.array([
         mean_absolute_value(filtered[end - WINDOW:end])
         for end in range(WINDOW, len(filtered) + 1, HOP)
     ], dtype=np.float64)
+
+
+def channel_quality(columns, envelopes):
+    """Flag channels whose correlations cannot mean anything.
+
+    A dead channel correlates with nothing, which reads as "usefully
+    distinct" — the exact way a placement verdict can come out green on data
+    that does not support one.
+    """
+    strongest = max(float(row.max()) for row in envelopes) or 1.0
+    problems = {}
+    for channel, samples in enumerate(columns):
+        clipped = np.count_nonzero((samples <= 0) | (samples >= 4095)) / len(samples)
+        loudness = float(envelopes[channel].max()) / strongest
+        if clipped > MAX_CLIPPED_FRACTION:
+            problems[channel] = f"clipped ({100 * clipped:.2f}% at the rails)"
+        elif loudness < MIN_AMPLITUDE_RATIO:
+            problems[channel] = (f"near its noise floor (peak MAV is "
+                                 f"{100 * loudness:.0f}% of the loudest channel)")
+    return problems
 
 
 def describe_channels(info, columns, wear_counts, total_frames):
@@ -106,7 +148,7 @@ def describe_channels(info, columns, wear_counts, total_frames):
             print("       WARN: contact was lost during the recording")
 
 
-def report_correlation(envelopes):
+def report_correlation(envelopes, problems):
     print()
     print("=" * 66)
     print("2. Envelope correlation — the placement verdict")
@@ -134,6 +176,14 @@ def report_correlation(envelopes):
             print(f"   ch{row} vs ch{column}: |r| = {value:.2f}   {mark}")
 
     print()
+    if problems:
+        print("   VERDICT WITHHELD. These channels cannot support one:")
+        for channel, reason in sorted(problems.items()):
+            print(f"     ch{channel}: {reason}")
+        print("   A clipped channel reports wrong amplitudes, and a silent one")
+        print("   correlates with nothing — which looks identical to being")
+        print("   usefully independent. Fix the channels first, then re-record.")
+        return matrix
     if worst > REDUNDANT_ABOVE:
         print("   VERDICT: at least one pair is redundant. Move those two bands")
         print("   further apart around the forearm circumference, not along it.")
@@ -157,6 +207,7 @@ def report_segments(envelopes, info):
     windows = envelopes.shape[1]
     size = max(1, windows // SEGMENTS)
     window_sec = HOP / info.sample_rate_hz
+    offset_sec = WARMUP_SECONDS + WINDOW / info.sample_rate_hz
     print("     time   " + "".join(f"    ch{i}" for i in range(len(envelopes)))
           + "   dominant")
     for start in range(0, windows, size):
@@ -166,7 +217,7 @@ def report_segments(envelopes, info):
         means = block.mean(axis=1)
         dominant = "-" if means.max() < 5 else f"ch{int(means.argmax())}"
         cells = "".join(f"  {value:6.0f}" for value in means)
-        print(f"   {start * window_sec:5.1f}s {cells}   {dominant}")
+        print(f"   {offset_sec + start * window_sec:5.1f}s {cells}   {dominant}")
 
 
 def main():
@@ -191,9 +242,12 @@ def main():
     describe_channels(info, columns, wear_counts, total_frames)
 
     sections = to_fixed(design_bandpass(rate_hz=float(info.sample_rate_hz)))
-    envelopes = np.vstack([mav_series(samples, sections) for samples in columns])
+    envelopes = np.vstack([
+        mav_series(samples, sections, float(info.sample_rate_hz))
+        for samples in columns
+    ])
 
-    report_correlation(envelopes)
+    report_correlation(envelopes, channel_quality(columns, envelopes))
     report_segments(envelopes, info)
     return 0
 
