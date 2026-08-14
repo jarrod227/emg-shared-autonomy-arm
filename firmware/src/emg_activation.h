@@ -54,31 +54,39 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* CANDIDATE values, not validated. A joint offline sweep over the recording
- * that exposed the defect and the frozen 9/9 event-gate session put the
- * whole band K = 2..5 through both; K >= 6 starts suppressing real gestures
- * and missing events. Within that band the events do not separate the
- * choices, so the mechanism does: at K = 3 the entire preparatory movement
- * (peak 79 counts against a 35 baseline) falls below the 105 threshold,
- * while at K = 2 four of its windows cross a 70 threshold and are stopped
- * only because they fragment into runs of two, short of the gate's five.
- * Passing by fragmentation is not margin. K = 3 also sits two steps below
- * where real gestures start breaking.
+/* Frozen 2026-08-14 by an independent self-paced session that took no part in
+ * choosing them: `datasets/emg_activation/selfpaced_20260814_143300.bin`, six
+ * gestures, all six emitted correctly with no spurious or missing event. That
+ * recording also suppressed 88 windows across 17 low-amplitude episodes, three
+ * of which ran 21, 17, and 11 windows — the first two longer than the twelve
+ * hold-off windows plus a five-window run, so each would have emitted a
+ * spurious event on the previous firmware, and both were ABORT-dominated.
+ * Counts are in 50 ms feature hops; K multiplies the rest baseline.
  *
- * The run-length margin was tried as a selector and discarded: it jumps
+ * How they were chosen. A joint sweep over the defect recording
+ * (`selfpaced_20260814_defect.bin`) and the frozen 9/9 event-gate session
+ * passed the whole band K = 2..5; K >= 6 starts suppressing real gestures and
+ * missing events. Events did not separate the survivors, so the mechanism
+ * did: at K = 3 the entire preparatory movement (peak 79 against a 35
+ * baseline) falls below the 105 threshold, while at K = 2 four of its windows
+ * cross a 70 threshold and are stopped only because they fragment into runs of
+ * two. Passing by fragmentation is not margin. The acceptance session then
+ * settled it independently — its tightest suppressed episode peaked at 90
+ * against a 93 threshold and ran 21 windows, so K = 2 would have let it
+ * through and fired a false ABORT.
+ *
+ * A run-length margin was tried as a selector and discarded: it jumps
  * non-monotonically (6, 7, 29, 30 across shifts at fixed K) because one
  * marginal window splits a run in half, so it measures threshold proximity
  * rather than robustness.
  *
- * Shift 4 makes the EMA cover most of a step change in ~16 hops = 0.8 s at
- * the 50 ms hop. The two recordings do not discriminate between shifts, so
- * this stays the middle of the swept range rather than a measured value.
+ * Shift 4 gives the EMA most of a step change in ~16 hops = 0.8 s. No
+ * recording so far discriminates between shifts, so it remains the middle of
+ * the swept range rather than a measured value — weaker evidence than K has.
  *
- * Both numbers came from two recordings, one of which was used to find the
- * defect and the other already spent as an acceptance set. The same rule
- * applies as to the gate counts: freeze only after a session that did not
- * participate in choosing them agrees, collected self-paced, since a cued
- * protocol cannot produce the preparatory movement at all. */
+ * The margin is thin and should be re-measured. Three counts separated the
+ * tightest episode from its threshold; that is not yet enough to tell a
+ * robust K = 3 from a second lucky one. */
 #define EMG_ACTIVATION_FACTOR 3u
 #define EMG_ACTIVATION_BASELINE_SHIFT 4u
 

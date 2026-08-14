@@ -14,8 +14,8 @@ import struct
 import pytest
 
 from emg_activation_ref import (
-    CANDIDATE_BASELINE_SHIFT,
-    CANDIDATE_FACTOR,
+    FROZEN_BASELINE_SHIFT,
+    FROZEN_FACTOR,
     ActivationGate,
 )
 from emg_event_gate_replay import LABELS
@@ -59,7 +59,7 @@ def test_c_activation_matches_python_step_for_step():
     )
     # A drifted constant should report as a configuration mismatch, not
     # surface later as a confusing decision difference.
-    assert (factor, shift) == (CANDIDATE_FACTOR, CANDIDATE_BASELINE_SHIFT)
+    assert (factor, shift) == (FROZEN_FACTOR, FROZEN_BASELINE_SHIFT)
 
     gate = ActivationGate(factor, shift)
     python_decisions = []

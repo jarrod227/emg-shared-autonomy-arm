@@ -13,17 +13,16 @@ is caught by test_emg_activation_ref.py against the fixture that
 test_emg_activation.c emits, decision for decision and baseline for
 baseline.
 
-CANDIDATE_FACTOR and CANDIDATE_BASELINE_SHIFT are candidates, not validated
-values, and must stay in step with emg_activation.h -- that header carries
-the reasoning for the pair. In short: a joint sweep passed K = 2..5 on both
-the defect recording and the frozen 9/9 session, and K = 3 was taken because
-it clears the preparatory movement outright rather than by fragmenting it.
+FROZEN_FACTOR and FROZEN_BASELINE_SHIFT were frozen 2026-08-14 by an
+independent self-paced session that took no part in choosing them; see
+emg_activation.h for the full reasoning and the recording names. Kept in
+step with EMG_ACTIVATION_FACTOR / EMG_ACTIVATION_BASELINE_SHIFT there.
 """
 
 REST = "REST"
 
-CANDIDATE_FACTOR = 3
-CANDIDATE_BASELINE_SHIFT = 4
+FROZEN_FACTOR = 3
+FROZEN_BASELINE_SHIFT = 4
 
 # Sums of three per-channel window MAVs are bounded by construction; the
 # clamp only defends the accumulator against a corrupt caller.
@@ -33,8 +32,8 @@ TOTAL_LIMIT = 3 * 32767
 class ActivationGate:
     """Stateful mirror of emg_activation_t plus its two operations."""
 
-    def __init__(self, factor=CANDIDATE_FACTOR,
-                 baseline_shift=CANDIDATE_BASELINE_SHIFT):
+    def __init__(self, factor=FROZEN_FACTOR,
+                 baseline_shift=FROZEN_BASELINE_SHIFT):
         factor = int(factor)
         baseline_shift = int(baseline_shift)
         if factor <= 0:

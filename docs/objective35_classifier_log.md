@@ -541,11 +541,34 @@ that cleared its threshold by one 50 ms window: a pass with no margin behind
 it, which reads identically to a pass with one. K = 3 clears the whole
 movement outright and still sits two steps below where real gestures break.
 
-Neither number is frozen. Both come from two recordings — one used to find the
-defect, one already spent as an acceptance set — and choosing among 19 passing
-configurations on those same two is the shape of overfitting this project has
-been careful about elsewhere. Freezing waits on a self-paced session that did
-not participate in the choice.
+Neither number was frozen at that point. Both came from two recordings — one
+used to find the defect, one already spent as an acceptance set — and choosing
+among 19 passing configurations on those same two is the shape of overfitting
+this project has been careful about elsewhere.
+
+### An independent session froze it
+
+A third recording, self-paced, six gestures, took no part in choosing K. All
+six events fired correctly with no spurious or missing event, which is the
+acceptance test. It also went further than a pass/fail count: the activation
+stage suppressed 88 windows across 17 low-amplitude episodes, three of them
+21, 17, and 11 windows long — the first two longer than twelve hold-off
+windows plus a five-window run, so each would have fired a spurious event on
+the previous firmware, and both were `ABORT`-dominated.
+
+The tightest of those episodes peaked at 90 total MAV against a threshold of
+93, over 21 windows. `K = 2` — which the joint sweep had passed only by
+fragmenting a shorter episode into runs of two — sets that threshold at 62 and
+would have let this one through whole, firing a false `ABORT`. The independent
+session did what the sweep alone could not: it ruled out the runner-up rather
+than merely failing to distinguish it.
+
+`EMG_ACTIVATION_FACTOR = 3` and `EMG_ACTIVATION_BASELINE_SHIFT = 4` are frozen
+on this basis. The margin is thin — three counts separated the tightest
+episode from its threshold — and is recorded as such rather than rounded up to
+"validated." A fourth recording that measures that margin again, ideally with
+a session that pushes closer to it on purpose, would say whether three counts
+is a robust separation or a second lucky number.
 
 ## Lessons
 
@@ -594,3 +617,10 @@ not participate in the choice.
 - **When the outcome cannot choose, the mechanism must.** Nineteen
   configurations passed both tests; only looking at what each did to the actual
   defect distinguished clearing it from getting away with it.
+- **A third recording can rule out a survivor a sweep could only fail to
+  distinguish.** The independent session did not just repeat the pass/fail
+  count — its tightest episode specifically fell in the gap between `K = 2`
+  and `K = 3`, which is what actually froze the choice.
+- **State the margin, not just the verdict.** Three counts of separation is
+  recorded next to the freeze, not smoothed into "validated," because the
+  next session that measures it might come back different.

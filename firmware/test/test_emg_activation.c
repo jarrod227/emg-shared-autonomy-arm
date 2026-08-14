@@ -24,12 +24,12 @@ static int failures = 0;
         }                                                                    \
     } while (0)
 
-/* The hand-written cases below pin factor 5 / shift 4 deliberately, and no
- * longer track the candidate constants: the arithmetic in their comments
+/* The hand-written cases below pin factor 5 / shift 4 deliberately, and do
+ * not track the frozen constants: the arithmetic in their comments
  * (29 -> threshold 145) is written against these, and a case that silently
- * re-derived its own expected values whenever the candidate moved would
- * stop testing the mechanism. test_candidate_constants_are_what_was_swept
- * covers the candidate itself. */
+ * re-derived its own expected values whenever the frozen pair moved would
+ * stop testing the mechanism. test_frozen_constants_match_the_independent_session
+ * covers the frozen values themselves. */
 static void init_fixed(emg_activation_t *activation)
 {
     CHECK(emg_activation_init(activation, 5u, 4u));
@@ -192,18 +192,20 @@ static void test_corrupt_totals_cannot_poison_the_accumulator(void)
     CHECK(emg_activation_baseline(&activation) == 0);
 }
 
-static void test_candidate_constants_are_what_was_swept(void)
+static void test_frozen_constants_match_the_independent_session(void)
 {
-    /* The joint sweep over the defect recording and the frozen event-gate
-     * session passed K = 2..5 and broke at 6; 3 was taken because it clears
-     * the preparatory movement outright instead of by fragmenting it. These
-     * are candidates awaiting an independent session, so the assertion is
-     * here to make a change deliberate, not to claim they are validated. */
+    /* Frozen 2026-08-14 by an independent self-paced session that took no
+     * part in choosing them: 6/6 gestures correct, and its tightest
+     * suppressed episode (peak 90 against a threshold of 93, 21 windows)
+     * would have leaked a false ABORT at K = 2. See emg_activation.h. This
+     * assertion makes a change deliberate; it does not claim the margin is
+     * wide -- three counts is thin and worth re-measuring. */
     CHECK(EMG_ACTIVATION_FACTOR == 3u);
     CHECK(EMG_ACTIVATION_BASELINE_SHIFT == 4u);
 
-    /* The measured numbers the choice rests on: a 35-count rest baseline,
-     * a preparatory movement peaking at 79, and a fist reaching 736. */
+    /* The measured numbers the choice rested on before the independent
+     * session: a 35-count rest baseline, a preparatory movement peaking at
+     * 79, and a fist reaching 736. */
     emg_activation_t activation;
     CHECK(emg_activation_init(&activation, EMG_ACTIVATION_FACTOR,
                               EMG_ACTIVATION_BASELINE_SHIFT));
@@ -384,7 +386,7 @@ int main(int argc, char **argv)
     test_invalid_windows_change_nothing();
     test_abort_is_judged_like_every_other_class();
     test_corrupt_totals_cannot_poison_the_accumulator();
-    test_candidate_constants_are_what_was_swept();
+    test_frozen_constants_match_the_independent_session();
     if (failures == 0) {
         printf("  all checks passed\n");
         return 0;

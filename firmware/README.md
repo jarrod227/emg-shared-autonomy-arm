@@ -266,7 +266,7 @@ host before flashing.
 | Wear-detect GPIO reads | done; one mask per half, shared by the RAW packet and by window validity so the two cannot disagree |
 | Classifier inference | Q18 pure C scorer matches the Python reference on 297/297 hops of real recorded data; live on hardware |
 | Event gate (`src/emg_gate.c`) | done; frozen counts, and a 1024-decision fixture the Python gate reproduces event for event |
-| Activation threshold (`src/emg_activation.c`) | done and in the live loop; rest-relative, cross-checked step for step against the Python mirror. Factor is a **candidate** awaiting a session that did not choose it |
+| Activation threshold (`src/emg_activation.c`) | done and in the live loop; rest-relative, cross-checked step for step against the Python mirror. Frozen `K=3`, `shift=4` after an independent self-paced session, 6/6 correct; margin is 3 counts and should be re-measured |
 | Host: probe/scope/record/replay/analyze/reference tools | done and live-used |
 | Host: guided labelled capture GUI | implemented, headless-tested, and used for six complete balanced sessions across two donnings |
 | Host: event-gate validation capture | two real complete sequences; the second passed independent validation 9/9 with pre-registered counts |
