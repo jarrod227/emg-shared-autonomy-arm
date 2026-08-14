@@ -310,6 +310,7 @@ Host-side, in `tools/`. Neither needs the ARM toolchain.
 | `emg_scope.py` | Live scrolling plot. Close the window to stop; a text summary is printed on exit so a run leaves evidence even if nobody was watching. |
 | `emg_protocol.py` | Decoder for the v1 wire format, with per-type sequence tracking and resynchronization. |
 | `emg_record.py` | Records the stream to a raw byte log plus a JSON sidecar, or replays an existing log. |
+| `emg_analyze.py` | Reads a recording and judges electrode placement from the envelope correlation between channels. |
 
 `emg_record.py` stores **bytes, not decoded samples**. A recording of decoded
 values is unrecoverable if the decoder had a bug; a byte log can be re-decoded
@@ -320,7 +321,14 @@ so a slow reader can be told apart from slow firmware.
 ```bash
 python3 firmware/tools/emg_record.py --seconds 60 --out session.bin
 python3 firmware/tools/emg_record.py --replay session.bin
+python3 firmware/tools/emg_analyze.py session.bin
 ```
+
+`emg_analyze.py` answers whether three channels carry three channels' worth of
+information. It correlates the **envelopes**, not the samples: sEMG is a
+stochastic interference pattern, so two electrodes over the same muscle still
+show near-zero sample-to-sample correlation, and correlating samples would
+score a redundant placement as fine. A test asserts exactly that trap.
 
 Both need `/dev/ttyACM0` access, so the user must be in `dialout` and have
 logged in again since being added.
