@@ -273,12 +273,11 @@ host before flashing.
 | Host: training pipeline | session-aware continuous-Q29 ridge-LDA LOSO plus Q18/C export implemented and measured |
 | ROS 2 bridge | not started |
 
-The acquisition boundary is deliberately still RAW. The live firmware does
-not silently filter or classify the dataset stream. The guided collector is
-implemented and live-used. Five complete sessions and the host LDA baseline
-are measured, and Q18 parameter export plus host/C agreement are complete. The
-next step is to connect the tested filter/feature modules, classifier,
-stable-event gate, and INTENT packets to the live firmware loop.
+RAW remains available as the replayable source of truth, but it is no longer
+the only live path. The MCU also runs filter, features, Q18 classification,
+rest-relative activation, the frozen event gate, and INTENT every 50 ms. The
+next work is ordinary-activity/soak measurement, a repository MCU/host event
+comparison tool, the ROS bridge, proportional calibration, and final metrics.
 
 ### Guided labelled capture
 
@@ -332,7 +331,10 @@ span lasts two seconds; the complete run takes about one minute. It saves to
 cannot be mistaken for another classifier-training session. The software path
 is tested. One real session completed 19/19 spans with 100% usable/contact
 frames and zero parser loss, but independent replay passed 0/240 gates; best
-clean was 3/9 and `NEXT_TARGET` was correct on 0/3 events. No gate is frozen.
+clean was 3/9 and `NEXT_TARGET` was correct on 0/3 events. This first failure
+is historical: onset hold-off was then diagnosed, and a separate session
+passed the fixed gate 9/9. The later activation layer was independently checked
+6/6.
 
 ### Host LDA baseline
 
@@ -358,8 +360,9 @@ one stopped session. Overall accuracy was 94.8% per window and 96.0% per trial.
 raw-feature Q18 affine coefficients. Q18 predictions match float on 5704/5704
 source windows; the generated pure C scorer matches Python scores exactly on
 its golden fixture and links in the ARM build. The JSON includes preprocessing,
-class order, float/Q18 parameters, folds, and confusion matrices. `main.c` does
-not call the classifier yet, so this is not live MCU deployment evidence.
+class order, float/Q18 parameters, folds, and confusion matrices. `main.c` now
+runs this classifier in the complete live path; host replay and MCU output
+matched event for event on the same recording.
 
 The classifier order is set in `TODO.md` and is deliberate: the Hudgins
 feature set with an LDA/SVM baseline first, and a quantized MLP only if it
@@ -376,12 +379,12 @@ make -C firmware/test check  # packet/filter/features + cross-language fixtures
 python3 -m pytest firmware/tools -q
 ```
 
-Verified on 2026-08-14: all four C binaries (packet, filter, features, and
-classifier) passed, and the complete Python tools suite reported **140
-passed**.
+Verified on 2026-08-14: all six C binaries (packet, filter, features,
+classifier, event gate, and activation) passed, and the complete Python tools
+suite reported **158 passed**.
 
 Run them in that order. `make check` regenerates the packet, filter, feature,
-and classifier fixtures. The Python suite independently decodes or recomputes
+classifier, event-gate, and activation fixtures. The Python suite independently decodes or recomputes
 them and checks every field or score. The implementations share specifications
 and model parameters, not runtime code, so disagreement exposes a boundary or
 arithmetic error before flashing.
