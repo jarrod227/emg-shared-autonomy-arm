@@ -5,9 +5,12 @@ CDC (`/dev/ttyACM0`). Firmware C and host Python are written independently
 against this document, so it has to be precise enough that neither side needs
 to read the other's source.
 
-Status: **draft**, not yet exercised against real firmware. Nothing below is
-measured; it is a design. Revise the version byte if any field changes
-meaning.
+Status: **version 1 active for raw data collection**. INFO and RAW packets,
+including the per-channel `wear_mask`, have been exercised against the real
+STM32 firmware at 2000.1 Hz. The INTENT layout and independent C/Python
+encoders/decoders are host-tested, but live firmware does not emit INTENT until
+a trained classifier is integrated. Increment the version byte if any existing
+field changes meaning or layout.
 
 ## Conventions
 
@@ -102,8 +105,9 @@ would instead cost over 200% overhead, which is why the batch exists.
 
 ### `0x02` INTENT
 
-The classification result plus the proportional view command. Emitted once per
-feature hop, so 20 Hz at the planned 50 ms hop.
+The classification result plus the proportional view command. Once live
+inference is connected, it will be emitted once per feature hop, so 20 Hz at
+the planned 50 ms hop.
 
 | Offset | Size | Field | Notes |
 | ---: | ---: | --- | --- |
@@ -116,9 +120,10 @@ feature hop, so 20 Hz at the planned 50 ms hop.
 
 Payload length 8.
 
-`REST` still emits a packet. A silent channel is indistinguishable from a
-dead one, so the absence of intent is stated rather than implied — the same
-fail-closed rule the perception nodes already follow.
+Once INTENT is live, `REST` still emits a packet. A silent channel is
+indistinguishable from a dead one, so the absence of intent is stated rather
+than implied. The Python/ROS bridge does not publish a discrete
+`/assistive_intent` event for `REST`.
 
 ## Receiver requirements
 
@@ -149,9 +154,13 @@ validate a candidate packet.
 
 ## Amendment history
 
-The version byte stays at 1 because nothing has been recorded or transmitted
-by real firmware yet. Once a dataset exists, any change here needs a version
-bump instead.
+Version 1 now has real INFO/RAW recordings. Any incompatible change to an
+existing packet layout or field meaning requires a version bump; adding code
+that emits the already-specified INTENT packet does not.
+
+- **2026-08-14** — exercised INFO and RAW against the real STM32 acquisition
+  firmware at 2000.1 Hz with zero lost, malformed, or duplicated packets in a
+  15-second run. INTENT remains specified and host-tested but not emitted.
 
 - **2026-08-13** — added `wear_mask` and `reserved` to the `RAW` payload.
   Originally `RAW` carried only samples and the wear state had no home, which

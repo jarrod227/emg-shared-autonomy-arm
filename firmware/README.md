@@ -50,10 +50,11 @@ analog run skips from `PA1` to `PA4`. **The three-channel scan sequence is
 IN0, IN1, IN4.** Configuring IN0/IN1/IN2 instead would sample `PA2`, a digital
 pin, and would still produce plausible-looking varying numbers.
 
-Each column takes a module on four pins: `DO` / `AI` / `VCC` / `GND`. The
-wear-detect line is a real input the protocol's `signal_quality` field should
-be driven from — a detached electrode must invalidate intent rather than be
-classified.
+Each column takes a module on four pins: `DO` / `AI` / `VCC` / `GND`. RAW
+packets already carry the three per-channel `wear_mask` bits. A future INTENT
+packet will derive its aggregate `signal_quality` from those inputs; the
+electrical active-high polarity still requires an unplug test before detached
+electrodes can be claimed to invalidate intent fail-closed.
 
 Other pins confirmed from the schematic: `SWDIO` = `PA13`, `SWCLK` = `PA14`,
 `USB_DP` = `PA12`, `USB_DM` = `PA11`, and `BOOT0` carries a 10K pull-down, so
@@ -101,8 +102,8 @@ These are not preferences; they come from the silicon.
   medium-density, so there is no ADC3 and no DMA2 either.
 - **Three channels are therefore sequential, not simultaneous.** Scan mode
   converts "channel 0 to channel n" in order. At 28.5+12.5 cycles on a 12 MHz
-  ADCCLK that is ~3.4 us per channel, so ch0 to ch2 skew is ~6.8 us — 0.68% of
-  a sample period at 1 kHz, and 1.1 degrees of phase at 450 Hz. Irrelevant to
+  ADCCLK that is ~3.4 us per channel, so ch0 to ch2 skew is ~6.8 us — 1.36% of
+  the current 2 kHz sample period, and 1.1 degrees of phase at 450 Hz. Irrelevant to
   per-channel amplitude features, but do not describe the result as
   "synchronized sample-and-hold".
 - **Never set the ADC prescaler to /4.** At 72 MHz PCLK2 that is 18 MHz,
@@ -245,35 +246,34 @@ frequently bricked by the official upgrade. Firmware V2J37S7 works as is.
 | `test/` | Host tests for `src/`, built with plain gcc. |
 | `tools/` | Host-side Python. Never flashed. |
 
-`src/` compiles twice from one source: ARM GCC produces the image on the chip,
-host GCC produces the test binaries. That is the point of keeping it free of
-HAL calls — fixed-point arithmetic and framing are where the mistakes live,
-and finding them with `make check` is far faster than stepping through them
-over a debug probe.
-
-The CubeMX project will land in a subdirectory of its own once the toolchain
-is installed; nothing in `src/` should acquire a HAL dependency, because that
-is what keeps it testable on a workstation.
+`src/` compiles twice from one source: ARM GCC links it into
+`cheez_emg`, while host GCC produces the test binaries. The CubeMX/HAL project
+is now in `cheez_emg/`; the shared packet, filter, and feature sources remain
+HAL-free so their exact fixed-point and framing behavior can be checked on the
+host before flashing.
 
 ## What is written, and what is not
 
 | Piece | State |
 | --- | --- |
 | Packet framing + CRC (`src/emg_packet.c`) | done, host-tested |
-| Band-pass filter (`src/emg_filter.c`) | done, golden-vector checked against scipy |
-| Feature extraction (`src/emg_features.c`) | done, golden-vector checked for exact equality |
-| ADC + DMA acquisition | **not started — needs CubeMX** |
-| 2 kHz timer trigger | **not started — needs CubeMX** |
-| USB CDC transmission | **not started — needs CubeMX and ST middleware** |
-| Main loop tying those together | not started |
-| Wear-detect GPIO reads | not started |
+| 20–450 Hz band-pass + 50/150 Hz notches (`src/emg_filter.c`) | done, Q29 golden-vector checked against scipy; linked into the ARM image but not called by the live loop yet |
+| Feature extraction (`src/emg_features.c`) | done, 200 ms window / 50 ms hop and MAV/RMS/ZC/WL golden-vector checked for exact equality; linked but not called by the live loop yet |
+| ADC1 scan + DMA1 channel 1 acquisition | done and live-verified on IN0/IN1/IN4 |
+| TIM3 2 kHz trigger | done; measured stream rate 2000.1 Hz |
+| USB CDC INFO/RAW transmission | done and live-verified on `/dev/ttyACM0` |
+| Acquisition main loop | done: ADC/DMA half-buffers become sequence-numbered RAW packets; DSP/features/inference are not connected yet |
+| Wear-detect GPIO reads | done; per-channel mask travels in each RAW packet |
 | Classifier inference | not started — needs a trained model, which needs data |
-| Host: training pipeline, ROS 2 bridge | not started |
+| Host: probe/scope/record/replay/analyze/reference tools | done and live-used; guided labelled capture and training are next |
+| Host: training pipeline and ROS 2 bridge | not started |
 
-What exists is the part that can be written and verified without hardware:
-pure logic with no HAL calls. It is roughly a quarter of the firmware, and the
-easy quarter. None of it samples or transmits anything, so flashing it alone
-would produce a chip that does nothing.
+The acquisition boundary is deliberately still RAW. The live firmware does
+not silently filter or classify the dataset stream. The next step is a guided,
+automatically labelled multi-session capture for `REST`, `NEXT_TARGET`,
+`CONFIRM`, and `ABORT`, followed by a host LDA baseline. Only after that model
+is measured should the tested filter/feature modules be connected to the live
+firmware loop and INTENT packets be emitted.
 
 The classifier order is set in `TODO.md` and is deliberate: the Hudgins
 feature set with an LDA/SVM baseline first, and a quantized MLP only if it
@@ -286,9 +286,12 @@ that a model with no baseline to beat cannot be judged.
 Neither suite needs the ARM toolchain or the board.
 
 ```bash
-make -C firmware/test check                          # C encoder + fixture.bin
-python3 -m pytest firmware/tools/test_emg_protocol.py  # Python decoder
+make -C firmware/test check  # packet/filter/features + cross-language fixtures
+python3 -m pytest firmware/tools -q
 ```
+
+Verified on 2026-08-14: all three C binaries passed and the Python tools suite
+reported **75 passed**.
 
 Run them in that order. `make check` regenerates `fixture.bin`, a stream the
 C encoder produced, and the last Python test decodes it and checks every

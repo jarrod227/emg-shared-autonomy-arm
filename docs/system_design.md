@@ -87,8 +87,10 @@ the handoff controller waits on the Objective 5 extrinsic. Objective 4.3
 Phase-0 bounded search with simulated view commands is implemented. Objective
 3.2 has synthetic and live stereo candidate paths, passes the default frame-gap
 contract at 10 Hz, and passed its measured bottle-distance check on 2026-08-13.
-Objective 3.5 is now active and adds STM32 discrete intent plus proportional
-view control.
+Objective 3.5 is active. Its STM32 ADC1/DMA1/TIM3 raw acquisition and INFO/RAW
+USB CDC transport are live, and its Q29 DSP/features pass host/reference tests
+but are not called by the live loop. Labelled collection, LDA training, MCU
+classification/INTENT, and the ROS bridge remain.
 
 ## Current Workspace Layout
 
@@ -103,6 +105,7 @@ assistive_robot_ws/
 │   ├── assistive_handoff/     simulated handoff + bounded view search (4.1/4.3)
 │   ├── stereo_hand_observer/  stereo geometry/gates + live adapter (4.2)
 │   └── markerless_object_perception/  mask/XYZ + YOLO adapter (3.2)
+├── firmware/                  STM32 sEMG firmware + host tools (3.5)
 ├── AGENTS.md
 └── TODO.md
 ```
@@ -185,9 +188,12 @@ synthetic adapter/publisher -> /object_candidates
 MIXED RUNTIME INTEGRATION (status shown per branch)
 [implemented] DECXIN composite -> atomic split/rectify -> disparity/PointCloud2 --+
 [implemented] left rectified RGB -> instance mask -------------------------------+-> /object_candidates
-[planned 3.5] STM32 EMG -> USB/UART bridge -> /assistive_intent ------------------+-> target selector
-[planned 3.5] STM32 EMG -> USB/UART bridge -> /assistive_view_control ------------+       |
-                                                                                 /target_object_pose
+[implemented 3.5] STM32 ADC/DMA -> USB CDC INFO/RAW -> host capture/analyze
+[planned 3.5] tested DSP/features -> classifier/INTENT -> USB CDC rclpy bridge ----+-> /assistive_intent
+[planned 3.5] same bridge ---------------------------------------------------------+-> /assistive_view_control
+                                                                                          |
+                                                                                          +-> target selector
+                                                                                              -> /target_object_pose
 [fixed-bench implemented; Obj5 integration planned]
 stereo hand keypoints -> 3D /hand_observation ---------------------------> handoff controller
                                                                                   |
@@ -205,7 +211,8 @@ redundant with it.
 ### Intent Layer
 
 Objective 4.1 uses a simulated publisher on the future production interface.
-Objective 3.5 later replaces that source with STM32 edge inference:
+Objective 3.5 is partially implemented and will replace that source with STM32
+edge inference:
 
 ```text
 3-channel ADC/DMA
@@ -215,9 +222,15 @@ Objective 3.5 later replaces that source with STM32 edge inference:
 -> classical baseline or small quantized model
 -> REST / NEXT_TARGET / CONFIRM / ABORT
 -> calibrated direction + normalized activation envelope
--> USB CDC or UART packet
+-> USB CDC packet
 -> MVP Python/rclpy bridge -> /assistive_intent + /assistive_view_control
 ```
+
+Current boundary (2026-08-14): acquisition through INFO/RAW USB CDC is live.
+The Q29 filter cascade and integer feature modules are implemented, linked, and
+host/reference-tested, but the live loop does not call them. Guided labelled
+multi-session capture and a host LDA baseline come next; classifier inference,
+INTENT emission, stability/hysteresis, and the bridge are not yet live.
 
 Firmware ownership is explicit: STM32CubeIDE C/C++ implements ADC/DMA,
 DSP/features, inference, and the versioned packet producer. PC Python tools own
@@ -226,9 +239,12 @@ The first runtime bridge is Python/`rclpy` so protocol and diagnostics can be
 iterated quickly. A later `rclcpp` receiver/parser with a fixed-size ring buffer
 is an optional measured optimization, not an Objective 3.5 completion gate.
 
-`REST` produces no event. Intent messages require source timestamp, command,
-confidence, and sequence number; they are reliable and volatile, never retained
-or replayed. `ViewControlCommand` is also volatile and contains
+Once INTENT emission is connected, STM32 may transmit a `REST` packet every
+feature hop for link liveness. The Python/ROS bridge produces no discrete
+`/assistive_intent` event for `REST`. Active intent messages require source
+timestamp, command, confidence, and sequence number; they are reliable and
+volatile, never retained or replayed. `ViewControlCommand` is also volatile and
+contains
 `LEFT`/`RIGHT`/`HOLD`, normalized activation, confidence, signal quality,
 source time, and sequence. EMG does not publish `/target_object_pose`.
 
@@ -682,9 +698,9 @@ responsibilities are:
 | markerless object perception | Objective 3.2 complete; pure mask/aligned-XYZ localization, YOLO adapter, synthetic/exact-time live publishers, organized point cloud, 10 Hz default-gap runtime, and measured bottle-distance check verified |
 | generalized target selector/tracker | Objective 3.2/3.5 integration; N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose + confirmation-gated retained publisher implemented; status contract pending |
 | shared ROS interfaces | `AssistiveIntent`, `HandObservation`, `ViewControlCommand`, `ObjectCandidate`, and `ObjectCandidateArray` implemented; target-status contract remains planned |
-| STM32 EMG firmware | Objective 3.5 (planned STM32CubeIDE C/C++; ADC/DMA, DSP/features, inference, packet producer) |
-| PC EMG tooling | Objective 3.5 (planned Python capture/plot/train/quantize/replay/golden vectors) |
-| EMG USB/UART ROS bridge | Objective 3.5 MVP Python/`rclpy`; optional measured `rclcpp` receiver/parser/ring-buffer rewrite in Phase 3 |
+| STM32 EMG firmware | Objective 3.5 in progress: ADC1/DMA1/TIM3 raw acquisition and INFO/RAW USB CDC live; DSP/features implemented and tested but not called; classifier/INTENT pending |
+| PC EMG tooling | Objective 3.5 in progress: probe/scope/record/replay/analyze plus filter/feature references and golden vectors implemented; guided labels, LDA training, and quantization pending |
+| EMG USB CDC ROS bridge | Objective 3.5 planned MVP Python/`rclpy`; optional measured `rclcpp` receiver/parser/ring-buffer rewrite in Phase 3 |
 | SO-ARM101 LeRobot backend (backend B) | Objective 5 (Phase 2; real-arm commands, cancellation, gripper/held-object status) |
 | eye-in-hand calibration and deterministic visual refinement | Objective 5 (stereo remount/recalibration plus `PREGRASP -> REOBSERVE -> REFINE -> GRASP`) |
 | learned ACT policy + EMG intervention layer (backend C) | Objective 6 (Phase 3, PhD research) |
