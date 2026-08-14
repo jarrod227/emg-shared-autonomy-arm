@@ -7,10 +7,10 @@ to read the other's source.
 
 Status: **version 1 active**. INFO and RAW packets, including the per-channel
 `wear_mask`, have been exercised against the real STM32 firmware at 2000.1 Hz.
-Firmware emitting INTENT is written and builds, but has not yet been observed
-on hardware; until it has, treat the INTENT rows below as specification rather
-than as measured behaviour. Increment the version byte if any existing field
-changes meaning or layout.
+INTENT is live as of 2026-08-14: measured at 20.0 Hz on an exact 50 000 µs
+grid, with its events matching a host replay of the same samples event for
+event. Increment the version byte if any existing field changes meaning or
+layout.
 
 ## Conventions
 

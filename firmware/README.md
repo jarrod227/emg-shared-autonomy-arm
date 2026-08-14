@@ -257,14 +257,14 @@ host before flashing.
 | Piece | State |
 | --- | --- |
 | Packet framing + CRC (`src/emg_packet.c`) | done, host-tested |
-| 20–450 Hz band-pass + 50/150 Hz notches (`src/emg_filter.c`) | done, Q29 golden-vector checked against scipy; called by the live loop, not yet observed on hardware |
-| Feature extraction (`src/emg_features.c`) | done, 200 ms window / 50 ms hop and MAV/RMS/ZC/WL golden-vector checked for exact equality; called by the live loop, not yet observed on hardware |
+| 20–450 Hz band-pass + 50/150 Hz notches (`src/emg_filter.c`) | done, Q29 golden-vector checked against scipy; live on hardware |
+| Feature extraction (`src/emg_features.c`) | done, 200 ms window / 50 ms hop and MAV/RMS/ZC/WL golden-vector checked for exact equality; live on hardware |
 | ADC1 scan + DMA1 channel 1 acquisition | done and live-verified on IN0/IN1/IN4 |
 | TIM3 2 kHz trigger | done; measured stream rate 2000.1 Hz |
 | USB CDC INFO/RAW transmission | done and live-verified on `/dev/ttyACM0` |
-| Acquisition main loop | RAW as before, plus filter → features → classifier → gate → INTENT per 50 ms hop. Builds at 57% RAM / 37% Flash; **not yet flashed or observed running** |
+| Acquisition main loop | RAW as before, plus filter → features → classifier → gate → INTENT per 50 ms hop. 57% RAM / 37% Flash; live-verified with zero packet loss and INTENT matching a host replay event for event |
 | Wear-detect GPIO reads | done; one mask per half, shared by the RAW packet and by window validity so the two cannot disagree |
-| Classifier inference | Q18 pure C scorer matches host; called by the live loop, not yet observed on hardware |
+| Classifier inference | Q18 pure C scorer matches the Python reference on 297/297 hops of real recorded data; live on hardware |
 | Event gate (`src/emg_gate.c`) | done; frozen counts, and a 1024-decision fixture the Python gate reproduces event for event |
 | Host: probe/scope/record/replay/analyze/reference tools | done and live-used |
 | Host: guided labelled capture GUI | implemented, headless-tested, and used for six complete balanced sessions across two donnings |

@@ -330,6 +330,154 @@ as a class that works because the gate rescued it. Channel 1 was left as the
 weakest of the three during bring-up as a deliberate deferral; this is the
 first measurement that argues for revisiting its position.
 
+## Putting it on the MCU
+
+The gate existed only in Python, so it was ported to `src/emg_gate.c` branch
+for branch and checked against a 1024-decision fixture the Python gate
+reproduces event for event. Then the firmware loop was wired up: each consumed
+half runs filter → features → Q18 classifier → gate → one INTENT packet per
+50 ms hop, with RAW still streaming so the host can replay the identical
+samples.
+
+Two 2026-08-14 recordings, both after the board had been running for minutes.
+
+| | 15 s, electrodes off | 60 s, worn, six gestures |
+| --- | --- | --- |
+| Frames | 30 016 at 1999.3 Hz | 120 000 at 1999.5 Hz |
+| Lost / malformed / duplicated | 0 / 0 / 0 | 0 / 0 / 0 |
+| Electrode contact | ch1 detached 13% of frames | 100% |
+| INTENT packets | 301 = 20.05 Hz | 1200 = 20.0 Hz |
+| INTENT timestamp step | exactly 50 000 µs, every step | same |
+
+The first result that mattered was the negative one: adding the whole DSP to
+the loop cost no packets. The timing budget was the obvious way this could
+have failed and it did not.
+
+### The classifier calls floating electrodes a gesture 6% of the time
+
+With the band off, 14 of 241 settled windows classified as `NEXT_TARGET` and
+one as `CONFIRM`. The gate emitted nothing: scattered decisions never reach a
+run of five, and the wear mask invalidated 43 windows outright. Worth writing
+down as a number rather than an impression — it is the only false-trigger
+figure that exists so far, and it says the classifier alone would not be safe
+to act on.
+
+## Verifying the MCU against the host, and two ways it misleads
+
+### Confidence disagrees; events do not
+
+`confidence` is a deterministic function of the scores, so it works as a probe
+even when nothing happens. On the idle recording the MCU and a host replay
+agreed on 263 of 297 hops. Chasing that gap produced the useful part.
+
+The frozen C coefficient table and the Python design are byte-identical, and no
+filtered sample came near int16, so neither was the cause. Running the same
+recorded frames through the firmware's own C sources on the host settled it:
+
+| Comparison | Agreement |
+| --- | --- |
+| host C vs Python reference | **297 / 297** |
+| host C vs MCU | 263 / 297 |
+
+The implementations agree exactly on real data. What differs is state: 73% of
+the MCU mismatches fall in the first 3000 frames, where the host replay's
+filters are still settling from zero while the MCU's have run for minutes.
+After frame 6000 the residual is about 4% of hops, differing by at most 5
+confidence units, in both directions.
+
+That residual is not a bug to fix. The notch sections sit at Q = 30, pole
+radius ≈ 0.9974, which is exactly where fixed-point IIR limit cycles live: two
+instances with different histories can differ by an LSB indefinitely rather
+than reconverging. **A recording that starts mid-stream therefore cannot be a
+bit-exact check of the MCU**, and asking for one would be asking the arithmetic
+for something it does not offer.
+
+Events are immune to it, and that is the point. The gate needs five consecutive
+agreeing decisions, which an occasional LSB divergence cannot manufacture or
+destroy. Verify events, not scores.
+
+### The replay grid must be aligned to the device
+
+On the 60 s worn recording the MCU emitted six events and the host replay
+emitted six events, same commands, same order — and every one of them
+disagreed, by +52 or −48 frames.
+
+The recording began at absolute frame 936 352. The firmware's hops land on
+multiples of 100 counted from reset; a replay that starts counting from the
+first recorded frame lands on multiples of 100 offset by `936352 mod 100 = 52`.
+The two sides were computing different 400-sample windows. Aligning the replay
+grid to absolute frame numbers:
+
+| Frame | t | MCU | Host |
+| --- | --- | --- | --- |
+| 952 800 | 476.40 s | `NEXT_TARGET` | `NEXT_TARGET` |
+| 967 500 | 483.75 s | `CONFIRM` | `CONFIRM` |
+| 983 400 | 491.70 s | `ABORT` | `ABORT` |
+| 999 400 | 499.70 s | `NEXT_TARGET` | `NEXT_TARGET` |
+| 1 015 700 | 507.85 s | `NEXT_TARGET` | `NEXT_TARGET` |
+| 1 037 700 | 518.85 s | `ABORT` | `ABORT` |
+
+Event for event, exact. The misalignment is worth recording because of how it
+presented: not as an obvious offset but as six clean events on each side that
+happened to share no timestamps, which reads like a disagreement and is not
+one.
+
+## The first real-use failure: a missing activation threshold
+
+The fifth gesture was a fist and the firmware emitted `NEXT_TARGET`. The
+classifier was not wrong about it — all 43 windows of that contraction
+classified as `CONFIRM`, channel balance 0.77/0.08/0.16. The event fired at
+507.85 s and the fist began at 507.95 s.
+
+| t | Prediction | ch0 | ch1 | ch2 | Total MAV |
+| --- | --- | --- | --- | --- | --- |
+| 507.00 | `REST` | 4 | 5 | 40 | 49 |
+| 507.05 | `NEXT_TARGET` | 4 | 5 | 41 | 50 |
+| 507.50 | `NEXT_TARGET` | 4 | 8 | 63 | 75 |
+| 507.85 | `NEXT_TARGET` | 19 | 7 | 53 | 79 ← event |
+| 508.20 | `CONFIRM` | 564 | 57 | 115 | 736 |
+
+Before making the fist the wrist extended slightly — a preparatory movement,
+about 0.85 s of low-amplitude extensor activity. The classifier read it
+correctly as extension. Seventeen windows outlasted the twelve-window hold-off,
+five more accumulated, and the gate fired 0.15 s before the intended gesture.
+
+Every rule executed as designed. The design is missing one.
+
+| | Total MAV |
+| --- | --- |
+| Rest | ≈ 30 |
+| Preparatory movement | ≈ 65 |
+| Intended gestures | 318 – 736 |
+
+A factor of ten separates intent from incidental movement, and the gate does
+not look at amplitude at all — only at which class the shape resembles. A
+hold-duration rule would also have caught this one, but with a margin of 1.2×
+against amplitude's 10×.
+
+Three things follow, and they are separate.
+
+The MCU and the host agreed on this misfire too, so the pipeline is faithful
+and the defect is in the design. Those are different findings and collapsing
+them would lose one.
+
+The 9/9 event-gate result is not overturned, but its scope is narrower than it
+read. In that protocol the user acts on a cue and goes straight into the
+gesture. **Self-paced use produces failure modes that cued protocols cannot
+generate**, and this one appeared in the first sixty seconds of it.
+
+The threshold has to be measured and has to be relative — some multiple of a
+recent rest baseline, not an absolute count. Donning B ran at twice the
+amplitude of donning A, so an absolute floor tuned on one donning would be
+either useless or crippling on another.
+
+It is also worth stating what did not go wrong. A preparatory movement before a
+gesture is ordinary motor behaviour, and this system is meant for users with
+less motor control rather than more. Pinning the physical definition of a
+gesture is defining the vocabulary and is legitimate; asking the user not to
+move before moving is asking them to compensate for a missing threshold, and
+would have closed a real defect as operator error.
+
 ## Lessons
 
 - **Held-out is a property of the split, not of the file name.** Five
@@ -358,3 +506,16 @@ first measurement that argues for revisiting its position.
   correct events out of nine.
 - **Passing is not the same as having margin.** Nine of nine, and one 50 ms
   window from the worst available failure. Report both or the report is wrong.
+- **Ask the arithmetic for what it can give.** Bit-exact agreement between two
+  fixed-point IIR filters with different histories is not available at any
+  effort. Events survive an LSB; scores do not. Pick the quantity that the
+  implementation can actually be held to.
+- **A correct classification can still be a wrong command.** The system read
+  the muscle right and acted on a movement that was not an instruction. Nothing
+  in an accuracy figure covers that distinction.
+- **Cued protocols cannot produce self-paced failures.** Sixty seconds of
+  unscripted use found a defect that a passing scripted validation could not
+  have, because being told when to move removes the preparation.
+- **"The user moved wrong" closes real defects.** Defining a gesture is
+  vocabulary; requiring stillness before it is asking the operator to supply a
+  missing threshold.
