@@ -36,11 +36,13 @@ firmware/test/test_emg_filter
 firmware/test/test_emg_features
 firmware/test/test_emg_classifier
 firmware/test/test_emg_gate
+firmware/test/test_emg_activation
 firmware/test/fixture.bin
 firmware/test/golden.bin
 firmware/test/features.bin
 firmware/test/classifier.bin
 firmware/test/gate.bin
+firmware/test/activation.bin
 
 # CubeMX project build output. The generated sources and cheez_emg.ioc are
 # tracked -- the .ioc is the authoritative record of the peripheral

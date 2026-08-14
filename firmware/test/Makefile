@@ -17,9 +17,11 @@ FILTER_BINARY := test_emg_filter
 FEATURES_BINARY := test_emg_features
 CLASSIFIER_BINARY := test_emg_classifier
 GATE_BINARY := test_emg_gate
+ACTIVATION_BINARY := test_emg_activation
 BINARIES := $(PACKET_BINARY) $(FILTER_BINARY) $(FEATURES_BINARY) \
-            $(CLASSIFIER_BINARY) $(GATE_BINARY)
-FIXTURES := fixture.bin golden.bin features.bin classifier.bin gate.bin
+            $(CLASSIFIER_BINARY) $(GATE_BINARY) $(ACTIVATION_BINARY)
+FIXTURES := fixture.bin golden.bin features.bin classifier.bin gate.bin \
+            activation.bin
 
 .PHONY: check clean
 
@@ -34,6 +36,8 @@ check: $(BINARIES)
 	./$(CLASSIFIER_BINARY) --emit classifier.bin
 	./$(GATE_BINARY)
 	./$(GATE_BINARY) --emit gate.bin
+	./$(ACTIVATION_BINARY)
+	./$(ACTIVATION_BINARY) --emit activation.bin
 
 $(PACKET_BINARY): test_emg_packet.c ../src/emg_packet.c ../src/emg_packet.h
 	$(CC) $(CFLAGS) -o $@ test_emg_packet.c ../src/emg_packet.c
@@ -52,6 +56,10 @@ $(CLASSIFIER_BINARY): test_emg_classifier.c ../src/emg_classifier.c \
 $(GATE_BINARY): test_emg_gate.c ../src/emg_gate.c ../src/emg_gate.h \
                  ../src/emg_packet.h
 	$(CC) $(CFLAGS) -o $@ test_emg_gate.c ../src/emg_gate.c
+
+$(ACTIVATION_BINARY): test_emg_activation.c ../src/emg_activation.c \
+                       ../src/emg_activation.h ../src/emg_packet.h
+	$(CC) $(CFLAGS) -o $@ test_emg_activation.c ../src/emg_activation.c
 
 clean:
 	rm -f $(BINARIES) $(FIXTURES)

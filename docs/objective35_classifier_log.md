@@ -478,6 +478,75 @@ gesture is defining the vocabulary and is legitimate; asking the user not to
 move before moving is asking them to compensate for a missing threshold, and
 would have closed a real defect as operator error.
 
+## Fixing it: an activation threshold, and two ways of choosing it wrong
+
+The stage rewrites low-activation non-`REST` decisions to `REST` before the
+gate sees them — rewriting rather than dropping, because `REST` is what lets
+the gate re-arm, and because "shape without activation" is what rest means
+here. The threshold is a multiple of a baseline tracked by an integer EMA over
+windows the classifier itself called `REST`, so a long sub-threshold movement
+cannot drag its own threshold up behind it. It is relative and not absolute:
+donning B rested at twice donning A, so a floor tuned on one is either useless
+or crippling on the other.
+
+Replayed on the recording that produced the defect, the fifth event changes
+from `NEXT_TARGET` to `CONFIRM` and moves from 507.85 s to 508.85 s — after
+the fist actually began at 507.95 s, so the preparation was suppressed rather
+than the outcome coincidentally flipped. The other five events keep their
+commands and their timestamps to within one hop.
+
+### The sweep read the wrong session first
+
+The first joint sweep reported that every factor which fixed the defect also
+dropped the frozen 9/9 acceptance to 8/9 with one wrong event — 0 of 60
+configurations passing both. It was measuring donning **B**:
+`load_event_gate_timelines` returns every complete session in the directory
+and the harness took `folds[0]`, which is the outlier session that passed
+0/240 gates and was never expected to reach 9/9. Naming the validation session
+by path instead:
+
+| | K = 2 | K = 3 | K = 4 | K = 5 | K = 6 |
+| --- | --- | --- | --- | --- | --- |
+| Defect recording, 6 events correct | yes | yes | yes | yes | **no** |
+| donning C, 9/9 with no wrong/missed | yes | yes | yes | yes | **no** |
+
+19 of 60 configurations pass both, spanning K = 2..5 across every swept shift.
+Above that the threshold starts suppressing real gestures and events go
+missing. (Donning B, incidentally, goes from a best of 3/9 to 8/9 under the
+same stage — worth revisiting when that session's anomaly is explained.)
+
+### Passing without margin, again
+
+The events do not separate K = 2..5, so the mechanism has to. Two selectors
+were tried and one was discarded.
+
+A per-window margin is meaningless here: real gestures legitimately have
+onset and offset windows below threshold, and spurious windows may sit above
+it, because the gate integrates over five decisions rather than judging one.
+
+A run-length margin — longest run of consecutive above-threshold windows — is
+better posed but unstable in practice. At fixed K it jumped 6, 7, 29, 30
+across shifts, because a single marginal window splits one run into two. It
+measures proximity to the threshold, not robustness, and was dropped.
+
+What settled it was looking at the defect directly.
+
+| | K = 2, threshold 70 | K = 3, threshold 105 |
+| --- | --- | --- |
+| Preparatory movement, 50–79 counts | four windows cross | none cross |
+| Why no event fires | the four fragment into runs of two, short of five | nothing to fragment |
+
+K = 2 passes by fragmentation. That is the same shape as the `ABORT` trial
+that cleared its threshold by one 50 ms window: a pass with no margin behind
+it, which reads identically to a pass with one. K = 3 clears the whole
+movement outright and still sits two steps below where real gestures break.
+
+Neither number is frozen. Both come from two recordings — one used to find the
+defect, one already spent as an acceptance set — and choosing among 19 passing
+configurations on those same two is the shape of overfitting this project has
+been careful about elsewhere. Freezing waits on a self-paced session that did
+not participate in the choice.
+
 ## Lessons
 
 - **Held-out is a property of the split, not of the file name.** Five
@@ -519,3 +588,9 @@ would have closed a real defect as operator error.
 - **"The user moved wrong" closes real defects.** Defining a gesture is
   vocabulary; requiring stillness before it is asking the operator to supply a
   missing threshold.
+- **A harness that picks its own inputs will pick the wrong ones.** `folds[0]`
+  silently selected the one session guaranteed to fail, and the result looked
+  exactly like the new code breaking a frozen acceptance. Name the session.
+- **When the outcome cannot choose, the mechanism must.** Nineteen
+  configurations passed both tests; only looking at what each did to the actual
+  defect distinguished clearing it from getting away with it.

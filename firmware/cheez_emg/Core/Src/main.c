@@ -28,6 +28,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdbool.h>
 
+#include "emg_activation.h"
 #include "emg_classifier.h"
 #include "emg_features.h"
 #include "emg_filter.h"
@@ -101,6 +102,7 @@ static emg_filter_t emg_filters[EMG_CHANNELS];
 static emg_feature_window_t emg_windows[EMG_CHANNELS];
 static uint32_t emg_saturations[EMG_CHANNELS];
 static emg_gate_t emg_gate;
+static emg_activation_t emg_activation;
 static uint16_t emg_intent_sequence;
 
 /* Frames processed by the DSP, which is not the same as frames captured: the
@@ -221,6 +223,10 @@ static void emg_dsp_init(void)
   if (!emg_gate_init(&emg_gate, &gate_config)) {
     Error_Handler();
   }
+  if (!emg_activation_init(&emg_activation, EMG_ACTIVATION_FACTOR,
+                           EMG_ACTIVATION_BASELINE_SHIFT)) {
+    Error_Handler();
+  }
   emg_frames_since_invalid = 0u;
 }
 
@@ -236,6 +242,9 @@ static void emg_dsp_discontinuity(void)
     emg_saturations[channel] = emg_windows[channel].saturations;
   }
   emg_gate_invalidate(&emg_gate);
+  /* The activation baseline is deliberately left alone: rest amplitude is a
+   * property of the wearer and the donning, not of stream continuity, so a
+   * dropout should not strip the amplitude protection that survives it. */
   emg_frames_since_invalid = 0u;
 }
 
@@ -335,11 +344,21 @@ static void emg_process_half(uint32_t index, bool attached)
       if (!emg_classifier_predict(features, &result)) {
         continue;
       }
+      /* Shape first, then strength: the classifier names the gesture the
+       * window resembles, and the activation stage decides whether enough
+       * muscle was behind it to count as an intent at all. A preparatory
+       * movement at twice resting amplitude classifies correctly as a
+       * gesture and is still not one. */
+      const int32_t total_mav = features[0].mean_absolute_value
+                                + features[1].mean_absolute_value
+                                + features[2].mean_absolute_value;
+      const emg_command_t decision = emg_activation_apply(
+          &emg_activation, result.command, window_valid, total_mav);
       /* REST is reported too. A silent link is indistinguishable from a dead
        * one, so the absence of intent is stated rather than implied; the
        * command carries the gate's event, so anything other than REST means
        * an event fired on this hop. */
-      (void)emg_gate_push(&emg_gate, result.command, window_valid, &event);
+      (void)emg_gate_push(&emg_gate, decision, window_valid, &event);
       emg_send_intent(event, &result, window_valid, new_saturations);
     }
   }

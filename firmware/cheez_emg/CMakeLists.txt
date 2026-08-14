@@ -54,6 +54,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${EMG_SHARED_DIR}/emg_features.c
     ${EMG_SHARED_DIR}/emg_classifier.c
     ${EMG_SHARED_DIR}/emg_gate.c
+    ${EMG_SHARED_DIR}/emg_activation.c
 )
 
 # Add include paths
