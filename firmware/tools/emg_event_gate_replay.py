@@ -54,6 +54,7 @@ class GateConfig:
     rest_rearm_windows: int
     refractory_windows: int
     abort_stable_windows: int
+    onset_holdoff_windows: int
 
     def __post_init__(self):
         if self.stable_windows <= 0:
@@ -64,6 +65,8 @@ class GateConfig:
             raise ValueError("refractory_windows must be non-negative")
         if self.abort_stable_windows <= 0:
             raise ValueError("abort_stable_windows must be positive")
+        if self.onset_holdoff_windows < 0:
+            raise ValueError("onset_holdoff_windows must be non-negative")
 
 
 class EventGate:
@@ -73,6 +76,16 @@ class EventGate:
     after both its own stable run and the refractory period.  ABORT has an
     independent stable run and bypasses ordinary arming/refractory, but remains
     latched until stable REST so a held gesture cannot emit repeatedly.
+
+    Leaving REST starts an onset hold-off.  Measured event-gate replay put
+    essentially all cross-session confusion in the first few hundred
+    milliseconds of a contraction, where a 200 ms feature window straddles rest
+    and contraction and the classifier has never seen that mixture: the
+    classifier sessions label only steady state.  Hold-off discards those
+    windows instead of scoring them, so no evidence accumulates until the
+    pattern has established.  It costs one hold-off period of latency on every
+    event, and it is deliberately not a confidence threshold - the wrong
+    predictions there are confident, not marginal.
     """
 
     def __init__(self, config):
@@ -83,6 +96,10 @@ class EventGate:
     def armed(self):
         return self._armed
 
+    @property
+    def holding_off(self):
+        return self._onset_holdoff > 0
+
     def invalidate(self):
         """Clear all evidence; valid REST is required before ordinary events."""
         self._armed = False
@@ -92,6 +109,10 @@ class EventGate:
         self._abort_run = 0
         self._abort_latched = False
         self._refractory = 0
+        self._onset_holdoff = 0
+        # An interrupted stream is not evidence that the muscle is resting, so
+        # the next contraction still counts as an onset.
+        self._resting = True
 
     def push(self, prediction, *, valid=True):
         if prediction not in LABELS:
@@ -100,10 +121,14 @@ class EventGate:
             self.invalidate()
             return None
 
+        # The refractory period is elapsed time, so it keeps counting down
+        # through a hold-off.
         if self._refractory > 0:
             self._refractory -= 1
 
         if prediction == "REST":
+            self._resting = True
+            self._onset_holdoff = 0
             self._candidate = None
             self._candidate_run = 0
             self._abort_run = 0
@@ -117,6 +142,16 @@ class EventGate:
             return None
 
         self._rest_run = 0
+        if self._resting:
+            self._resting = False
+            self._onset_holdoff = self.config.onset_holdoff_windows
+        if self._onset_holdoff > 0:
+            self._onset_holdoff -= 1
+            self._candidate = None
+            self._candidate_run = 0
+            self._abort_run = 0
+            return None
+
         if prediction == "ABORT":
             self._candidate = None
             self._candidate_run = 0
@@ -593,10 +628,13 @@ def evaluate_gate(folds, config):
 
 
 def default_sweep_configs():
+    # The hold-off grid stays coarse on purpose.  One scripted session carries
+    # nine active trials, which cannot separate 0.70 s from 0.80 s; a finer
+    # grid would only offer more ways to fit this session's noise.
     return [
-        GateConfig(stable, rearm, refractory, abort)
-        for stable, rearm, refractory, abort in product(
-            range(2, 6), range(2, 7), (5, 10, 15, 20), range(1, 4)
+        GateConfig(stable, rearm, refractory, abort, holdoff)
+        for stable, rearm, refractory, abort, holdoff in product(
+            range(2, 6), range(2, 7), (5, 10, 15, 20), range(1, 4), (0, 4, 8, 12, 16)
         )
     ]
 
@@ -705,7 +743,7 @@ def main(argv=None):
     candidates = sweep_gates(folds, validation_mode=validation_mode)
     print(f"Swept {len(candidates)} configurations.")
     print(
-        " N  M  refr  A | clean/active miss wrong dup rest_false off_trial "
+        " N  M  refr  A hold | clean/active miss wrong dup rest_false off_trial "
         "p50_ms p95_ms"
     )
     for item in candidates[:arguments.top]:
@@ -717,7 +755,8 @@ def main(argv=None):
             f"{config['stable_windows']:2d} "
             f"{config['rest_rearm_windows']:2d} "
             f"{config['refractory_windows']:5d} "
-            f"{config['abort_stable_windows']:2d} | "
+            f"{config['abort_stable_windows']:2d} "
+            f"{config['onset_holdoff_windows']:4d} | "
             f"{metrics['clean_correct_trials']:2d}/"
             f"{metrics['active_trials']:2d} "
             f"{metrics['missed_active_trials']:4d} "

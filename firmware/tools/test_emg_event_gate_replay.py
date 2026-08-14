@@ -25,6 +25,7 @@ def config(**changes):
         "rest_rearm_windows": 2,
         "refractory_windows": 2,
         "abort_stable_windows": 2,
+        "onset_holdoff_windows": 0,
     }
     values.update(changes)
     return GateConfig(**values)
@@ -162,6 +163,85 @@ def test_invalid_window_clears_partial_evidence_and_requires_rearm():
     assert gate.push("NEXT_TARGET") == "NEXT_TARGET"
 
 
+def test_onset_holdoff_discards_the_windows_that_straddle_rest_and_contraction():
+    gate = EventGate(config(onset_holdoff_windows=3))
+    gate.push("REST")
+    gate.push("REST")
+    assert gate.armed
+
+    # The first three contraction windows are dropped whatever they say, so a
+    # confident onset misclassification cannot claim the event.
+    assert gate.push("CONFIRM") is None
+    assert gate.holding_off
+    assert gate.push("CONFIRM") is None
+    assert gate.push("CONFIRM") is None
+    assert not gate.holding_off
+    # Evidence starts from scratch afterwards: hold-off never counts toward the
+    # stable run.
+    assert gate.push("NEXT_TARGET") is None
+    assert gate.push("NEXT_TARGET") == "NEXT_TARGET"
+
+
+def test_onset_holdoff_restarts_only_after_returning_to_rest():
+    gate = EventGate(config(onset_holdoff_windows=2, refractory_windows=0))
+    gate.push("REST")
+    gate.push("REST")
+    gate.push("NEXT_TARGET")
+    gate.push("NEXT_TARGET")
+    assert gate.push("NEXT_TARGET") is None
+    assert gate.push("NEXT_TARGET") == "NEXT_TARGET"
+
+    # A held gesture stays out of hold-off; only a rest window re-arms it.
+    assert not gate.holding_off
+    gate.push("REST")
+    gate.push("REST")
+    assert gate.push("CONFIRM") is None
+    assert gate.holding_off
+
+
+def test_rest_during_holdoff_cancels_it_without_consuming_the_gesture():
+    gate = EventGate(config(onset_holdoff_windows=4))
+    gate.push("REST")
+    gate.push("REST")
+    assert gate.push("CONFIRM") is None
+    assert gate.holding_off
+
+    # A twitch that falls back to rest must not leave a half-spent hold-off
+    # that would let the next real onset through unfiltered.
+    gate.push("REST")
+    assert not gate.holding_off
+    gate.push("REST")
+    for _ in range(4):
+        assert gate.push("CONFIRM") is None
+    assert gate.push("CONFIRM") is None
+    assert gate.push("CONFIRM") == "CONFIRM"
+
+
+def test_onset_holdoff_also_covers_abort():
+    gate = EventGate(config(abort_stable_windows=2, onset_holdoff_windows=3))
+
+    # ABORT bypasses arming and refractory, but not the hold-off - onset
+    # windows are unreadable for every class, not just the ordinary ones.
+    assert gate.push("ABORT") is None
+    assert gate.push("ABORT") is None
+    assert gate.push("ABORT") is None
+    assert gate.push("ABORT") is None
+    assert gate.push("ABORT") == "ABORT"
+
+
+def test_invalid_window_makes_the_next_contraction_an_onset_again():
+    gate = EventGate(config(onset_holdoff_windows=2))
+    gate.push("REST")
+    gate.push("REST")
+    gate.push("CONFIRM")
+    gate.push("CONFIRM")
+    assert not gate.holding_off
+
+    gate.push("CONFIRM", valid=False)
+    assert gate.push("CONFIRM") is None
+    assert gate.holding_off
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
@@ -169,6 +249,7 @@ def test_invalid_window_clears_partial_evidence_and_requires_rearm():
         ("rest_rearm_windows", 0),
         ("refractory_windows", -1),
         ("abort_stable_windows", 0),
+        ("onset_holdoff_windows", -1),
     ],
 )
 def test_gate_config_rejects_invalid_counts(field, value):
@@ -177,6 +258,7 @@ def test_gate_config_rejects_invalid_counts(field, value):
         "rest_rearm_windows": 2,
         "refractory_windows": 2,
         "abort_stable_windows": 2,
+        "onset_holdoff_windows": 2,
     }
     values[field] = value
     with pytest.raises(ValueError):
@@ -340,6 +422,8 @@ def test_straddling_feature_window_uses_event_time_for_active_ownership():
 def test_default_sweep_is_fixed_and_reviewable():
     candidates = default_sweep_configs()
 
-    assert len(candidates) == 240
-    assert candidates[0] == GateConfig(2, 2, 5, 1)
-    assert candidates[-1] == GateConfig(5, 6, 20, 3)
+    assert len(candidates) == 1200
+    assert candidates[0] == GateConfig(2, 2, 5, 1, 0)
+    assert candidates[-1] == GateConfig(5, 6, 20, 3, 16)
+    # Hold-off must be swept, not silently defaulted off.
+    assert {item.onset_holdoff_windows for item in candidates} == {0, 4, 8, 12, 16}

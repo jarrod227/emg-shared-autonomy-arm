@@ -10,9 +10,12 @@ the kind that produce plausible-looking data instead of an error.
 
 There is no evaluation document for Objective 3.5 yet, and there should not
 be. What is measured here is that the acquisition works and the electrodes
-are placed usefully. Nothing is yet measured about what the objective is for:
-no classifier exists, so there is no accuracy, no latency, and no false-
-trigger rate to report.
+are placed usefully. Nothing here measures what the objective is for.
+
+The classifier and the discrete-event gate built on top of this signal are in
+`docs/objective35_classifier_log.md`, along with the reason their first
+accuracy figure did not survive an independent session. No accuracy, latency,
+or false-trigger rate is approved yet in either file.
 
 ## The part number disagreed three ways
 
@@ -224,6 +227,10 @@ muscle is working.
 The recorder storing bytes rather than decoded samples paid for itself here.
 Two of those four were fixed by re-decoding an existing recording, without
 repeating the experiment.
+
+A fifth joined them once a classifier existed: leave-one-session-out accuracy
+measured across five recordings from a single donning. See
+`docs/objective35_classifier_log.md`.
 
 ### Where placement ended up
 
