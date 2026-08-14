@@ -89,7 +89,8 @@ Phase-0 bounded search with simulated view commands is implemented. Objective
 contract at 10 Hz, and passed its measured bottle-distance check on 2026-08-13.
 Objective 3.5 is active. Its STM32 ADC1/DMA1/TIM3 raw acquisition and INFO/RAW
 USB CDC transport are live, and its Q29 DSP/features pass host/reference tests
-but are not called by the live loop. Labelled collection, LDA training, MCU
+but are not called by the live loop. The guided labelled GUI collector is
+implemented and host-tested; real multi-session collection, LDA training, MCU
 classification/INTENT, and the ROS bridge remain.
 
 ## Current Workspace Layout
@@ -226,11 +227,33 @@ edge inference:
 -> MVP Python/rclpy bridge -> /assistive_intent + /assistive_view_control
 ```
 
+The user-confirmed training semantics are fixed at this boundary:
+
+| Class | Physical action |
+| --- | --- |
+| `REST` | completely relax with a neutral wrist |
+| `NEXT_TARGET` | wrist extension / wrist up |
+| `CONFIRM` | make a fist |
+| `ABORT` | wrist flexion / wrist down |
+
+`firmware/tools/emg_guided_capture.py` owns the host experiment workflow. Start
+opens one continuous raw log only after fresh three-channel INFO/RAW and stable
+contact. Only the timed ACTIVE/HOLD span is trainable. Pause freezes prompts,
+timing, and labels while serial draining/display/logging continue; an
+interrupted action is rejected and repeated after Resume. A short unlabelled
+verification phase waits for a following RAW packet so tail loss can be
+detected, and fewer than 90% of the expected active frames rejects the attempt.
+The GUI automatically finishes after all balanced randomized trials pass. The
+binary remains the source of truth; JSON stores cumulative-frame boundaries,
+quality decisions, pauses, schedule, and seed.
+
 Current boundary (2026-08-14): acquisition through INFO/RAW USB CDC is live.
 The Q29 filter cascade and integer feature modules are implemented, linked, and
-host/reference-tested, but the live loop does not call them. Guided labelled
-multi-session capture and a host LDA baseline come next; classifier inference,
-INTENT emission, stability/hysteresis, and the bridge are not yet live.
+host/reference-tested, but the live loop does not call them. The guided
+collector implementation passes the host-tools suite but has not yet produced
+a real labelled dataset. Real multi-session capture and a host LDA baseline
+come next; classifier inference, INTENT emission, stability/hysteresis, and the
+bridge are not yet live.
 
 Firmware ownership is explicit: STM32CubeIDE C/C++ implements ADC/DMA,
 DSP/features, inference, and the versioned packet producer. PC Python tools own
@@ -699,7 +722,7 @@ responsibilities are:
 | generalized target selector/tracker | Objective 3.2/3.5 integration; N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose + confirmation-gated retained publisher implemented; status contract pending |
 | shared ROS interfaces | `AssistiveIntent`, `HandObservation`, `ViewControlCommand`, `ObjectCandidate`, and `ObjectCandidateArray` implemented; target-status contract remains planned |
 | STM32 EMG firmware | Objective 3.5 in progress: ADC1/DMA1/TIM3 raw acquisition and INFO/RAW USB CDC live; DSP/features implemented and tested but not called; classifier/INTENT pending |
-| PC EMG tooling | Objective 3.5 in progress: probe/scope/record/replay/analyze plus filter/feature references and golden vectors implemented; guided labels, LDA training, and quantization pending |
+| PC EMG tooling | Objective 3.5 in progress: probe/scope/record/replay/analyze, filter/feature references, golden vectors, and guided labelled GUI implemented; real guided sessions, LDA training, and quantization pending |
 | EMG USB CDC ROS bridge | Objective 3.5 planned MVP Python/`rclpy`; optional measured `rclcpp` receiver/parser/ring-buffer rewrite in Phase 3 |
 | SO-ARM101 LeRobot backend (backend B) | Objective 5 (Phase 2; real-arm commands, cancellation, gripper/held-object status) |
 | eye-in-hand calibration and deterministic visual refinement | Objective 5 (stereo remount/recalibration plus `PREGRASP -> REOBSERVE -> REFINE -> GRASP`) |

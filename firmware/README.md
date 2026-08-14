@@ -265,15 +265,52 @@ host before flashing.
 | Acquisition main loop | done: ADC/DMA half-buffers become sequence-numbered RAW packets; DSP/features/inference are not connected yet |
 | Wear-detect GPIO reads | done; per-channel mask travels in each RAW packet |
 | Classifier inference | not started — needs a trained model, which needs data |
-| Host: probe/scope/record/replay/analyze/reference tools | done and live-used; guided labelled capture and training are next |
+| Host: probe/scope/record/replay/analyze/reference tools | done and live-used |
+| Host: guided labelled capture GUI | implemented and headless-tested; first real session and multi-session dataset remain |
 | Host: training pipeline and ROS 2 bridge | not started |
 
 The acquisition boundary is deliberately still RAW. The live firmware does
-not silently filter or classify the dataset stream. The next step is a guided,
-automatically labelled multi-session capture for `REST`, `NEXT_TARGET`,
-`CONFIRM`, and `ABORT`, followed by a host LDA baseline. Only after that model
-is measured should the tested filter/feature modules be connected to the live
-firmware loop and INTENT packets be emitted.
+not silently filter or classify the dataset stream. The guided collector is
+implemented and host-tested; the next step is to use it for real multi-session
+captures of `REST`, `NEXT_TARGET`, `CONFIRM`, and `ABORT`, then train the host
+LDA baseline. Only after that model is measured should the tested
+filter/feature modules be connected to the live firmware loop and INTENT
+packets be emitted.
+
+### Guided labelled capture
+
+Run the GUI as the normal desktop user, not with `sudo`. The active login must
+already have access to `/dev/ttyACM0` through the `dialout` group.
+
+```bash
+cd /home/cold227/Documents/assistive_robot_ws
+python3 firmware/tools/emg_guided_capture.py \
+  --port /dev/ttyACM0 \
+  --repetitions 5
+```
+
+The window previews the three raw ADC channels. `Start collection` begins one
+continuous raw log after fresh three-channel INFO/RAW and stable electrode
+contact are present. It then randomizes balanced trials using this fixed map:
+
+| Label | Screen action |
+| --- | --- |
+| `REST` | relax completely / neutral wrist |
+| `NEXT_TARGET` | wrist extension / wrist up |
+| `CONFIRM` | make a fist |
+| `ABORT` | wrist flexion / wrist down |
+
+Only the three-second `HOLD` phase is labelled. `Pause` stops the prompt timer
+and labels but keeps draining, displaying, and saving serial bytes; an action
+interrupted by Pause is discarded and repeated after Resume. A short
+unlabelled verification phase checks the labelled tail for delayed packet
+loss, and any action with less than 90% of its expected frames is repeated.
+After all valid trials the GUI stops automatically.
+
+Each run creates `datasets/emg/session_<timestamp>/session.bin` plus
+`session.json`. The binary is the full raw source of truth; JSON stores the
+randomization seed, exact cumulative-frame label spans, pauses, rejected
+attempts, contact/parser quality, and stream summary.
 
 The classifier order is set in `TODO.md` and is deliberate: the Hudgins
 feature set with an LDA/SVM baseline first, and a quantized MLP only if it
@@ -290,8 +327,11 @@ make -C firmware/test check  # packet/filter/features + cross-language fixtures
 python3 -m pytest firmware/tools -q
 ```
 
-Verified on 2026-08-14: all three C binaries passed and the Python tools suite
-reported **75 passed**.
+Verified earlier on 2026-08-14: all three C binaries passed and the Python
+tools suite reported **75 passed**. After adding the guided collector and its
+timing, quality, pause, retry, and emergency-save tests, the complete Python
+tools suite reported **111 passed**. The C suite was not changed or rerun for
+the collector-only update.
 
 Run them in that order. `make check` regenerates `fixture.bin`, a stream the
 C encoder produced, and the last Python test decodes it and checks every
@@ -314,6 +354,8 @@ Host-side, in `tools/`. Neither needs the ARM toolchain.
 | `emg_protocol.py` | Decoder for the v1 wire format, with per-type sequence tracking and resynchronization. |
 | `emg_record.py` | Records the stream to a raw byte log plus a JSON sidecar, or replays an existing log. |
 | `emg_analyze.py` | Reads a recording and judges electrode placement from the envelope correlation between channels. |
+| `emg_guided_session.py` | Pure, headless timing/label/quality state machine for balanced guided collection. |
+| `emg_guided_capture.py` | Tk GUI with three raw traces, Start/Pause/Resume/Stop, timed prompts, automatic retry/completion, continuous `.bin`, and frame-indexed `.json` labels. |
 
 `emg_record.py` stores **bytes, not decoded samples**. A recording of decoded
 values is unrecoverable if the decoder had a bug; a byte log can be re-decoded
