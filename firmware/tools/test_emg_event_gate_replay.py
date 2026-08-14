@@ -419,6 +419,13 @@ def test_straddling_feature_window_uses_event_time_for_active_ownership():
     assert metrics["latency_p50_sec"] == pytest.approx(0.0)
 
 
+def test_validated_gate_matches_the_session_that_approved_it():
+    # These counts are a measurement result, not a tuning knob: changing one
+    # invalidates the independent 9/9 session and needs a new one.
+    assert replay.VALIDATED_GATE == GateConfig(5, 4, 5, 1, 12)
+    assert replay.VALIDATED_GATE in default_sweep_configs()
+
+
 def test_default_sweep_is_fixed_and_reviewable():
     candidates = default_sweep_configs()
 

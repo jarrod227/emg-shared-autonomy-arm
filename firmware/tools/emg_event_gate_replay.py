@@ -627,6 +627,22 @@ def evaluate_gate(folds, config):
     return metrics
 
 
+# Frozen 2026-08-14 by an independent event-gate session on a third donning:
+# fitted on donning A only, with these counts fixed beforehand on the donning B
+# sweep, it produced 9/9 clean events with no missed, wrong, duplicate,
+# REST-false, or off-trial event.  Hold-off 16 scored better on that session and
+# has a mechanism behind it, but it was not the validated value, so it stays a
+# candidate until a session that did not motivate it agrees.  See
+# docs/objective35_classifier_log.md.  The MCU gate must use these counts.
+VALIDATED_GATE = GateConfig(
+    stable_windows=5,
+    rest_rearm_windows=4,
+    refractory_windows=5,
+    abort_stable_windows=1,
+    onset_holdoff_windows=12,
+)
+
+
 def default_sweep_configs():
     # The hold-off grid stays coarse on purpose.  One scripted session carries
     # nine active trials, which cannot separate 0.70 s from 0.80 s; a finer
