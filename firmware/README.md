@@ -257,17 +257,18 @@ host before flashing.
 | Piece | State |
 | --- | --- |
 | Packet framing + CRC (`src/emg_packet.c`) | done, host-tested |
-| 20–450 Hz band-pass + 50/150 Hz notches (`src/emg_filter.c`) | done, Q29 golden-vector checked against scipy; linked into the ARM image but not called by the live loop yet |
-| Feature extraction (`src/emg_features.c`) | done, 200 ms window / 50 ms hop and MAV/RMS/ZC/WL golden-vector checked for exact equality; linked but not called by the live loop yet |
+| 20–450 Hz band-pass + 50/150 Hz notches (`src/emg_filter.c`) | done, Q29 golden-vector checked against scipy; called by the live loop, not yet observed on hardware |
+| Feature extraction (`src/emg_features.c`) | done, 200 ms window / 50 ms hop and MAV/RMS/ZC/WL golden-vector checked for exact equality; called by the live loop, not yet observed on hardware |
 | ADC1 scan + DMA1 channel 1 acquisition | done and live-verified on IN0/IN1/IN4 |
 | TIM3 2 kHz trigger | done; measured stream rate 2000.1 Hz |
 | USB CDC INFO/RAW transmission | done and live-verified on `/dev/ttyACM0` |
-| Acquisition main loop | done: ADC/DMA half-buffers become sequence-numbered RAW packets; DSP/features/inference are not connected yet |
-| Wear-detect GPIO reads | done; per-channel mask travels in each RAW packet |
-| Classifier inference | Q18 pure C scorer matches host and links in ARM image; not called by live loop |
+| Acquisition main loop | RAW as before, plus filter → features → classifier → gate → INTENT per 50 ms hop. Builds at 57% RAM / 37% Flash; **not yet flashed or observed running** |
+| Wear-detect GPIO reads | done; one mask per half, shared by the RAW packet and by window validity so the two cannot disagree |
+| Classifier inference | Q18 pure C scorer matches host; called by the live loop, not yet observed on hardware |
+| Event gate (`src/emg_gate.c`) | done; frozen counts, and a 1024-decision fixture the Python gate reproduces event for event |
 | Host: probe/scope/record/replay/analyze/reference tools | done and live-used |
-| Host: guided labelled capture GUI | implemented, headless-tested, and used for five complete balanced sessions |
-| Host: event-gate validation capture | one real complete sequence; independent replay passed 0/240 gates |
+| Host: guided labelled capture GUI | implemented, headless-tested, and used for six complete balanced sessions across two donnings |
+| Host: event-gate validation capture | two real complete sequences; the second passed independent validation 9/9 with pre-registered counts |
 | Host: training pipeline | session-aware continuous-Q29 ridge-LDA LOSO plus Q18/C export implemented and measured |
 | ROS 2 bridge | not started |
 

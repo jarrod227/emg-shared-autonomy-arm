@@ -5,12 +5,12 @@ CDC (`/dev/ttyACM0`). Firmware C and host Python are written independently
 against this document, so it has to be precise enough that neither side needs
 to read the other's source.
 
-Status: **version 1 active for raw data collection**. INFO and RAW packets,
-including the per-channel `wear_mask`, have been exercised against the real
-STM32 firmware at 2000.1 Hz. The INTENT layout and independent C/Python
-encoders/decoders are host-tested, but live firmware does not emit INTENT until
-a trained classifier is integrated. Increment the version byte if any existing
-field changes meaning or layout.
+Status: **version 1 active**. INFO and RAW packets, including the per-channel
+`wear_mask`, have been exercised against the real STM32 firmware at 2000.1 Hz.
+Firmware emitting INTENT is written and builds, but has not yet been observed
+on hardware; until it has, treat the INTENT rows below as specification rather
+than as measured behaviour. Increment the version byte if any existing field
+changes meaning or layout.
 
 ## Conventions
 
@@ -105,25 +105,49 @@ would instead cost over 200% overhead, which is why the batch exists.
 
 ### `0x02` INTENT
 
-The classification result plus the proportional view command. Once live
-inference is connected, it will be emitted once per feature hop, so 20 Hz at
-the planned 50 ms hop.
+The gated event plus the proportional view command, emitted once per feature
+hop — 20 Hz at the 50 ms hop.
 
 | Offset | Size | Field | Notes |
 | ---: | ---: | --- | --- |
 | 0 | 1 | `command` | `0` REST, `1` NEXT_TARGET, `2` CONFIRM, `3` ABORT |
-| 1 | 1 | `confidence` | `0`–`255` maps to 0.0–1.0 |
-| 2 | 1 | `signal_quality` | `0`–`255` maps to 0.0–1.0 |
+| 1 | 1 | `confidence` | diagnostic only, see below |
+| 2 | 1 | `signal_quality` | diagnostic only, see below |
 | 3 | 1 | `direction` | `int8`, `-1`, `0`, or `+1` |
 | 4 | 2 | `activation` | `uint16`, `0`–`65535` maps to 0.0–1.0 |
 | 6 | 2 | `reserved` | write `0` |
 
 Payload length 8.
 
-Once INTENT is live, `REST` still emits a packet. A silent channel is
-indistinguishable from a dead one, so the absence of intent is stated rather
-than implied. The Python/ROS bridge does not publish a discrete
-`/assistive_intent` event for `REST`.
+`command` is the **event gate's output, not the classifier's**. On every hop
+where no event fires it is `REST`, so a non-`REST` value means an event fired
+on that hop and never means "the current window looks like this". The two
+readings differ on almost every hop of a gesture — the classifier reports the
+gesture for its whole duration, the gate reports it once — so a receiver that
+assumes the wrong one produces roughly forty events per gesture instead of one.
+
+`REST` still emits a packet. A silent channel is indistinguishable from a dead
+one, so the absence of intent is stated rather than implied. The Python/ROS
+bridge does not publish a discrete `/assistive_intent` event for `REST`.
+
+`timestamp_us` is derived from the count of frames that entered the DSP, so it
+names the frame the decision was made on and can be aligned against the RAW
+stream exactly. Frames dropped before the DSP do not advance it.
+
+#### `confidence` and `signal_quality` are diagnostic
+
+Both are emitted so the host can see them, and **neither may be used as a
+threshold**: no mapping from either to a decision has been validated, and the
+onset misclassifications that motivated the gate's hold-off were confident, not
+marginal, so a confidence floor would have passed them.
+
+- `confidence` is `min(255, (top score − runner-up) >> 16)` over the model's
+  fixed-point scores. Reconstructible by the host, in the model's Q format, and
+  not a probability.
+- `signal_quality` is `0` when any frame in the window was missing or its
+  electrode detached, and otherwise `255` minus the number of samples that
+  needed clamping in that window. It reports contact and headroom, not
+  certainty: a clipped window can still produce a confident wrong score.
 
 ## Receiver requirements
 

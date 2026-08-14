@@ -28,6 +28,10 @@
 /* USER CODE BEGIN Includes */
 #include <stdbool.h>
 
+#include "emg_classifier.h"
+#include "emg_features.h"
+#include "emg_filter.h"
+#include "emg_gate.h"
 #include "emg_packet.h"
 #include "usbd_cdc_if.h"
 /* USER CODE END Includes */
@@ -53,6 +57,17 @@
                             + EMG_HALF_SAMPLES * 2u + EMG_CRC_SIZE)
 #define EMG_INFO_PERIOD_MS 2000u
 #define EMG_TX_TIMEOUT_MS 5u
+
+/* Must equal ZERO_CROSSING_THRESHOLD in firmware/tools/emg_train_lda.py. The
+ * model was fitted on features counted with this threshold; a different one
+ * here changes one of the twelve inputs and silently invalidates it. */
+#define EMG_ZERO_CROSSING_THRESHOLD 10u
+#define EMG_WEAR_ALL_ATTACHED ((1u << EMG_CHANNELS) - 1u)
+
+/* confidence = min(255, (top score - runner-up) >> this). Diagnostic only:
+ * the mapping is reconstructible by the host but no threshold on it has been
+ * validated, so nothing may gate on it. See PROTOCOL.md. */
+#define EMG_CONFIDENCE_SHIFT 16
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -81,6 +96,24 @@ static uint8_t emg_tx_slot;
 
 static uint16_t emg_info_sequence;
 static uint32_t emg_next_info_tick;
+
+static emg_filter_t emg_filters[EMG_CHANNELS];
+static emg_feature_window_t emg_windows[EMG_CHANNELS];
+static uint32_t emg_saturations[EMG_CHANNELS];
+static emg_gate_t emg_gate;
+static uint16_t emg_intent_sequence;
+
+/* Frames processed by the DSP, which is not the same as frames captured: the
+ * count only advances over samples that actually entered the filters, so the
+ * INTENT timestamp names the frame the decision was made on and the host can
+ * align it against the RAW stream exactly. */
+static uint32_t emg_frames_processed;
+
+/* Saturates at the window length. A feature window is usable only when every
+ * frame in it was contiguous and fully attached, which is the same rule the
+ * host applies, so this counter is compared against EMG_FEATURES_WINDOW rather
+ * than tracking per-frame validity. */
+static uint16_t emg_frames_since_invalid;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -89,7 +122,13 @@ void SystemClock_Config(void);
 static uint8_t emg_read_wear_mask(void);
 static bool emg_transmit(const uint8_t *data, uint16_t length);
 static void emg_send_info(void);
-static void emg_send_raw_half(uint32_t index);
+static void emg_send_raw_half(uint32_t index, uint8_t wear_mask);
+static void emg_dsp_init(void);
+static void emg_dsp_discontinuity(void);
+static void emg_process_half(uint32_t index, bool attached);
+static void emg_send_intent(emg_command_t command,
+                            const emg_classification_t *result,
+                            bool window_valid, uint32_t new_saturations);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -142,7 +181,7 @@ static void emg_send_info(void)
   emg_info_sequence++;
 }
 
-static void emg_send_raw_half(uint32_t index)
+static void emg_send_raw_half(uint32_t index, uint8_t wear_mask)
 {
   const uint16_t *half = &emg_adc_buffer[(index % 2u) * EMG_HALF_SAMPLES];
   uint8_t *buffer = emg_tx_buffer[emg_tx_slot];
@@ -154,11 +193,155 @@ static void emg_send_raw_half(uint32_t index)
   const size_t length = emg_encode_raw(
       buffer, EMG_TX_BUFFER_SIZE, (uint16_t)index,
       index * EMG_FRAMES_PER_PACKET * EMG_FRAME_PERIOD_US,
-      emg_read_wear_mask(), half, (uint16_t)EMG_HALF_SAMPLES);
+      wear_mask, half, (uint16_t)EMG_HALF_SAMPLES);
 
   if (length != 0u) {
     emg_tx_slot ^= 1u;
     (void)emg_transmit(buffer, (uint16_t)length);
+  }
+}
+
+static void emg_dsp_init(void)
+{
+  emg_gate_config_t gate_config;
+
+  for (uint32_t channel = 0u; channel < EMG_CHANNELS; channel++) {
+    if (!emg_filter_init(&emg_filters[channel],
+                         emg_filter_20_450_notch50_at_2000,
+                         EMG_FILTER_DEFAULT_SECTIONS)) {
+      Error_Handler();
+    }
+    if (!emg_features_init(&emg_windows[channel],
+                           EMG_ZERO_CROSSING_THRESHOLD)) {
+      Error_Handler();
+    }
+    emg_saturations[channel] = 0u;
+  }
+  emg_gate_default_config(&gate_config);
+  if (!emg_gate_init(&emg_gate, &gate_config)) {
+    Error_Handler();
+  }
+  emg_frames_since_invalid = 0u;
+}
+
+/* A gap in the sample stream is not a small error. The biquad state and the
+ * feature window both assume contiguous samples, so carrying them across a gap
+ * produces plausible features from a signal that never existed. Everything is
+ * reset and the gate is told the evidence is gone. */
+static void emg_dsp_discontinuity(void)
+{
+  for (uint32_t channel = 0u; channel < EMG_CHANNELS; channel++) {
+    emg_filter_reset(&emg_filters[channel]);
+    emg_features_reset(&emg_windows[channel]);
+    emg_saturations[channel] = emg_windows[channel].saturations;
+  }
+  emg_gate_invalidate(&emg_gate);
+  emg_frames_since_invalid = 0u;
+}
+
+static void emg_send_intent(emg_command_t command,
+                            const emg_classification_t *result,
+                            bool window_valid, uint32_t new_saturations)
+{
+  uint8_t *buffer = emg_tx_buffer[emg_tx_slot];
+  int64_t best = result->scores[0];
+  int64_t runner_up = INT64_MIN;
+  emg_intent_t intent;
+
+  for (uint32_t class_index = 1u;
+       class_index < EMG_CLASSIFIER_CLASS_COUNT;
+       class_index++) {
+    const int64_t score = result->scores[class_index];
+    if (score > best) {
+      runner_up = best;
+      best = score;
+    } else if (score > runner_up) {
+      runner_up = score;
+    }
+  }
+
+  const int64_t margin = (best - runner_up) >> EMG_CONFIDENCE_SHIFT;
+  intent.command = (uint8_t)command;
+  intent.confidence = (margin >= 255) ? 255u : (uint8_t)margin;
+  /* Quality is contact and headroom, not certainty: a clipped or detached
+   * window can still produce a confident wrong score. */
+  if (!window_valid) {
+    intent.signal_quality = 0u;
+  } else if (new_saturations >= 255u) {
+    intent.signal_quality = 0u;
+  } else {
+    intent.signal_quality = (uint8_t)(255u - new_saturations);
+  }
+  /* Proportional view control is not implemented. */
+  intent.direction = 0;
+  intent.activation = 0u;
+
+  const size_t length = emg_encode_intent(
+      buffer, EMG_TX_BUFFER_SIZE, emg_intent_sequence,
+      emg_frames_processed * EMG_FRAME_PERIOD_US, &intent);
+  if (length != 0u) {
+    emg_tx_slot ^= 1u;
+    (void)emg_transmit(buffer, (uint16_t)length);
+  }
+  emg_intent_sequence++;
+}
+
+static void emg_process_half(uint32_t index, bool attached)
+{
+  const uint16_t *half = &emg_adc_buffer[(index % 2u) * EMG_HALF_SAMPLES];
+
+  for (uint32_t frame = 0u; frame < EMG_FRAMES_PER_PACKET; frame++) {
+    emg_features_t features[EMG_CHANNELS] = {0};
+    uint32_t hops = 0u;
+
+    /* One wear reading covers the whole half, matching what the host sees:
+     * a RAW packet carries a single mask that it applies to every frame in
+     * the packet. Reading per frame here would make the two disagree. */
+    if (!attached) {
+      emg_frames_since_invalid = 0u;
+    } else if (emg_frames_since_invalid < EMG_FEATURES_WINDOW) {
+      emg_frames_since_invalid++;
+    }
+
+    for (uint32_t channel = 0u; channel < EMG_CHANNELS; channel++) {
+      /* 12-bit unsigned counts fit int16 as they are. The band-pass removes
+       * the offset, and the host feeds the filter the same raw counts, so no
+       * centring is applied on either side. */
+      const int16_t raw = (int16_t)half[frame * EMG_CHANNELS + channel];
+      const int32_t filtered = emg_filter_step(&emg_filters[channel], raw);
+      if (emg_features_push(&emg_windows[channel], filtered,
+                            &features[channel])) {
+        hops++;
+      }
+    }
+    emg_frames_processed++;
+
+    /* Every channel is pushed for every frame, so the three cross a hop on the
+     * same sample. Requiring all three rather than testing one means a future
+     * edit that lets them drift apart produces no classification instead of a
+     * classification built from one stale channel. */
+    if (hops == EMG_CHANNELS) {
+      emg_classification_t result;
+      emg_command_t event = EMG_COMMAND_REST;
+      const bool window_valid =
+          (emg_frames_since_invalid >= EMG_FEATURES_WINDOW);
+      uint32_t new_saturations = 0u;
+
+      for (uint32_t channel = 0u; channel < EMG_CHANNELS; channel++) {
+        new_saturations +=
+            emg_windows[channel].saturations - emg_saturations[channel];
+        emg_saturations[channel] = emg_windows[channel].saturations;
+      }
+      if (!emg_classifier_predict(features, &result)) {
+        continue;
+      }
+      /* REST is reported too. A silent link is indistinguishable from a dead
+       * one, so the absence of intent is stated rather than implied; the
+       * command carries the gate's event, so anything other than REST means
+       * an event fired on this hop. */
+      (void)emg_gate_push(&emg_gate, result.command, window_valid, &event);
+      emg_send_intent(event, &result, window_valid, new_saturations);
+    }
   }
 }
 /* USER CODE END 0 */
@@ -197,6 +380,8 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
+  /* Before the ADC starts, so no half can arrive at an uninitialised filter. */
+  emg_dsp_init();
   /* The F1 ADC needs a self-calibration after power-up. Skipping it leaves a
    * few counts of offset that nothing downstream can recover. */
   if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK)
@@ -240,8 +425,15 @@ int main(void)
       if ((produced - emg_halves_consumed) > 1u)
       {
         emg_halves_consumed = produced - 1u;
+        /* The RAW stream survives a gap; the DSP does not, so it is told. */
+        emg_dsp_discontinuity();
       }
-      emg_send_raw_half(emg_halves_consumed);
+      /* Read once and share it. RAW reports the mask to the host and the DSP
+       * decides window validity from it, so two reads could disagree and make
+       * the host's replay diverge from the firmware's own decision. */
+      const uint8_t wear_mask = emg_read_wear_mask();
+      emg_send_raw_half(emg_halves_consumed, wear_mask);
+      emg_process_half(emg_halves_consumed, wear_mask == EMG_WEAR_ALL_ATTACHED);
       emg_halves_consumed++;
     }
   }
