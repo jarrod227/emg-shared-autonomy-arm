@@ -26,6 +26,9 @@ GESTURE_ACTIONS = {
     "ABORT": "WRIST DOWN",
 }
 GESTURE_LABELS = tuple(GESTURE_ACTIONS)
+CLASSIFIER_PROTOCOL = "classifier"
+EVENT_GATE_PROTOCOL = "event-gate"
+COLLECTION_PROTOCOLS = (CLASSIFIER_PROTOCOL, EVENT_GATE_PROTOCOL)
 
 
 class Phase(str, Enum):
@@ -97,6 +100,55 @@ def build_trial_plan(repetitions, seed):
                 )
             )
     return tuple(trials)
+
+
+def build_event_gate_plan(repetitions, seed):
+    """Build an alternating REST/event plan for event-gate validation.
+
+    Every active gesture has an explicit labelled REST trial immediately
+    before and after it.  A trailing REST also becomes the pre-event REST for
+    the next gesture, keeping the session short without merging boundaries.
+    """
+    if not isinstance(repetitions, int) or isinstance(repetitions, bool):
+        raise TypeError("repetitions must be an integer")
+    if repetitions <= 0:
+        raise ValueError("repetitions must be positive")
+    if not isinstance(seed, int) or isinstance(seed, bool):
+        raise TypeError("seed must be an integer")
+
+    generator = random.Random(seed)
+    trials = [
+        TrialSpec(
+            index=0,
+            label="REST",
+            action=GESTURE_ACTIONS["REST"],
+            repetition=1,
+        )
+    ]
+    active_labels = [label for label in GESTURE_LABELS if label != "REST"]
+    for repetition in range(1, repetitions + 1):
+        block = list(active_labels)
+        generator.shuffle(block)
+        for label in block:
+            for planned_label in (label, "REST"):
+                trials.append(
+                    TrialSpec(
+                        index=len(trials),
+                        label=planned_label,
+                        action=GESTURE_ACTIONS[planned_label],
+                        repetition=repetition,
+                    )
+                )
+    return tuple(trials)
+
+
+def build_collection_plan(protocol, repetitions, seed):
+    """Select the plan without changing either protocol's label semantics."""
+    if protocol == CLASSIFIER_PROTOCOL:
+        return build_trial_plan(repetitions, seed)
+    if protocol == EVENT_GATE_PROTOCOL:
+        return build_event_gate_plan(repetitions, seed)
+    raise ValueError(f"unsupported collection protocol: {protocol}")
 
 
 @dataclass(frozen=True)
@@ -261,6 +313,7 @@ class GuidedSession:
         self,
         plan,
         *,
+        protocol=CLASSIFIER_PROTOCOL,
         prepare_seconds=2.0,
         transition_seconds=0.5,
         active_seconds=3.0,
@@ -274,6 +327,9 @@ class GuidedSession:
             raise ValueError("plan must contain at least one trial")
         if any(not isinstance(trial, TrialSpec) for trial in self.plan):
             raise TypeError("plan entries must be TrialSpec values")
+        if protocol not in COLLECTION_PROTOCOLS:
+            raise ValueError(f"unsupported collection protocol: {protocol}")
+        self.protocol = protocol
 
         self.prepare_seconds = _positive_duration(
             "prepare_seconds", prepare_seconds
@@ -555,6 +611,7 @@ class GuidedSession:
         """Return the serializable experiment contract for the sidecar."""
         return {
             "schema_version": 1,
+            "collection_protocol": self.protocol,
             "status": status,
             "gesture_actions": dict(GESTURE_ACTIONS),
             "seed": seed,

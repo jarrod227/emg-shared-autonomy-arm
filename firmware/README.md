@@ -264,18 +264,19 @@ host before flashing.
 | USB CDC INFO/RAW transmission | done and live-verified on `/dev/ttyACM0` |
 | Acquisition main loop | done: ADC/DMA half-buffers become sequence-numbered RAW packets; DSP/features/inference are not connected yet |
 | Wear-detect GPIO reads | done; per-channel mask travels in each RAW packet |
-| Classifier inference | not started — needs a trained model, which needs data |
+| Classifier inference | Q18 pure C scorer matches host and links in ARM image; not called by live loop |
 | Host: probe/scope/record/replay/analyze/reference tools | done and live-used |
-| Host: guided labelled capture GUI | implemented and headless-tested; first real session and multi-session dataset remain |
-| Host: training pipeline and ROS 2 bridge | not started |
+| Host: guided labelled capture GUI | implemented, headless-tested, and used for five complete balanced sessions |
+| Host: event-gate validation capture | one real complete sequence; independent replay passed 0/240 gates |
+| Host: training pipeline | session-aware continuous-Q29 ridge-LDA LOSO plus Q18/C export implemented and measured |
+| ROS 2 bridge | not started |
 
 The acquisition boundary is deliberately still RAW. The live firmware does
 not silently filter or classify the dataset stream. The guided collector is
-implemented and host-tested; the next step is to use it for real multi-session
-captures of `REST`, `NEXT_TARGET`, `CONFIRM`, and `ABORT`, then train the host
-LDA baseline. Only after that model is measured should the tested
-filter/feature modules be connected to the live firmware loop and INTENT
-packets be emitted.
+implemented and live-used. Five complete sessions and the host LDA baseline
+are measured, and Q18 parameter export plus host/C agreement are complete. The
+next step is to connect the tested filter/feature modules, classifier,
+stable-event gate, and INTENT packets to the live firmware loop.
 
 ### Guided labelled capture
 
@@ -312,6 +313,52 @@ Each run creates `datasets/emg/session_<timestamp>/session.bin` plus
 randomization seed, exact cumulative-frame label spans, pauses, rejected
 attempts, contact/parser quality, and stream summary.
 
+#### Event-gate validation capture
+
+Use the same GUI with the independent event protocol:
+
+```bash
+python3 firmware/tools/emg_guided_capture.py \
+  --protocol event-gate \
+  --port /dev/ttyACM0
+```
+
+Its default schedule is `REST, gesture, REST, gesture, ... REST`, with three
+randomized repetitions of `NEXT_TARGET`, `CONFIRM`, and `ABORT`. Each labelled
+span lasts two seconds; the complete run takes about one minute. It saves to
+`datasets/emg_event_gate/session_<timestamp>` so these timing-validation spans
+cannot be mistaken for another classifier-training session. The software path
+is tested. One real session completed 19/19 spans with 100% usable/contact
+frames and zero parser loss, but independent replay passed 0/240 gates; best
+clean was 3/9 and `NEXT_TARGET` was correct on 0/3 events. No gate is frozen.
+
+### Host LDA baseline
+
+`emg_train_lda.py` accepts only complete, balanced schema-v1 sessions. It
+filters each channel once across the continuous recording with the same Q29
+20–450 Hz + 50/150 Hz cascade used by the MCU reference, extracts
+`ch0..ch2 × (MAV, RMS, WL, ZC)` on the global 400-sample/100-sample grid, and
+keeps only windows wholly contained in an accepted ACTIVE span. Validation is
+leave-one-session-out rather than a random window split, preventing overlapping
+windows from the same recording leaking into both train and test data.
+
+```bash
+python3 firmware/tools/emg_train_lda.py datasets/emg \
+  --output datasets/emg/lda_model.json \
+  --fraction-bits 18 \
+  --c-output firmware/src/emg_classifier_model.h
+```
+
+The 2026-08-14 five-session run loaded 100 trials / 5704 windows and excluded
+one stopped session. Overall accuracy was 94.8% per window and 96.0% per trial.
+`REST`, `NEXT_TARGET`, and `CONFIRM` were each 25/25 by trial; `ABORT` was
+21/25, with four trials predicted as `CONFIRM`. Standardization is folded into
+raw-feature Q18 affine coefficients. Q18 predictions match float on 5704/5704
+source windows; the generated pure C scorer matches Python scores exactly on
+its golden fixture and links in the ARM build. The JSON includes preprocessing,
+class order, float/Q18 parameters, folds, and confusion matrices. `main.c` does
+not call the classifier yet, so this is not live MCU deployment evidence.
+
 The classifier order is set in `TODO.md` and is deliberate: the Hudgins
 feature set with an LDA/SVM baseline first, and a quantized MLP only if it
 measurably beats that. The part can carry either — a 12-feature, 16-hidden,
@@ -327,17 +374,15 @@ make -C firmware/test check  # packet/filter/features + cross-language fixtures
 python3 -m pytest firmware/tools -q
 ```
 
-Verified earlier on 2026-08-14: all three C binaries passed and the Python
-tools suite reported **75 passed**. After adding the guided collector and its
-timing, quality, pause, retry, and emergency-save tests, the complete Python
-tools suite reported **111 passed**. The C suite was not changed or rerun for
-the collector-only update.
+Verified on 2026-08-14: all four C binaries (packet, filter, features, and
+classifier) passed, and the complete Python tools suite reported **140
+passed**.
 
-Run them in that order. `make check` regenerates `fixture.bin`, a stream the
-C encoder produced, and the last Python test decodes it and checks every
-field. The two implementations are written from `PROTOCOL.md` without reading
-each other, so that test is the evidence the spec is unambiguous — if it
-fails, suspect the spec before either implementation.
+Run them in that order. `make check` regenerates the packet, filter, feature,
+and classifier fixtures. The Python suite independently decodes or recomputes
+them and checks every field or score. The implementations share specifications
+and model parameters, not runtime code, so disagreement exposes a boundary or
+arithmetic error before flashing.
 
 The fixture deliberately contains leading junk, a RAW sequence jump, and a
 repeated INTENT sequence, so resynchronization and the loss/duplicate counters
@@ -356,6 +401,8 @@ Host-side, in `tools/`. Neither needs the ARM toolchain.
 | `emg_analyze.py` | Reads a recording and judges electrode placement from the envelope correlation between channels. |
 | `emg_guided_session.py` | Pure, headless timing/label/quality state machine for balanced guided collection. |
 | `emg_guided_capture.py` | Tk GUI with three raw traces, Start/Pause/Resume/Stop, timed prompts, automatic retry/completion, continuous `.bin`, and frame-indexed `.json` labels. |
+| `emg_train_lda.py` | Session-aware continuous-Q29 ridge-LDA training, leave-one-session-out evaluation, Q-format export, and generated C model header. |
+| `emg_event_gate_replay.py` | Fold-specific Q18 full-timeline replay and candidate stable-window/REST-rearm/refractory sweep; unlabelled-gap events remain diagnostic only. |
 
 `emg_record.py` stores **bytes, not decoded samples**. A recording of decoded
 values is unrecoverable if the decoder had a bug; a byte log can be re-decoded

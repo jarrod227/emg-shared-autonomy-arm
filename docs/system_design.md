@@ -89,9 +89,11 @@ Phase-0 bounded search with simulated view commands is implemented. Objective
 contract at 10 Hz, and passed its measured bottle-distance check on 2026-08-13.
 Objective 3.5 is active. Its STM32 ADC1/DMA1/TIM3 raw acquisition and INFO/RAW
 USB CDC transport are live, and its Q29 DSP/features pass host/reference tests
-but are not called by the live loop. The guided labelled GUI collector is
-implemented and host-tested; real multi-session collection, LDA training, MCU
-classification/INTENT, and the ROS bridge remain.
+but are not called by the live loop. The guided labelled GUI has produced five
+complete balanced sessions, and session-held-out host ridge-LDA evaluation is
+measured at 94.8% per window and 96.0% per trial. Fixed/quantized MCU
+Q18 classification is host/C-verified and ARM-linked but not called live;
+INTENT, hysteresis, and the ROS bridge remain.
 
 ## Current Workspace Layout
 
@@ -250,10 +252,22 @@ quality decisions, pauses, schedule, and seed.
 Current boundary (2026-08-14): acquisition through INFO/RAW USB CDC is live.
 The Q29 filter cascade and integer feature modules are implemented, linked, and
 host/reference-tested, but the live loop does not call them. The guided
-collector implementation passes the host-tools suite but has not yet produced
-a real labelled dataset. Real multi-session capture and a host LDA baseline
-come next; classifier inference, INTENT emission, stability/hysteresis, and the
-bridge are not yet live.
+collector produced five complete balanced sessions (100 trials, 5704 windows),
+and continuous-Q29 leave-one-session-out ridge LDA measured 94.8% window and
+96.0% trial accuracy. Four `ABORT` trials were classified as `CONFIRM`, so the
+float host model is a baseline rather than a deployment claim. Fixed classifier
+Q18 inference matches float on all 5704 source windows, and the C scorer matches
+Python fixed scores and links in the ARM image. Live DSP/classifier execution,
+INTENT emission, stability/hysteresis, and the bridge are not live. The offline
+fold-specific Q18 replay sweeps 240 full-timeline gate configurations, but the
+original ACTIVE-only labels cannot freeze N/M/refractory counts: unlabelled
+movement/recovery events may consume the re-arm before the scored span. One
+short explicitly labelled `REST -> gesture -> REST` event-sequence session is
+required before MCU gate parameters are selected. The independent `event-gate`
+GUI protocol now implements that alternating labelled plan and keeps its output
+under `datasets/emg_event_gate`. One real session completed 19/19 spans with
+100% usable/contact frames and zero parser loss, but independent replay passed
+0/240 gates. No gate is selected; onset/cross-session diagnosis comes next.
 
 Firmware ownership is explicit: STM32CubeIDE C/C++ implements ADC/DMA,
 DSP/features, inference, and the versioned packet producer. PC Python tools own
@@ -277,6 +291,17 @@ After per-session rest and comfortable-contraction calibration:
 activation = clip((envelope - rest) / (comfortable - rest), 0, 1)
 target_angle = safe_center +/- configured_limit * activation
 ```
+
+The five accepted sessions train and evaluate only the discrete four-class
+branch. They do not contain `LEFT`/`RIGHT` labels and cannot validate the
+proportional branch. Before that branch is implemented, choose two physical
+direction actions that do not reuse wrist-flexion/down `ABORT`, then run a
+separate short calibration containing neutral rest, both directions, and a
+comfortable maximum contraction. Direction comes from the calibrated signed
+pattern and activation from the normalized envelope; target-angle labels such
+as 10/20/30 degrees are unnecessary. `HOLD` initially means the activation is
+inside the deadband or no fresh direction command exists, not another mandatory
+contraction class.
 
 Activation changes target angle, not speed. The controller uses a fixed low
 nominal speed plus acceleration/deceleration limits. Deadband, smoothing,
@@ -333,7 +358,7 @@ old bench extrinsic or the latest TF is invalid.
 | --- | --- | --- |
 | deterministic selected pose | fixed pose publisher | implemented |
 | geometric selected pose | ArUco + current selector | implemented (3.1) |
-| semantic object candidates | instance mask + stereo points | synthetic and exact-time live publishers implemented; 10 Hz default-gap runtime verified, one XYZ check pending (3.2) |
+| semantic object candidates | instance mask + stereo points | synthetic and exact-time live publishers implemented; 10 Hz default-gap runtime and measured bottle-distance check complete (3.2) |
 | discrete intent | simulated input, then STM32 bridge | simulated source implemented (4.1); STM32 planned (3.5) |
 | bounded search command | simulated input, then STM32 bridge | simulated contract/controller implemented (4.3); STM32 source planned (3.5) |
 | target acquisition and final pose | generalized target selector | N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose + confirmation-gated retained publisher implemented; status contract pending |
@@ -721,8 +746,8 @@ responsibilities are:
 | markerless object perception | Objective 3.2 complete; pure mask/aligned-XYZ localization, YOLO adapter, synthetic/exact-time live publishers, organized point cloud, 10 Hz default-gap runtime, and measured bottle-distance check verified |
 | generalized target selector/tracker | Objective 3.2/3.5 integration; N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose + confirmation-gated retained publisher implemented; status contract pending |
 | shared ROS interfaces | `AssistiveIntent`, `HandObservation`, `ViewControlCommand`, `ObjectCandidate`, and `ObjectCandidateArray` implemented; target-status contract remains planned |
-| STM32 EMG firmware | Objective 3.5 in progress: ADC1/DMA1/TIM3 raw acquisition and INFO/RAW USB CDC live; DSP/features implemented and tested but not called; classifier/INTENT pending |
-| PC EMG tooling | Objective 3.5 in progress: probe/scope/record/replay/analyze, filter/feature references, golden vectors, and guided labelled GUI implemented; real guided sessions, LDA training, and quantization pending |
+| STM32 EMG firmware | Objective 3.5 in progress: ADC1/DMA1/TIM3 raw acquisition and INFO/RAW USB CDC live; DSP/features and Q18 C classifier implemented, tested, and ARM-linked but not called; event gate/INTENT pending |
+| PC EMG tooling | Objective 3.5 in progress: full host pipeline implemented; one real re-arm sequence passed 0/240 gates, so classifier diagnosis and fresh validation remain |
 | EMG USB CDC ROS bridge | Objective 3.5 planned MVP Python/`rclpy`; optional measured `rclcpp` receiver/parser/ring-buffer rewrite in Phase 3 |
 | SO-ARM101 LeRobot backend (backend B) | Objective 5 (Phase 2; real-arm commands, cancellation, gripper/held-object status) |
 | eye-in-hand calibration and deterministic visual refinement | Objective 5 (stereo remount/recalibration plus `PREGRASP -> REOBSERVE -> REFINE -> GRASP`) |

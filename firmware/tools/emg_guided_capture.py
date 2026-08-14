@@ -34,12 +34,15 @@ import threading
 import time
 
 from emg_guided_session import (
+    CLASSIFIER_PROTOCOL,
+    COLLECTION_PROTOCOLS,
+    EVENT_GATE_PROTOCOL,
     GESTURE_ACTIONS,
     GuidedSession,
     Phase,
     RUNNING_PHASES,
     StreamPosition,
-    build_trial_plan,
+    build_collection_plan,
 )
 from emg_protocol import TYPE_INFO, TYPE_RAW, PacketParser, decode_info, decode_raw
 from emg_record import Recording, print_summary
@@ -339,7 +342,12 @@ class CaptureApp:
         self.tk = tk
         self.ttk = ttk
         self.session = GuidedSession(
-            build_trial_plan(arguments.repetitions, seed),
+            build_collection_plan(
+                arguments.protocol,
+                arguments.repetitions,
+                seed,
+            ),
+            protocol=arguments.protocol,
             prepare_seconds=arguments.prepare_seconds,
             transition_seconds=arguments.transition_seconds,
             active_seconds=arguments.active_seconds,
@@ -372,7 +380,7 @@ class CaptureApp:
         self.contact_var = tk.StringVar(value="ch0 --   ch1 --   ch2 --")
         self.result_var = tk.StringVar(value="Preview only; nothing is saved yet.")
 
-        root.title("Objective 3.5 guided EMG capture")
+        root.title(f"Objective 3.5 {arguments.protocol} EMG capture")
         root.geometry("1120x820")
         root.protocol("WM_DELETE_WINDOW", self.close)
 
@@ -569,11 +577,21 @@ class CaptureApp:
         if self.waiting_for_preflight:
             return "PREFLIGHT", "Waiting for stable contact and session INFO"
         if self.session.phase is Phase.PREPARE:
+            if self.session.protocol == EVENT_GATE_PROTOCOL:
+                return (
+                    "RELAX",
+                    f"Remain neutral; next {trial.action} · {remaining:0.1f} s",
+                )
             return (
                 f"NEXT: {trial.action}",
                 f"Prepare {trial.label} · {remaining:0.1f} s",
             )
         if self.session.phase is Phase.TRANSITION:
+            if trial.label == "REST":
+                return (
+                    "STAY RELAXED",
+                    f"REST transition is not labelled · {remaining:0.1f} s",
+                )
             return (
                 f"MOVE NOW: {trial.action}",
                 f"Transition is not labelled · {remaining:0.1f} s",
@@ -797,18 +815,37 @@ def math_is_finite(value):
 
 def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--protocol",
+        choices=COLLECTION_PROTOCOLS,
+        default=CLASSIFIER_PROTOCOL,
+    )
     parser.add_argument("--port", default="/dev/ttyACM0")
-    parser.add_argument("--out-root", default="datasets/emg")
+    parser.add_argument("--out-root")
     parser.add_argument("--session-id")
-    parser.add_argument("--repetitions", type=int, default=5)
-    parser.add_argument("--prepare-seconds", type=float, default=2.0)
+    parser.add_argument("--repetitions", type=int)
+    parser.add_argument("--prepare-seconds", type=float)
     parser.add_argument("--transition-seconds", type=float, default=0.5)
-    parser.add_argument("--active-seconds", type=float, default=3.0)
+    parser.add_argument("--active-seconds", type=float)
     parser.add_argument("--verification-seconds", type=float, default=0.1)
-    parser.add_argument("--recovery-seconds", type=float, default=1.5)
+    parser.add_argument("--recovery-seconds", type=float)
     parser.add_argument("--window-seconds", type=float, default=2.0)
     parser.add_argument("--seed", type=int)
-    return parser.parse_args(argv)
+    arguments = parser.parse_args(argv)
+    event_gate = arguments.protocol == EVENT_GATE_PROTOCOL
+    if arguments.out_root is None:
+        arguments.out_root = (
+            "datasets/emg_event_gate" if event_gate else "datasets/emg"
+        )
+    if arguments.repetitions is None:
+        arguments.repetitions = 3 if event_gate else 5
+    if arguments.prepare_seconds is None:
+        arguments.prepare_seconds = 0.5 if event_gate else 2.0
+    if arguments.active_seconds is None:
+        arguments.active_seconds = 2.0 if event_gate else 3.0
+    if arguments.recovery_seconds is None:
+        arguments.recovery_seconds = 0.5 if event_gate else 1.5
+    return arguments
 
 
 def main(argv=None):
@@ -816,9 +853,14 @@ def main(argv=None):
     seed = arguments.seed if arguments.seed is not None else secrets.randbits(32)
 
     try:
-        plan = build_trial_plan(arguments.repetitions, seed)
+        plan = build_collection_plan(
+            arguments.protocol,
+            arguments.repetitions,
+            seed,
+        )
         GuidedSession(
             plan,
+            protocol=arguments.protocol,
             prepare_seconds=arguments.prepare_seconds,
             transition_seconds=arguments.transition_seconds,
             active_seconds=arguments.active_seconds,
@@ -874,6 +916,7 @@ def main(argv=None):
             FigureCanvasTkAgg,
         )
         print(f"Randomization seed: {seed}")
+        print(f"Collection protocol: {arguments.protocol}")
         print("Click Start in the GUI after all three contact indicators are OK.")
         root.mainloop()
     except KeyboardInterrupt:

@@ -9,12 +9,16 @@ import pytest
 
 import emg_guided_capture as capture
 from emg_guided_session import (
+    CLASSIFIER_PROTOCOL,
+    EVENT_GATE_PROTOCOL,
     GESTURE_ACTIONS,
     GESTURE_LABELS,
     GuidedSession,
     Phase,
     StreamPosition,
     TrialSpec,
+    build_collection_plan,
+    build_event_gate_plan,
     build_trial_plan,
 )
 
@@ -89,6 +93,36 @@ def test_plan_is_balanced_by_randomized_repetition_block():
         assert {trial.repetition for trial in block} == {
             start // len(GESTURE_LABELS) + 1
         }
+
+
+def test_event_gate_plan_wraps_every_event_in_labelled_rest():
+    plan = build_event_gate_plan(3, seed=123)
+
+    assert len(plan) == 1 + 2 * 3 * (len(GESTURE_LABELS) - 1)
+    assert plan[0].label == plan[-1].label == "REST"
+    for index, trial in enumerate(plan):
+        assert trial.index == index
+        if trial.label != "REST":
+            assert plan[index - 1].label == "REST"
+            assert plan[index + 1].label == "REST"
+    for repetition in range(1, 4):
+        labels = {
+            trial.label
+            for trial in plan
+            if trial.repetition == repetition and trial.label != "REST"
+        }
+        assert labels == set(GESTURE_LABELS) - {"REST"}
+
+
+def test_collection_plan_preserves_classifier_and_event_protocols():
+    assert build_collection_plan(CLASSIFIER_PROTOCOL, 1, 9) == build_trial_plan(
+        1, 9
+    )
+    assert build_collection_plan(EVENT_GATE_PROTOCOL, 1, 9) == (
+        build_event_gate_plan(1, 9)
+    )
+    with pytest.raises(ValueError, match="unsupported collection protocol"):
+        build_collection_plan("unknown", 1, 9)
 
 
 def test_only_active_span_is_labelled_and_last_trial_auto_completes():
@@ -270,6 +304,7 @@ def test_manifest_separates_schedule_labels_and_unlabelled_timing():
     manifest = session.to_manifest(seed=42, status="complete")
 
     assert manifest["status"] == "complete"
+    assert manifest["collection_protocol"] == CLASSIFIER_PROTOCOL
     assert manifest["gesture_actions"] == GESTURE_ACTIONS
     assert manifest["timing_seconds"]["transition_unlabelled"] == 0.5
     assert manifest["timing_seconds"]["verification_unlabelled"] == 0.1
@@ -292,6 +327,24 @@ def test_session_rejects_non_positive_or_non_finite_timing():
         GuidedSession(one_trial(), active_seconds=0)
     with pytest.raises(ValueError):
         GuidedSession(one_trial(), recovery_seconds=float("inf"))
+    with pytest.raises(ValueError, match="unsupported collection protocol"):
+        GuidedSession(one_trial(), protocol="unknown")
+
+
+def test_event_gate_cli_uses_short_independent_collection_defaults():
+    classifier = capture.parse_arguments([])
+    event_gate = capture.parse_arguments(["--protocol", EVENT_GATE_PROTOCOL])
+
+    assert classifier.out_root == "datasets/emg"
+    assert classifier.repetitions == 5
+    assert classifier.prepare_seconds == 2.0
+    assert classifier.active_seconds == 3.0
+    assert classifier.recovery_seconds == 1.5
+    assert event_gate.out_root == "datasets/emg_event_gate"
+    assert event_gate.repetitions == 3
+    assert event_gate.prepare_seconds == 0.5
+    assert event_gate.active_seconds == 2.0
+    assert event_gate.recovery_seconds == 0.5
 
 
 def test_info_sample_rate_can_only_be_adopted_before_start():

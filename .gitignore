@@ -34,9 +34,11 @@ docs/serialplot-*/
 firmware/test/test_emg_packet
 firmware/test/test_emg_filter
 firmware/test/test_emg_features
+firmware/test/test_emg_classifier
 firmware/test/fixture.bin
 firmware/test/golden.bin
 firmware/test/features.bin
+firmware/test/classifier.bin
 
 # CubeMX project build output. The generated sources and cheez_emg.ioc are
 # tracked -- the .ioc is the authoritative record of the peripheral
