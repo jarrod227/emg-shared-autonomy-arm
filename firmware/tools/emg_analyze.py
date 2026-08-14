@@ -37,6 +37,14 @@ REDUNDANT_ABOVE = 0.90
 DISTINCT_BELOW = 0.70
 SEGMENTS = 10
 
+# Correlation is measured on the active windows only. Including rest makes
+# every channel go quiet together, and that shared on/off structure dominates
+# the coefficient: on a real session it lifted one pair from 0.06 to 0.71 and
+# produced a "redundant, move the bands" verdict on a placement whose gesture
+# patterns were cleanly separated. What matters is whether channels differ
+# *while the muscle is working*, not whether they rest at the same time.
+ACTIVE_THRESHOLD_FRACTION = 0.25
+
 # Any clipping at all makes the affected channel's amplitudes wrong, and a
 # channel an order of magnitude quieter than the loudest is sitting at its
 # noise floor. Correlation involving either is uninformative, so the verdict
@@ -190,14 +198,35 @@ def describe_channels(info, columns, wear_counts, total_frames):
             print("       WARN: contact was lost during the recording")
 
 
+def active_windows(envelopes):
+    """Windows where the muscles are actually doing something.
+
+    Scaled from the recording's own loud end rather than a fixed count, so it
+    does not assume how much of a session was spent at rest.
+    """
+    total = envelopes.sum(axis=0)
+    if not len(total):
+        return np.zeros(0, dtype=bool)
+    loud = np.percentile(total, 95)
+    return total >= ACTIVE_THRESHOLD_FRACTION * loud
+
+
 def report_correlation(envelopes, problems):
     print()
     print("=" * 66)
     print("2. Envelope correlation — the placement verdict")
     print("=" * 66)
-    matrix = np.corrcoef(envelopes)
+    active = active_windows(envelopes)
     count = len(envelopes)
-
+    if active.sum() < 10:
+        print("   Not enough active windows to judge; the recording looks")
+        print("   to be all rest. Repeat it with gestures in it.")
+        return None
+    matrix = np.corrcoef(envelopes[:, active])
+    resting_included = np.corrcoef(envelopes)
+    print(f"   Measured over {int(active.sum())} active windows of "
+          f"{envelopes.shape[1]}.")
+    print()
     print("      " + "".join(f"    ch{index}" for index in range(count)))
     for row in range(count):
         cells = "".join(f"  {matrix[row][column]:+.2f}" for column in range(count))
@@ -215,7 +244,11 @@ def report_correlation(envelopes, problems):
                 mark = "OK — usefully distinct"
             else:
                 mark = "marginal"
-            print(f"   ch{row} vs ch{column}: |r| = {value:.2f}   {mark}")
+            padded = abs(resting_included[row][column])
+            note = ""
+            if padded - value > 0.15:
+                note = f"   (with rest included it would read {padded:.2f})"
+            print(f"   ch{row} vs ch{column}: |r| = {value:.2f}   {mark}{note}")
 
     print()
     if problems:

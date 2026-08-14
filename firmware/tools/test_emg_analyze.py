@@ -14,6 +14,7 @@ import pytest
 
 from emg_analyze import (
     DISTINCT_BELOW,
+    active_windows,
     mains_fraction,
     WARMUP_SECONDS,
     REDUNDANT_ABOVE,
@@ -262,3 +263,65 @@ def test_mains_detection_finds_sixty_hertz_too():
     # Whichever region the recording came from, the gate has to catch it.
     assert mains_fraction(hum, RATE, 60.0) > 0.9
     assert mains_fraction(hum, RATE, 50.0) < 0.3
+
+
+def test_rest_inflates_correlation_between_distinct_channels(tmp_path):
+    """The mechanism behind a wrong verdict on real data.
+
+    Two channels that both respond to both gestures, in different
+    proportions, are distinguishable -- that ratio is the whole basis for
+    classifying one gesture against the other. But they also go quiet
+    together between gestures, and over a whole recording that shared on/off
+    swing dominates the correlation. On a real session it lifted one pair
+    from 0.04 to 0.71 and produced "redundant, move the bands" for a
+    placement whose gesture patterns were cleanly separated.
+
+    The assertion is on the size of the inflation rather than on either
+    value crossing a threshold, because the inflation is the mechanism; the
+    absolute numbers depend on how much of a session happens to be rest.
+    """
+    rng = np.random.default_rng(9)
+    samples = RATE * 16
+    times = np.arange(samples) / RATE
+    centres = (2, 5, 8, 11, 14)
+
+    def shaped(gains):
+        signal = np.full(samples, 0.02)
+        for centre, gain in zip(centres, gains):
+            signal += gain * np.exp(-((times - centre) ** 2) / (2 * 0.6 ** 2))
+        return synthetic_channel(signal, rng)
+
+    # Alternating emphasis: both channels fire on every burst, but the
+    # stronger one swaps. That is what fist and open actually look like.
+    strong_first = shaped((1.0, 0.6, 1.0, 0.6, 1.0))
+    even_mix = shaped((0.8, 0.8, 0.8, 0.8, 0.8))
+    strong_second = shaped((0.6, 1.0, 0.6, 1.0, 0.6))
+
+    envelopes = envelopes_of(write_session(tmp_path / "s.bin",
+                                           [strong_first, even_mix, strong_second]))
+    active = active_windows(envelopes)
+
+    with_rest = abs(np.corrcoef(envelopes)[0][2])
+    without_rest = abs(np.corrcoef(envelopes[:, active])[0][2])
+
+    assert with_rest - without_rest > 0.3
+    assert without_rest < DISTINCT_BELOW
+    # The selection has to actually exclude something, or it proves nothing.
+    assert 0 < active.sum() < envelopes.shape[1]
+
+
+def test_active_selection_scales_with_the_recording(tmp_path):
+    # Threshold is a fraction of the recording's own loud end, so a session
+    # recorded at half the amplitude selects the same windows rather than
+    # none of them.
+    rng = np.random.default_rng(9)
+    samples = RATE * SECONDS
+    loud = synthetic_channel(envelope([2, 5], samples), rng, gain=800.0)
+    soft = synthetic_channel(envelope([2, 5], samples), rng, gain=80.0)
+
+    loud_active = active_windows(envelopes_of(
+        write_session(tmp_path / "loud.bin", [loud] * CHANNELS)))
+    soft_active = active_windows(envelopes_of(
+        write_session(tmp_path / "soft.bin", [soft] * CHANNELS)))
+
+    assert abs(int(loud_active.sum()) - int(soft_active.sum())) < 10
