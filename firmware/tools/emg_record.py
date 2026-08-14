@@ -15,8 +15,10 @@ wall-clock and device-timestamp estimates of the sample rate. Replay re-parses
 an existing log and prints the same summary, which is also how this tool is
 tested without hardware attached.
 
-Known gap: RAW packets carry no electrode-wear state, so a recording cannot
-yet mark which spans had a detached electrode. See the note in README.
+RAW packets carry the per-channel wear mask alongside their samples, so the
+summary can report how many frames were recorded with every electrode in
+contact. Only those frames are training data — a detached electrode floats
+rather than reading dead, so it looks like signal.
 """
 
 import argparse
@@ -27,6 +29,7 @@ import sys
 import time
 
 from emg_protocol import (
+    RAW_HEADER_SIZE,
     TYPE_INFO,
     TYPE_INTENT,
     TYPE_RAW,
@@ -55,6 +58,8 @@ class Recording:
         self.first_raw_timestamp_us = None
         self.last_raw_timestamp_us = None
         self._last_raw_frames = 0
+        self.frames_all_attached = 0
+        self.frames_detached = {}
 
     def feed(self, chunk):
         """Add bytes and fold every valid packet into the running summary."""
@@ -82,9 +87,26 @@ class Recording:
         self.last_raw_timestamp_us = packet.timestamp_us
         if self.info is None or self.info.channel_count <= 0:
             return
-        frames = len(packet.payload) // (2 * self.info.channel_count)
+        channels = self.info.channel_count
+        body = len(packet.payload) - RAW_HEADER_SIZE
+        if body < 0:
+            self._parser.stats._note("raw_payload")
+            return
+        frames = body // (2 * channels)
         self.raw_frames += frames
         self._last_raw_frames = frames
+
+        # Wear state travels with the samples, so it can be attributed to
+        # exactly these frames rather than to a nearby timestamp.
+        wear_mask = packet.payload[0] if packet.payload else 0
+        expected = (1 << channels) - 1
+        if wear_mask & expected == expected:
+            self.frames_all_attached += frames
+        for channel in range(channels):
+            if not wear_mask & (1 << channel):
+                self.frames_detached[channel] = (
+                    self.frames_detached.get(channel, 0) + frames
+                )
 
     def device_sample_rate_hz(self):
         """Sample rate from the firmware's own timestamps, if derivable.
@@ -140,6 +162,18 @@ class Recording:
             }
         if self.raw_frames:
             summary["frames"] = self.raw_frames
+            # Frames recorded with every electrode in contact. Anything else
+            # is not training data: a detached electrode floats rather than
+            # reading dead, so it looks like signal.
+            summary["frames_all_attached"] = self.frames_all_attached
+            summary["usable_fraction"] = round(
+                self.frames_all_attached / self.raw_frames, 4
+            )
+            if self.frames_detached:
+                summary["frames_detached_by_channel"] = {
+                    str(channel): count
+                    for channel, count in sorted(self.frames_detached.items())
+                }
             if elapsed_sec:
                 summary["sample_rate_hz_wall"] = round(self.raw_frames / elapsed_sec, 1)
         device_rate = self.device_sample_rate_hz()
@@ -190,9 +224,14 @@ def write_sidecar(out_path, summary):
 def print_summary(summary):
     print("=" * 58)
     for key in ("elapsed_sec", "bytes", "byte_rate", "frames",
+                "frames_all_attached", "usable_fraction",
                 "sample_rate_hz_wall", "sample_rate_hz_device"):
         if key in summary:
             print(f"  {key:24} {summary[key]}")
+    if "frames_detached_by_channel" in summary:
+        print("  frames_detached_by_channel")
+        for channel, count in summary["frames_detached_by_channel"].items():
+            print(f"    channel {channel:14} {count}")
     if "info" in summary:
         print("  info")
         for key, value in sorted(summary["info"].items()):

@@ -17,6 +17,8 @@ PROTOCOL_VERSION = 1
 HEADER_SIZE = 12
 CRC_SIZE = 2
 MAX_PAYLOAD = 512
+# RAW payloads open with a wear bitmask and one reserved byte.
+RAW_HEADER_SIZE = 2
 MAX_PACKET = HEADER_SIZE + MAX_PAYLOAD + CRC_SIZE
 
 TYPE_INFO = 0x00
@@ -105,20 +107,41 @@ def decode_intent(payload):
     return Intent(command, confidence, quality, direction, activation)
 
 
+@dataclass(frozen=True)
+class RawBlock:
+    """One RAW packet's samples plus the wear state they were taken under."""
+
+    wear_mask: int
+    frames: list
+
+    def channel_attached(self, channel):
+        return bool(self.wear_mask & (1 << channel))
+
+    @property
+    def all_attached(self):
+        return all(self.channel_attached(index)
+                   for index in range(len(self.frames[0]) if self.frames else 0))
+
+
 def decode_raw(payload, channel_count):
-    """Return a list of frames, each a tuple of one sample per channel."""
+    """Split a RAW payload into its wear mask and per-channel frames."""
     if channel_count <= 0:
         raise ValueError("channel_count must be positive")
-    if len(payload) % (2 * channel_count):
+    if len(payload) < RAW_HEADER_SIZE:
+        raise ValueError(f"RAW payload must be at least {RAW_HEADER_SIZE} bytes")
+    wear_mask = payload[0]
+    body = payload[RAW_HEADER_SIZE:]
+    if len(body) % (2 * channel_count):
         raise ValueError(
-            f"RAW payload {len(payload)} B is not whole frames of "
+            f"RAW sample area {len(body)} B is not whole frames of "
             f"{channel_count} channels"
         )
-    values = struct.unpack(f"<{len(payload) // 2}H", payload)
-    return [
+    values = struct.unpack(f"<{len(body) // 2}H", body)
+    frames = [
         tuple(values[start:start + channel_count])
         for start in range(0, len(values), channel_count)
     ]
+    return RawBlock(wear_mask=wear_mask, frames=frames)
 
 
 class PacketParser:

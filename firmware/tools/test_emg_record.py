@@ -30,9 +30,13 @@ def info_packet(sequence=0, timestamp_us=0):
     return build(TYPE_INFO, sequence, timestamp_us, payload)
 
 
-def raw_packet(sequence, timestamp_us, value=2048):
-    samples = [value] * (FRAMES_PER_PACKET * CHANNELS)
-    payload = struct.pack(f"<{len(samples)}H", *samples)
+ALL_ATTACHED = (1 << CHANNELS) - 1
+
+
+def raw_packet(sequence, timestamp_us, value=2048, wear=ALL_ATTACHED,
+               frames=FRAMES_PER_PACKET):
+    samples = [value] * (frames * CHANNELS)
+    payload = bytes([wear, 0]) + struct.pack(f"<{len(samples)}H", *samples)
     return build(TYPE_RAW, sequence, timestamp_us, payload)
 
 
@@ -111,8 +115,7 @@ def test_device_rate_counts_real_frames_not_the_declared_batch_size():
     for index in range(3):
         stream += raw_packet(index, index * PACKET_PERIOD_US)
     # A fourth packet holding a single frame instead of 32.
-    short = struct.pack(f"<{CHANNELS}H", *([2048] * CHANNELS))
-    stream += build(TYPE_RAW, 3, 3 * PACKET_PERIOD_US, short)
+    stream += raw_packet(3, 3 * PACKET_PERIOD_US, frames=1)
 
     recording.feed(bytes(stream))
 
@@ -199,3 +202,32 @@ def test_sidecar_is_written_next_to_the_log(tmp_path):
 
     assert sidecar.name == "session.json"
     assert json.loads(sidecar.read_text()) == summary
+
+
+def test_counts_only_frames_with_every_electrode_attached():
+    recording = Recording()
+    stream = bytearray(info_packet())
+    stream += raw_packet(0, 0)
+    stream += raw_packet(1, PACKET_PERIOD_US, wear=0b101)   # channel 1 off
+    stream += raw_packet(2, 2 * PACKET_PERIOD_US)
+
+    recording.feed(bytes(stream))
+    summary = recording.summary(1.0)
+
+    assert summary["frames"] == 3 * FRAMES_PER_PACKET
+    assert summary["frames_all_attached"] == 2 * FRAMES_PER_PACKET
+    assert summary["usable_fraction"] == pytest.approx(2 / 3, abs=1e-4)
+    # Only channel 1 lost contact, and only for that packet's frames.
+    assert summary["frames_detached_by_channel"] == {"1": FRAMES_PER_PACKET}
+
+
+def test_a_fully_detached_recording_reports_nothing_usable():
+    recording = Recording()
+    stream = info_packet() + raw_packet(0, 0, wear=0b000)
+
+    recording.feed(stream)
+    summary = recording.summary(1.0)
+
+    assert summary["frames_all_attached"] == 0
+    assert summary["usable_fraction"] == 0.0
+    assert set(summary["frames_detached_by_channel"]) == {"0", "1", "2"}

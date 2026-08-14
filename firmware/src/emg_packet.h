@@ -26,6 +26,11 @@
 #define EMG_INFO_PAYLOAD_SIZE 8u
 #define EMG_INTENT_PAYLOAD_SIZE 8u
 
+/* RAW payloads open with a wear bitmask and one reserved byte, so the samples
+ * that follow stay 2-byte aligned. */
+#define EMG_RAW_HEADER_SIZE 2u
+#define EMG_RAW_MAX_SAMPLES ((EMG_MAX_PAYLOAD - EMG_RAW_HEADER_SIZE) / 2u)
+
 typedef enum {
     EMG_TYPE_INFO = 0x00,
     EMG_TYPE_RAW = 0x01,
@@ -70,10 +75,15 @@ size_t emg_encode_info(uint8_t *out, size_t out_size, uint16_t sequence,
 
 /* sample_count is frames * channels, channel 0 first within each frame.
  * Values are raw ADC counts and are transmitted unmodified: the protocol
- * contract is that RAW carries no DC removal, filtering, or gating. */
+ * contract is that RAW carries no DC removal, filtering, or gating.
+ *
+ * wear_mask carries the per-channel electrode-contact lines, bit N for
+ * channel N. It travels with the samples it describes rather than in a
+ * separate packet so a dropped packet can never misalign the two. A cleared
+ * bit means no contact, which is also what an unplugged column reads. */
 size_t emg_encode_raw(uint8_t *out, size_t out_size, uint16_t sequence,
-                      uint32_t timestamp_us, const uint16_t *samples,
-                      uint16_t sample_count);
+                      uint32_t timestamp_us, uint8_t wear_mask,
+                      const uint16_t *samples, uint16_t sample_count);
 
 size_t emg_encode_intent(uint8_t *out, size_t out_size, uint16_t sequence,
                          uint32_t timestamp_us, const emg_intent_t *intent);

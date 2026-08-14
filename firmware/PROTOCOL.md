@@ -72,18 +72,33 @@ Payload length 8.
 
 Batched raw ADC counts. This is the dataset and debugging path.
 
-Payload is `frames_per_raw_packet` frames, each `channel_count` values of
-`uint16`, channel 0 first. Values are **unfiltered ADC counts, 0 to 4095**,
-with no DC removal and no gating — that is the entire reason for replacing the
-factory firmware, so a future firmware revision must not quietly start
-processing them here.
+| Offset | Size | Field | Notes |
+| ---: | ---: | --- | --- |
+| 0 | 1 | `wear_mask` | bit *N* set means channel *N*'s electrode is in contact |
+| 1 | 1 | `reserved` | write `0`; present so the samples stay 2-byte aligned |
+| 2 | rest | `samples` | `frames_per_raw_packet` frames of `channel_count` `uint16` values, channel 0 first |
+
+Values are **unfiltered ADC counts, 0 to 4095**, with no DC removal and no
+gating — that is the entire reason for replacing the factory firmware, so a
+future firmware revision must not quietly start processing them here.
+
+`wear_mask` reports the board's per-channel wear-detect lines (`PA8`, `PA2`,
+`PA3` for columns A0–A2). It rides in the same packet as the samples it
+describes, so the two can never be misaligned by a lost packet — which is why
+this is a payload field rather than a separate packet type or a
+timestamp-correlated `INTENT` field. Bits above `channel_count - 1` are zero.
+
+A cleared bit means "not in contact", and an unplugged column reads cleared
+because those pins are pulled down. That is deliberate: a detached electrode
+floats and produces plausible-looking signal, so a recording that cannot mark
+those spans would train a classifier on noise labelled as gesture.
 
 `timestamp_us` is the capture time of the **first frame** in the packet.
 Subsequent frames are at `1e6 / sample_rate_hz` microsecond spacing.
 
-At 3 channels, 2000 Hz and 32 frames per packet: payload 192 B, packet 206 B,
-62.5 packets/s, **12.9 kB/s**, 6.8% framing overhead. One frame per packet
-would instead cost 233% overhead, which is why the batch exists.
+At 3 channels, 2000 Hz and 32 frames per packet: payload 194 B, packet 208 B,
+62.5 packets/s, **13.0 kB/s**, 7.7% framing overhead. One frame per packet
+would instead cost over 200% overhead, which is why the batch exists.
 
 ### `0x02` INTENT
 
@@ -132,26 +147,20 @@ unbounded desync.
 magic narrows the search, and CRC plus the length bound are what actually
 validate a candidate packet.
 
-## Known gap: RAW carries no electrode-wear state
+## Amendment history
 
-Found while writing the recorder. `INTENT` has a `signal_quality` byte, but
-`RAW` has nothing, so a recorded dataset cannot mark which spans had a
-detached electrode — and a detached electrode produces a plausible-looking
-floating signal, not an obviously dead one. Training on it would be training
-on noise labelled as gesture.
+The version byte stays at 1 because nothing has been recorded or transmitted
+by real firmware yet. Once a dataset exists, any change here needs a version
+bump instead.
 
-The board does provide the information: each sensor column has a wear-detect
-line (`PA8`, `PA2`, `PA3` for columns A0–A2). Three candidate fixes, none
-chosen yet:
-
-1. Prepend a wear bitmask byte to the RAW payload. Cheapest, but changes the
-   payload from pure samples, which the current spec is deliberate about.
-2. Emit `INTENT` alongside `RAW` and correlate by timestamp. No format
-   change, but `signal_quality` is one byte for all channels, not per channel.
-3. Add a fourth packet type carrying per-channel wear at a low rate.
-
-Decide before recording any dataset that will be used for training. Recording
-first and adding the field later means the early sessions are unusable.
+- **2026-08-13** — added `wear_mask` and `reserved` to the `RAW` payload.
+  Originally `RAW` carried only samples and the wear state had no home, which
+  would have made recorded spans with a detached electrode indistinguishable
+  from real signal. Putting the mask in the same packet as the samples was
+  chosen over a timestamp-correlated `INTENT` field (loses alignment when a
+  packet is dropped, and `signal_quality` is one byte for all channels) and
+  over a fourth packet type (splits one fact across two packets that can
+  desynchronize).
 
 ## What this does not do
 

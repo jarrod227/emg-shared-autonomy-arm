@@ -97,17 +97,18 @@ size_t emg_encode_info(uint8_t *out, size_t out_size, uint16_t sequence,
 }
 
 size_t emg_encode_raw(uint8_t *out, size_t out_size, uint16_t sequence,
-                      uint32_t timestamp_us, const uint16_t *samples,
-                      uint16_t sample_count)
+                      uint32_t timestamp_us, uint8_t wear_mask,
+                      const uint16_t *samples, uint16_t sample_count)
 {
     if (out == NULL || samples == NULL) {
         return 0u;
     }
-    if ((size_t)sample_count * 2u > EMG_MAX_PAYLOAD) {
+    if (sample_count > EMG_RAW_MAX_SAMPLES) {
         return 0u;
     }
 
-    const uint16_t payload_length = (uint16_t)(sample_count * 2u);
+    const uint16_t payload_length =
+        (uint16_t)(EMG_RAW_HEADER_SIZE + (size_t)sample_count * 2u);
     const size_t total = EMG_HEADER_SIZE + (size_t)payload_length + EMG_CRC_SIZE;
     if (out_size < total) {
         return 0u;
@@ -122,8 +123,12 @@ size_t emg_encode_raw(uint8_t *out, size_t out_size, uint16_t sequence,
     put_u16(&out[4], payload_length);
     put_u16(&out[6], sequence);
     put_u32(&out[8], timestamp_us);
+    out[EMG_HEADER_SIZE] = wear_mask;
+    out[EMG_HEADER_SIZE + 1u] = 0u;
     for (uint16_t index = 0; index < sample_count; index++) {
-        put_u16(&out[EMG_HEADER_SIZE + (size_t)index * 2u], samples[index]);
+        put_u16(&out[EMG_HEADER_SIZE + EMG_RAW_HEADER_SIZE
+                     + (size_t)index * 2u],
+                samples[index]);
     }
     const uint16_t crc = emg_crc16(&out[2],
                                    (EMG_HEADER_SIZE - 2u) + (size_t)payload_length);

@@ -82,9 +82,12 @@ static void test_rejects_oversized_and_short_buffers(void)
                      EMG_TYPE_INTENT, 0u, 0u, payload, 3u) == 0u);
     CHECK(emg_encode(NULL, sizeof(out), EMG_TYPE_INTENT, 0u, 0u, payload, 3u) == 0u);
     CHECK(emg_encode(out, sizeof(out), EMG_TYPE_INTENT, 0u, 0u, NULL, 3u) == 0u);
-    /* 257 samples is 514 payload bytes, just over the cap. */
-    CHECK(emg_encode_raw(out, sizeof(out), 0u, 0u, samples, 257u) == 0u);
-    CHECK(emg_encode_raw(out, sizeof(out), 0u, 0u, NULL, 4u) == 0u);
+    /* The 2-byte RAW header leaves room for 255 samples, so 256 must fail. */
+    CHECK(emg_encode_raw(out, sizeof(out), 0u, 0u, 0x07u, samples,
+                         EMG_RAW_MAX_SAMPLES) != 0u);
+    CHECK(emg_encode_raw(out, sizeof(out), 0u, 0u, 0x07u, samples,
+                         EMG_RAW_MAX_SAMPLES + 1u) == 0u);
+    CHECK(emg_encode_raw(out, sizeof(out), 0u, 0u, 0x07u, NULL, 4u) == 0u);
 }
 
 static void test_empty_payload_is_legal(void)
@@ -101,13 +104,30 @@ static void test_raw_samples_are_little_endian_and_unmodified(void)
 {
     uint8_t out[EMG_MAX_PACKET];
     const uint16_t samples[4] = {0u, 1u, 2048u, 4095u};
-    const size_t written = emg_encode_raw(out, sizeof(out), 5u, 100u, samples, 4u);
+    const size_t written =
+        emg_encode_raw(out, sizeof(out), 5u, 100u, 0x05u, samples, 4u);
 
-    CHECK(written == EMG_HEADER_SIZE + 8u + EMG_CRC_SIZE);
-    CHECK(read_u16(&out[4]) == 8u);
+    CHECK(written == EMG_HEADER_SIZE + EMG_RAW_HEADER_SIZE + 8u + EMG_CRC_SIZE);
+    CHECK(read_u16(&out[4]) == EMG_RAW_HEADER_SIZE + 8u);
+    CHECK(out[EMG_HEADER_SIZE] == 0x05u);
+    CHECK(out[EMG_HEADER_SIZE + 1] == 0u);
     for (int index = 0; index < 4; index++) {
-        CHECK(read_u16(&out[EMG_HEADER_SIZE + index * 2]) == samples[index]);
+        CHECK(read_u16(&out[EMG_HEADER_SIZE + EMG_RAW_HEADER_SIZE + index * 2])
+              == samples[index]);
     }
+}
+
+static void test_wear_mask_travels_with_its_samples(void)
+{
+    uint8_t out[EMG_MAX_PACKET];
+    const uint16_t samples[3] = {100u, 200u, 300u};
+
+    /* Only channels 0 and 2 in contact: the middle electrode is off. A
+     * recording has to be able to say that about the very frames it holds. */
+    CHECK(emg_encode_raw(out, sizeof(out), 0u, 0u, 0x05u, samples, 3u) != 0u);
+    CHECK(out[EMG_HEADER_SIZE] == 0x05u);
+    CHECK(emg_encode_raw(out, sizeof(out), 0u, 0u, 0x00u, samples, 3u) != 0u);
+    CHECK(out[EMG_HEADER_SIZE] == 0x00u);
 }
 
 static void test_info_and_intent_fields_round_trip(void)
@@ -149,10 +169,14 @@ static int emit_fixture(const char *path)
     }
     fwrite(junk, 1, sizeof(junk), file);
     fwrite(out, 1, emg_encode_info(out, sizeof(out), 0u, 1000u, &info), file);
-    fwrite(out, 1, emg_encode_raw(out, sizeof(out), 0u, 2000u, samples, 6u), file);
-    fwrite(out, 1, emg_encode_raw(out, sizeof(out), 1u, 18000u, samples, 6u), file);
-    /* Jumps 2 -> one RAW packet lost. */
-    fwrite(out, 1, emg_encode_raw(out, sizeof(out), 3u, 34000u, samples, 6u), file);
+    fwrite(out, 1,
+           emg_encode_raw(out, sizeof(out), 0u, 2000u, 0x07u, samples, 6u), file);
+    fwrite(out, 1,
+           emg_encode_raw(out, sizeof(out), 1u, 18000u, 0x07u, samples, 6u), file);
+    /* Jumps 2 -> one RAW packet lost. Also drops channel 1's electrode, so
+     * the decoder side has a non-trivial mask to read back. */
+    fwrite(out, 1,
+           emg_encode_raw(out, sizeof(out), 3u, 34000u, 0x05u, samples, 6u), file);
     fwrite(out, 1, emg_encode_intent(out, sizeof(out), 0u, 5000u, &intent), file);
     /* Repeats sequence 0 -> one INTENT duplicate. */
     fwrite(out, 1, emg_encode_intent(out, sizeof(out), 0u, 5000u, &intent), file);
@@ -173,6 +197,7 @@ int main(int argc, char **argv)
     test_rejects_oversized_and_short_buffers();
     test_empty_payload_is_legal();
     test_raw_samples_are_little_endian_and_unmodified();
+    test_wear_mask_travels_with_its_samples();
     test_info_and_intent_fields_round_trip();
 
     if (failures == 0) {

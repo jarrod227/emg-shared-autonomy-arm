@@ -200,8 +200,11 @@ def test_payload_decoders():
     assert intent.command_name == "CONFIRM"
     assert (intent.direction, intent.activation) == (-1, 40000)
 
-    frames = decode_raw(struct.pack("<6H", 0, 1, 2048, 4095, 1234, 777), 3)
-    assert frames == [(0, 1, 2048), (4095, 1234, 777)]
+    block = decode_raw(b"\x05\x00" + struct.pack("<6H", 0, 1, 2048, 4095, 1234, 777), 3)
+    assert block.frames == [(0, 1, 2048), (4095, 1234, 777)]
+    assert block.wear_mask == 0x05
+    assert block.channel_attached(0) and not block.channel_attached(1)
+    assert not block.all_attached
 
 
 @pytest.mark.parametrize(
@@ -214,7 +217,12 @@ def test_payload_decoders_reject_wrong_sizes(decoder, payload):
 
 def test_raw_decoder_rejects_a_partial_frame():
     with pytest.raises(ValueError):
-        decode_raw(b"\x00" * 10, 3)
+        decode_raw(b"\x00" * 12, 3)
+
+
+def test_raw_decoder_rejects_a_payload_too_short_for_its_header():
+    with pytest.raises(ValueError):
+        decode_raw(b"\x07", 3)
 
 
 def test_decodes_the_fixture_produced_by_the_c_encoder():
@@ -237,9 +245,11 @@ def test_decodes_the_fixture_produced_by_the_c_encoder():
     assert info == type(info)(0x0102, 2000, 3, 12, 32)
     assert packets[0].timestamp_us == 1000
 
-    assert decode_raw(packets[1].payload, info.channel_count) == [
-        (0, 1, 2048), (4095, 1234, 777)
-    ]
+    first = decode_raw(packets[1].payload, info.channel_count)
+    assert first.frames == [(0, 1, 2048), (4095, 1234, 777)]
+    assert first.all_attached
+    # The fixture drops channel 1 on the third RAW packet.
+    assert decode_raw(packets[3].payload, info.channel_count).wear_mask == 0x05
 
     intent = decode_intent(packets[4].payload)
     assert intent.command_name == "CONFIRM"
