@@ -29,10 +29,21 @@ static int failures = 0;
  * (29 -> threshold 145) is written against these, and a case that silently
  * re-derived its own expected values whenever the frozen pair moved would
  * stop testing the mechanism. test_frozen_constants_match_the_independent_session
- * covers the frozen values themselves. */
+ * covers the frozen values themselves. Floor 1 makes the relative rule the
+ * only judge, so every pre-floor expectation still holds verbatim; the
+ * floor's own behaviour is pinned by the init_floored cases. */
 static void init_fixed(emg_activation_t *activation)
 {
-    CHECK(emg_activation_init(activation, 5u, 4u));
+    CHECK(emg_activation_init(activation, 5u, 4u, 1));
+}
+
+/* Floor cases pin the measured 2026-08-15 donning: rest drifting 6-43,
+ * preparation 73, weakest deliberate gesture 145, floor 110. Literal on
+ * purpose, like init_fixed; test_interim_floor_matches_the_measured_donnings
+ * ties the literal to the shipped constant. */
+static void init_floored(emg_activation_t *activation)
+{
+    CHECK(emg_activation_init(activation, 5u, 4u, 110));
 }
 
 static emg_command_t judge(emg_activation_t *activation,
@@ -45,12 +56,20 @@ static void test_init_rejects_configs_that_disable_protection(void)
 {
     emg_activation_t activation;
 
-    CHECK(!emg_activation_init(NULL, 5u, 4u));
-    CHECK(!emg_activation_init(&activation, 0u, 4u));
-    CHECK(!emg_activation_init(&activation, 5u, 0u));
-    CHECK(!emg_activation_init(&activation, 5u, 9u));
-    CHECK(emg_activation_init(&activation, 5u, 8u));
-    CHECK(emg_activation_init(&activation, 1u, 1u));
+    CHECK(!emg_activation_init(NULL, 5u, 4u, 110));
+    CHECK(!emg_activation_init(&activation, 0u, 4u, 110));
+    CHECK(!emg_activation_init(&activation, 5u, 0u, 110));
+    CHECK(!emg_activation_init(&activation, 5u, 9u, 110));
+    /* Floor 0 removes the collapse and cold-start protection; at or above
+     * the clamp limit nothing could ever pass. */
+    CHECK(!emg_activation_init(&activation, 5u, 4u, 0));
+    CHECK(!emg_activation_init(&activation, 5u, 4u, -110));
+    CHECK(!emg_activation_init(&activation, 5u, 4u,
+                               EMG_ACTIVATION_TOTAL_LIMIT));
+    CHECK(emg_activation_init(&activation, 5u, 4u,
+                              EMG_ACTIVATION_TOTAL_LIMIT - 1));
+    CHECK(emg_activation_init(&activation, 5u, 8u, 110));
+    CHECK(emg_activation_init(&activation, 1u, 1u, 1));
 }
 
 static void test_everything_passes_until_rest_seeds_the_baseline(void)
@@ -98,6 +117,61 @@ static void test_threshold_scales_with_the_measured_baseline(void)
           == EMG_COMMAND_REST);
     CHECK(judge(&activation, EMG_COMMAND_NEXT_TARGET, 300)
           == EMG_COMMAND_NEXT_TARGET);
+}
+
+static void test_floor_suppresses_cold_start_movement_below_it(void)
+{
+    emg_activation_t activation;
+    init_floored(&activation);
+
+    /* Before any rest is seen the floor is the only judge. The old pure
+     * fail-open passed a 73-count preparation here; the boundary is
+     * at-the-floor passes, strictly-below suppresses. */
+    CHECK(judge(&activation, EMG_COMMAND_NEXT_TARGET, 73)
+          == EMG_COMMAND_REST);
+    CHECK(judge(&activation, EMG_COMMAND_ABORT, 109) == EMG_COMMAND_REST);
+    CHECK(judge(&activation, EMG_COMMAND_ABORT, 110) == EMG_COMMAND_ABORT);
+    CHECK(emg_activation_baseline(&activation) == 0);
+}
+
+static void test_floor_holds_when_good_contact_collapses_the_baseline(void)
+{
+    emg_activation_t activation;
+    init_floored(&activation);
+
+    /* The measured failure: a re-gelled electrode rested at 6, so the
+     * relative threshold fell to 5 x 6 = 30 and the 73-count preparation
+     * sailed through it. The floor is what still stands in the way, and
+     * the weakest measured gesture must still clear both rules. */
+    CHECK(judge(&activation, EMG_COMMAND_REST, 6) == EMG_COMMAND_REST);
+    CHECK(emg_activation_baseline(&activation) == 6);
+    CHECK(judge(&activation, EMG_COMMAND_NEXT_TARGET, 73)
+          == EMG_COMMAND_REST);
+    CHECK(judge(&activation, EMG_COMMAND_ABORT, 145) == EMG_COMMAND_ABORT);
+}
+
+static void test_relative_rule_still_governs_above_the_floor(void)
+{
+    emg_activation_t activation;
+    init_floored(&activation);
+
+    /* A noisy donning: rest 60 puts the relative threshold at 300, far
+     * above the floor. Clearing the floor alone must not be enough. */
+    CHECK(judge(&activation, EMG_COMMAND_REST, 60) == EMG_COMMAND_REST);
+    CHECK(judge(&activation, EMG_COMMAND_CONFIRM, 200) == EMG_COMMAND_REST);
+    CHECK(judge(&activation, EMG_COMMAND_CONFIRM, 300)
+          == EMG_COMMAND_CONFIRM);
+}
+
+static void test_floor_never_touches_rest_or_the_baseline(void)
+{
+    emg_activation_t activation;
+    init_floored(&activation);
+
+    /* Rest is usually below the floor by design; it must still seed and
+     * update the baseline, and still come out as REST. */
+    CHECK(judge(&activation, EMG_COMMAND_REST, 5) == EMG_COMMAND_REST);
+    CHECK(emg_activation_baseline(&activation) == 5);
 }
 
 static void test_suppressed_windows_never_feed_the_baseline(void)
@@ -208,12 +282,36 @@ static void test_frozen_constants_match_the_independent_session(void)
      * 79, and a fist reaching 736. */
     emg_activation_t activation;
     CHECK(emg_activation_init(&activation, EMG_ACTIVATION_FACTOR,
-                              EMG_ACTIVATION_BASELINE_SHIFT));
+                              EMG_ACTIVATION_BASELINE_SHIFT,
+                              EMG_ACTIVATION_THRESHOLD_FLOOR));
     CHECK(judge(&activation, EMG_COMMAND_REST, 35) == EMG_COMMAND_REST);
     CHECK(judge(&activation, EMG_COMMAND_NEXT_TARGET, 79)
           == EMG_COMMAND_REST);
     CHECK(judge(&activation, EMG_COMMAND_CONFIRM, 736)
           == EMG_COMMAND_CONFIRM);
+}
+
+static void test_interim_floor_matches_the_measured_donnings(void)
+{
+    /* Interim, not frozen: 110 is measured from two donnings (2026-08-15)
+     * and has no independent acceptance session yet. It sits 31 counts
+     * above the loudest measured preparation (79) and 35 below the weakest
+     * measured gesture (145). This assertion makes a change deliberate. */
+    CHECK(EMG_ACTIVATION_THRESHOLD_FLOOR == 110);
+
+    /* The shipped triple against both measured donnings. Yesterday's:
+     * rest 35, preparation 79, fist 736 — the floor lifts the effective
+     * threshold from 105 to 110 and changes no decision that mattered.
+     * Today's: rest 6, preparation 73, weakest gesture 145 — the relative
+     * threshold alone would be 18. */
+    emg_activation_t activation;
+    CHECK(emg_activation_init(&activation, EMG_ACTIVATION_FACTOR,
+                              EMG_ACTIVATION_BASELINE_SHIFT,
+                              EMG_ACTIVATION_THRESHOLD_FLOOR));
+    CHECK(judge(&activation, EMG_COMMAND_REST, 6) == EMG_COMMAND_REST);
+    CHECK(judge(&activation, EMG_COMMAND_NEXT_TARGET, 73)
+          == EMG_COMMAND_REST);
+    CHECK(judge(&activation, EMG_COMMAND_ABORT, 145) == EMG_COMMAND_ABORT);
 }
 
 /* One entry per 50 ms hop, shaped like the measured recordings rather than
@@ -244,8 +342,12 @@ static size_t build_fixture_sequence(uint8_t *predictions, uint8_t *valid,
         }                                                                    \
     } while (0)
 
-    /* A gesture already under way at power-on: passes through unjudged. */
-    REPEAT(6, EMG_COMMAND_NEXT_TARGET, 1, 60);
+    /* A loud gesture already under way at power-on: clears the floor and
+     * passes through unjudged by the relative rule. */
+    REPEAT(6, EMG_COMMAND_NEXT_TARGET, 1, 300);
+    /* Cold-start movement below the floor: suppressed before any rest has
+     * been observed — the gap the pure fail-open used to leave open. */
+    REPEAT(4, EMG_COMMAND_NEXT_TARGET, 1, 60);
     /* First rest seeds the baseline near the measured resting 29. */
     REPEAT(10, EMG_COMMAND_REST, 1, 29);
     /* The measured defect: a preparatory ramp around 2x rest, then the
@@ -318,7 +420,8 @@ static int emit_golden(const char *path)
     int passed = 0;
 
     if (!emg_activation_init(&activation, EMG_ACTIVATION_FACTOR,
-                             EMG_ACTIVATION_BASELINE_SHIFT)) {
+                             EMG_ACTIVATION_BASELINE_SHIFT,
+                             EMG_ACTIVATION_THRESHOLD_FLOOR)) {
         printf("  FAIL could not init activation\n");
         return 1;
     }
@@ -358,6 +461,8 @@ static int emit_golden(const char *path)
     };
     fwrite(header, sizeof(header[0]), sizeof(header) / sizeof(header[0]),
            file);
+    const int32_t floor_value = EMG_ACTIVATION_THRESHOLD_FLOOR;
+    fwrite(&floor_value, sizeof(floor_value), 1, file);
     fwrite(predictions, sizeof(predictions[0]), (size_t)steps, file);
     fwrite(valid, sizeof(valid[0]), (size_t)steps, file);
     fwrite(totals, sizeof(totals[0]), (size_t)steps, file);
@@ -380,6 +485,10 @@ int main(int argc, char **argv)
     test_everything_passes_until_rest_seeds_the_baseline();
     test_low_activation_shapes_become_rest_after_seeding();
     test_threshold_scales_with_the_measured_baseline();
+    test_floor_suppresses_cold_start_movement_below_it();
+    test_floor_holds_when_good_contact_collapses_the_baseline();
+    test_relative_rule_still_governs_above_the_floor();
+    test_floor_never_touches_rest_or_the_baseline();
     test_suppressed_windows_never_feed_the_baseline();
     test_baseline_tracks_drift_without_a_deadband();
     test_rest_windows_update_the_baseline_even_when_loud();
@@ -387,6 +496,7 @@ int main(int argc, char **argv)
     test_abort_is_judged_like_every_other_class();
     test_corrupt_totals_cannot_poison_the_accumulator();
     test_frozen_constants_match_the_independent_session();
+    test_interim_floor_matches_the_measured_donnings();
     if (failures == 0) {
         printf("  all checks passed\n");
         return 0;

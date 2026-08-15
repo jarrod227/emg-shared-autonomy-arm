@@ -5,7 +5,7 @@
 #include <stddef.h>
 
 bool emg_activation_init(emg_activation_t *activation, uint16_t factor,
-                         uint16_t baseline_shift)
+                         uint16_t baseline_shift, int32_t threshold_floor)
 {
     if (activation == NULL) {
         return false;
@@ -16,7 +16,11 @@ bool emg_activation_init(emg_activation_t *activation, uint16_t factor,
     if (baseline_shift == 0u || baseline_shift > 8u) {
         return false;
     }
+    if (threshold_floor <= 0 || threshold_floor >= EMG_ACTIVATION_TOTAL_LIMIT) {
+        return false;
+    }
     activation->accumulator = 0;
+    activation->threshold_floor = threshold_floor;
     activation->factor = factor;
     activation->baseline_shift = baseline_shift;
     activation->has_baseline = false;
@@ -64,10 +68,19 @@ emg_command_t emg_activation_apply(emg_activation_t *activation,
         return EMG_COMMAND_REST;
     }
 
+    if (total_mav < activation->threshold_floor) {
+        /* The absolute floor judges before and after the baseline exists:
+         * the preparation/gesture band it separates is set by physiology,
+         * not by the contact noise the baseline measures, so it needs no
+         * rest observation to apply. This is also what closes the
+         * cold-start gap the pure fail-open left. */
+        return EMG_COMMAND_REST;
+    }
+
     if (!activation->has_baseline) {
-        /* No rest observed yet: nothing to judge against. Fail open so a
-         * cold-start ABORT stays reachable; ordinary events cannot fire
-         * before the gate has seen rest anyway. */
+        /* No rest observed yet and the floor is cleared: fail open so a
+         * forceful cold-start ABORT stays reachable; ordinary events
+         * cannot fire before the gate has seen rest anyway. */
         return prediction;
     }
     const int64_t threshold =

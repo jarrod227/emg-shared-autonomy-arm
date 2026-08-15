@@ -18,18 +18,23 @@
  * at the loud onset instead of at the quiet preparation, which is where the
  * classifier's onset confusion actually lives.
  *
- * The threshold is a multiple of a rest baseline, never an absolute count:
- * donning B ran at twice donning A's amplitude, so an absolute floor tuned
- * on one donning is useless or crippling on the next. The baseline is an
- * integer EMA over windows the classifier itself called REST. Suppressed
- * windows do not feed it, or a long sub-threshold movement would drag the
- * threshold up under the user.
+ * The threshold combines a relative rule with an absolute floor:
+ * max(factor x rest baseline, floor). Each rule covers the other's measured
+ * failure. An absolute count alone breaks across louder donnings (donning B
+ * rested at twice donning A); a rest multiple alone breaks when contact
+ * improves, because rest amplitude is a contact-noise figure while the
+ * preparation/gesture band is set by physiology and electrode placement —
+ * re-gelling one noisy electrode dropped rest five-fold and left that band
+ * nearly still. The baseline is an integer EMA over windows the classifier
+ * itself called REST. Suppressed windows do not feed it, or a long
+ * sub-threshold movement would drag the threshold up under the user.
  *
  * Deliberate choices, written down because each one is arguable:
- *  - Until the first classified-REST window seeds the baseline, everything
- *    passes through unjudged. Fail-open on purpose: it keeps a cold-start
- *    ABORT reachable, and ordinary events cannot fire before the gate has
- *    observed rest anyway.
+ *  - Until the first classified-REST window seeds the baseline, only the
+ *    floor judges. Fail-open above it on purpose: a forceful cold-start
+ *    ABORT stays reachable and ordinary events cannot fire before the gate
+ *    has observed rest anyway, while sub-floor cold-start movement is
+ *    suppressed instead of passing unjudged as it originally did.
  *  - The threshold applies to every class, ABORT included. The measured
  *    ABORT trials ran 15-22x rest against a 5x threshold, so the margin is
  *    real; a user whose stop gesture is weaker than that needs the factor
@@ -90,23 +95,50 @@
 #define EMG_ACTIVATION_FACTOR 3u
 #define EMG_ACTIVATION_BASELINE_SHIFT 4u
 
+/* Interim absolute floor under the relative rule, measured 2026-08-15 and
+ * applied as threshold = max(factor x baseline, floor). Not frozen: two
+ * donnings of evidence and no independent acceptance session yet.
+ *
+ * Why the relative rule alone collapsed: re-gelling a noisy ch0 electrode
+ * dropped resting total MAV from 32 to a drifting 6-43, so 3 x baseline
+ * swung between 18 and 129. The band the threshold must land in barely
+ * moved: preparatory movement measured 73 (65-79 the day before) and the
+ * weakest deliberate gesture 145 (318 the day before). Rest 6 would need
+ * K = 18 while rest 43 allows at most K = 3 — no single factor spans a
+ * seven-fold noise drift across an almost-still gesture band.
+ *
+ * 110 sits 31 counts above the loudest measured preparation (79) and 35
+ * below the weakest measured gesture (145), and stays compatible with the
+ * frozen acceptance session: its suppressed episodes peaked at 90 and its
+ * gestures ran 318-736, so the floor changes no decision that mattered
+ * there. It also closes the cold-start gap — sub-floor movement before the
+ * first classified-REST window is now suppressed rather than passed.
+ *
+ * The real fix is the roadmapped per-donning calibration (rest plus
+ * comfortable effort), which replaces these constants with measured ones;
+ * this floor then remains the uncalibrated fail-safe default. */
+#define EMG_ACTIVATION_THRESHOLD_FLOOR 110
+
 /* Sums of three per-channel window MAVs are bounded by construction; the
  * clamp only defends the accumulator against a corrupt caller. */
 #define EMG_ACTIVATION_TOTAL_LIMIT (3 * 32767)
 
 typedef struct {
     int32_t accumulator; /* baseline << baseline_shift; EMA state */
+    int32_t threshold_floor;
     uint16_t factor;
     uint16_t baseline_shift;
     bool has_baseline;
 } emg_activation_t;
 
 /* Rejects factor 0, which would keep the code path alive while judging
- * nothing, and shifts outside 1..8 — 0 makes the baseline one window's
- * value, which a single transition window can spike, and above 8 the seed
- * shift could overflow the accumulator. */
+ * nothing; shifts outside 1..8 — 0 makes the baseline one window's value,
+ * which a single transition window can spike, and above 8 the seed shift
+ * could overflow the accumulator; and floors outside
+ * 1..EMG_ACTIVATION_TOTAL_LIMIT-1 — 0 removes the collapse and cold-start
+ * protection, and at or above the clamp limit nothing could ever pass. */
 bool emg_activation_init(emg_activation_t *activation, uint16_t factor,
-                         uint16_t baseline_shift);
+                         uint16_t baseline_shift, int32_t threshold_floor);
 
 /* Baseline in MAV counts; 0 until the first classified-REST window. */
 int32_t emg_activation_baseline(const emg_activation_t *activation);

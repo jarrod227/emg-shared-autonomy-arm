@@ -224,7 +224,8 @@ static void emg_dsp_init(void)
     Error_Handler();
   }
   if (!emg_activation_init(&emg_activation, EMG_ACTIVATION_FACTOR,
-                           EMG_ACTIVATION_BASELINE_SHIFT)) {
+                           EMG_ACTIVATION_BASELINE_SHIFT,
+                           EMG_ACTIVATION_THRESHOLD_FLOOR)) {
     Error_Handler();
   }
   emg_frames_since_invalid = 0u;
