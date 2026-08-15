@@ -70,6 +70,8 @@ class RuntimeRecording:
     frame_valid: np.ndarray
     first_frame: int
     frame_period_us: int
+    timestamp_phase_us: int
+    feature_phase_frame: int
     intent_timestamps_us: tuple[int, ...]
     firmware_events: tuple[RuntimeEvent, ...]
     parser_packets: int
@@ -80,7 +82,10 @@ class RuntimeRecording:
 
     @property
     def first_timestamp_us(self):
-        return self.first_frame * self.frame_period_us
+        return (
+            self.first_frame * self.frame_period_us
+            + self.timestamp_phase_us
+        )
 
 
 @dataclass(frozen=True)
@@ -208,6 +213,25 @@ def _parser_errors(stats):
     }
 
 
+def _unwrap_forward(previous, timestamp_us, *, stream):
+    """Place one uint32 timestamp after the preceding unwrapped timestamp."""
+    wire = int(timestamp_us)
+    epoch = previous // UINT32_MODULO
+    candidate = epoch * UINT32_MODULO + wire
+    if candidate < previous:
+        candidate += UINT32_MODULO
+    if candidate - previous >= UINT32_MODULO // 2:
+        raise ValueError(f"{stream} timestamp moved backwards")
+    return candidate
+
+
+def _unwrap_near(timestamp_us, reference):
+    """Choose the uint32 epoch nearest a timestamp from another packet stream."""
+    wire = int(timestamp_us)
+    epoch = round((reference - wire) / UINT32_MODULO)
+    return wire + epoch * UINT32_MODULO
+
+
 def load_runtime_recording(path):
     """Fail closed on any transport or timestamp gap before replaying."""
     source = pathlib.Path(path)
@@ -239,25 +263,27 @@ def load_runtime_recording(path):
         raise ValueError("runtime log has no RAW packet")
     frames = []
     frame_valid = []
+    raw_timestamps = []
     previous_timestamp = None
     previous_frames = None
     for packet in raw_packets:
-        if packet.timestamp_us % frame_period_us:
-            raise ValueError("RAW timestamp is not on the device frame grid")
-        if previous_timestamp is not None:
-            if packet.timestamp_us < previous_timestamp:
-                raise ValueError("timestamp wrap is unsupported; reconnect before capture")
-            expected = previous_timestamp + previous_frames * frame_period_us
-            if packet.timestamp_us != expected:
-                raise ValueError(
-                    f"RAW timestamp gap: expected {expected}, got {packet.timestamp_us}"
-                )
         block = decode_raw(packet.payload, info.channel_count)
         if len(block.frames) != info.frames_per_raw_packet:
             raise ValueError("RAW packet frame count disagrees with INFO")
+        timestamp = int(packet.timestamp_us)
+        if previous_timestamp is not None:
+            timestamp = _unwrap_forward(
+                previous_timestamp, packet.timestamp_us, stream="RAW"
+            )
+            expected = previous_timestamp + previous_frames * frame_period_us
+            if timestamp != expected:
+                raise ValueError(
+                    f"RAW timestamp gap: expected {expected}, got {timestamp}"
+                )
         frames.extend(block.frames)
         frame_valid.extend([block.all_attached] * len(block.frames))
-        previous_timestamp = packet.timestamp_us
+        raw_timestamps.append(timestamp)
+        previous_timestamp = timestamp
         previous_frames = len(block.frames)
 
     samples = np.asarray(frames, dtype=np.int64)
@@ -272,46 +298,60 @@ def load_runtime_recording(path):
     previous_intent_timestamp = None
     expected_hop_us = HOP * frame_period_us
     for packet in intent_packets:
-        if packet.timestamp_us % frame_period_us:
-            raise ValueError("INTENT timestamp is not on the device frame grid")
+        if previous_intent_timestamp is None:
+            timestamp = _unwrap_near(packet.timestamp_us, raw_timestamps[0])
+        else:
+            timestamp = _unwrap_forward(
+                previous_intent_timestamp, packet.timestamp_us, stream="INTENT"
+            )
+        if (timestamp - raw_timestamps[0]) % frame_period_us:
+            raise ValueError("INTENT timestamp is not on the RAW frame grid")
         if previous_intent_timestamp is not None:
-            if packet.timestamp_us < previous_intent_timestamp:
-                raise ValueError("timestamp wrap is unsupported; reconnect before capture")
-            if packet.timestamp_us - previous_intent_timestamp != expected_hop_us:
+            if timestamp - previous_intent_timestamp != expected_hop_us:
                 raise ValueError("INTENT packets are not on a continuous feature-hop grid")
         intent = decode_intent(packet.payload)
         if intent.command not in COMMAND_NAMES:
             raise ValueError(f"unknown MCU command {intent.command}")
-        intent_timestamps.append(packet.timestamp_us)
+        intent_timestamps.append(timestamp)
         if intent.command != 0:
             firmware_events.append(RuntimeEvent(
-                timestamp_us=packet.timestamp_us,
+                timestamp_us=timestamp,
                 command=intent.command_name,
             ))
-        previous_intent_timestamp = packet.timestamp_us
+        previous_intent_timestamp = timestamp
 
-    first_timestamp_us = raw_packets[0].timestamp_us
+    first_timestamp_us = raw_timestamps[0]
+    timestamp_phase_us = first_timestamp_us % frame_period_us
+    first_frame = (first_timestamp_us - timestamp_phase_us) // frame_period_us
+    first_intent_frame = (
+        intent_timestamps[0] - timestamp_phase_us
+    ) // frame_period_us
     return RuntimeRecording(
         path=source,
         info=info,
         samples=samples,
         frame_valid=np.asarray(frame_valid, dtype=bool),
-        first_frame=first_timestamp_us // frame_period_us,
+        first_frame=first_frame,
         frame_period_us=frame_period_us,
+        timestamp_phase_us=timestamp_phase_us,
+        feature_phase_frame=first_intent_frame % HOP,
         intent_timestamps_us=tuple(intent_timestamps),
         firmware_events=tuple(firmware_events),
         parser_packets=parser.stats.accepted,
     )
 
 
-def aligned_frame_ends(first_frame, frame_count, *, window=WINDOW, hop=HOP):
-    """Return absolute feature ends on the MCU's reset-anchored hop grid."""
+def aligned_frame_ends(first_frame, frame_count, *, window=WINDOW, hop=HOP,
+                       phase=0):
+    """Return feature ends on the phase observed in the MCU INTENT stream."""
     if first_frame < 0 or frame_count < 0:
         raise ValueError("frame positions must be non-negative")
     if window <= 0 or hop <= 0:
         raise ValueError("window and hop must be positive")
+    if not 0 <= phase < hop:
+        raise ValueError("feature-grid phase must be in [0, hop)")
     earliest = first_frame + window
-    first_end = ((earliest + hop - 1) // hop) * hop
+    first_end = earliest + (phase - earliest) % hop
     last_end = first_frame + frame_count
     if first_end > last_end:
         return np.empty(0, dtype=np.int64)
@@ -331,7 +371,11 @@ def replay_host(recording, model=None):
         )
         for channel in range(CHANNEL_COUNT)
     ]
-    frame_ends = aligned_frame_ends(recording.first_frame, len(recording.samples))
+    frame_ends = aligned_frame_ends(
+        recording.first_frame,
+        len(recording.samples),
+        phase=recording.feature_phase_frame,
+    )
     if not len(frame_ends):
         raise ValueError("runtime log is shorter than one aligned feature window")
 
@@ -368,9 +412,10 @@ def replay_host(recording, model=None):
         )
         event = gate.push(decision, valid=window_valid)
         if event is not None:
-            timestamp_us = int(frame_ends[index]) * recording.frame_period_us
-            if timestamp_us >= UINT32_MODULO:
-                raise ValueError("host replay timestamp crosses the uint32 wire wrap")
+            timestamp_us = (
+                int(frame_ends[index]) * recording.frame_period_us
+                + recording.timestamp_phase_us
+            )
             events.append(RuntimeEvent(timestamp_us, event))
     return HostReplay(frame_ends=frame_ends, valid=valid, events=tuple(events))
 

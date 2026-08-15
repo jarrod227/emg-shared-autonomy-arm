@@ -39,7 +39,7 @@ def _raw_packet(sequence, start_frame, value=2048):
     return build(
         TYPE_RAW,
         sequence,
-        start_frame * FRAME_PERIOD_US,
+        (start_frame * FRAME_PERIOD_US) % (1 << 32),
         payload,
     )
 
@@ -49,7 +49,7 @@ def _intent_packet(sequence, end_frame, command=0):
     return build(
         TYPE_INTENT,
         sequence,
-        end_frame * FRAME_PERIOD_US,
+        (end_frame * FRAME_PERIOD_US) % (1 << 32),
         payload,
     )
 
@@ -94,6 +94,46 @@ def test_zero_signal_runtime_replays_on_exact_absolute_timestamps(tmp_path):
     assert replay.frame_ends.tolist() == expected_ends.tolist()
     assert replay.events == ()
     assert np.all(replay.valid)
+
+
+def test_runtime_crossing_uint32_wrap_keeps_one_continuous_grid(tmp_path):
+    first_frame = (1 << 32) // FRAME_PERIOD_US - 34
+    wire, expected_ends = _runtime_stream(
+        first_frame=first_frame,
+        raw_packets=20,
+    )
+    path = tmp_path / "runtime_wrap.bin"
+    path.write_bytes(wire)
+
+    recording = load_runtime_recording(path)
+    replay = replay_host(recording)
+
+    assert recording.first_frame == first_frame
+    assert recording.intent_timestamps_us[0] > (1 << 32)
+    assert replay.frame_ends.tolist() == expected_ends.tolist()
+    assert replay.events == ()
+
+
+def test_runtime_starting_after_wrap_derives_both_grid_phases(tmp_path):
+    absolute_first_frame = (1 << 32) // FRAME_PERIOD_US + 1_034
+    wire, _absolute_ends = _runtime_stream(
+        first_frame=absolute_first_frame,
+        raw_packets=20,
+    )
+    path = tmp_path / "runtime_after_wrap.bin"
+    path.write_bytes(wire)
+
+    recording = load_runtime_recording(path)
+    replay = replay_host(recording)
+    replay_timestamps = tuple(
+        int(end) * FRAME_PERIOD_US + recording.timestamp_phase_us
+        for end in replay.frame_ends
+    )
+
+    expected_phase = (-(1 << 32)) % FRAME_PERIOD_US
+    assert recording.timestamp_phase_us == expected_phase
+    assert replay_timestamps == recording.intent_timestamps_us
+    assert replay.events == ()
 
 
 def test_exact_event_match_passes():
