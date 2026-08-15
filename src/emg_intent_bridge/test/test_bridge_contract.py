@@ -17,7 +17,13 @@ import pytest
 import rclpy
 
 from emg_intent_bridge.bridge_node import EmgIntentBridge
-from emg_intent_bridge.confirmation import ABORT, CONFIRM, DeviceIntent
+from emg_intent_bridge.confirmation import (
+    ABORT,
+    CONFIRM,
+    NEXT_TARGET,
+    REST,
+    DeviceIntent,
+)
 from emg_intent_bridge.protocol_loader import (
     ACTIVATION_SOURCE_DEFAULTS,
     ACTIVATION_SOURCE_HOST,
@@ -150,7 +156,8 @@ def test_published_confidence_clears_the_selector_default(bridge):
     # The weakest margin ever measured on a correct event.
     drain(node, reader, [
         device_intent(CONFIRM, 1_000_000, confidence=2),
-        device_intent(CONFIRM, 2_000_000, confidence=2),
+        device_intent(CONFIRM, 1_500_000, confidence=2),
+        device_intent(REST, 1_750_000),
     ], expect=(published, 1))
 
     assert len(published) == 1
@@ -168,6 +175,21 @@ def test_abort_reaches_ros_even_with_a_dead_quality_byte(bridge):
 
     assert len(published) == 1
     assert published[0].command == AssistiveIntent.ABORT
+
+
+def test_abort_cancels_confirm_before_it_reaches_ros(bridge):
+    node, reader, published = bridge
+
+    drain(node, reader, [
+        device_intent(CONFIRM, 1_000_000),
+        device_intent(CONFIRM, 1_500_000),
+        device_intent(REST, 1_600_000),
+        device_intent(ABORT, 1_750_000),
+    ], expect=(published, 1))
+
+    assert [message.command for message in published] == [
+        AssistiveIntent.ABORT
+    ]
 
 
 def test_stamps_advance_with_the_device_grid(bridge):
@@ -202,9 +224,9 @@ def test_unconfirmed_handshake_holds_ordinary_commands_but_not_abort():
         assert len(reader.written) == 1
 
         drain(node, reader, [
-            device_intent(CONFIRM, 1_000_000),
-            device_intent(CONFIRM, 2_000_000),
-            device_intent(ABORT, 3_000_000),
+            device_intent(NEXT_TARGET, 1_000_000),
+            device_intent(NEXT_TARGET, 1_500_000),
+            device_intent(ABORT, 1_750_000),
         ], expect=(published, 1))
 
         assert [message.command for message in published] == [
@@ -217,9 +239,14 @@ def test_unconfirmed_handshake_holds_ordinary_commands_but_not_abort():
         reader.decoder.last_activation_state = activation_state()
         node._drive_handshake()
         assert node._handshake_confirmed
+        # This test advances one second of device time in almost no host time.
+        # Reset the mapper between its two logical phases; clock-discontinuity
+        # behavior has dedicated tests in test_runtime.py.
+        node._clock_mapper.reset()
         drain(node, reader, [
-            device_intent(CONFIRM, 10_000_000),
-            device_intent(CONFIRM, 11_000_000),
+            device_intent(CONFIRM, 2_000_000),
+            device_intent(CONFIRM, 2_500_000),
+            device_intent(REST, 2_750_000),
         ], expect=(published, 2))
         assert published[-1].command == AssistiveIntent.CONFIRM
     finally:

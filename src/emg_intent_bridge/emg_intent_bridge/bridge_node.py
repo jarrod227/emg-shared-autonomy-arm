@@ -60,6 +60,7 @@ class EmgIntentBridge(Node):
         self.declare_parameter("poll_period_sec", 0.01)
         self.declare_parameter("max_receipt_age_sec", 0.25)
         self.declare_parameter("confirmation_window_sec", 5.5)
+        self.declare_parameter("confirm_abort_override_sec", 0.25)
         self.declare_parameter("intent_topic", "/assistive_intent")
         self.declare_parameter("frame_id", "stm32_emg")
         # Path to a calibration JSON from emg_calibrate.py, or "" for none.
@@ -76,6 +77,9 @@ class EmgIntentBridge(Node):
         poll_period_sec = float(self.get_parameter("poll_period_sec").value)
         confirmation_window_sec = float(
             self.get_parameter("confirmation_window_sec").value
+        )
+        confirm_abort_override_sec = float(
+            self.get_parameter("confirm_abort_override_sec").value
         )
         if self._max_receipt_age_sec <= 0.0 or poll_period_sec <= 0.0:
             raise ValueError("receipt age and poll period must be positive")
@@ -95,7 +99,10 @@ class EmgIntentBridge(Node):
             DiagnosticArray, "/diagnostics", 10
         )
         self._frame_id = str(self.get_parameter("frame_id").value)
-        self._gate = IntentConfirmationGate(confirmation_window_sec)
+        self._gate = IntentConfirmationGate(
+            confirmation_window_sec,
+            abort_override_window_sec=confirm_abort_override_sec,
+        )
         self._clock_mapper = DeviceClockMapper()
         self._reader = reader or SerialIntentReader(
             self._port,
@@ -126,8 +133,10 @@ class EmgIntentBridge(Node):
         self._handshake_timer = self.create_timer(0.5, self._drive_handshake)
         self.get_logger().info(
             f"reading {self._port}; NEXT_TARGET/CONFIRM require two events "
-            f"within {confirmation_window_sec:.2f}s; ABORT is immediate; "
-            f"activation handshake: {self._handshake['description']}"
+            f"within {confirmation_window_sec:.2f}s; CONFIRM waits "
+            f"{confirm_abort_override_sec:.2f}s for an ABORT override; "
+            f"ABORT is immediate; activation handshake: "
+            f"{self._handshake['description']}"
         )
 
     @staticmethod
@@ -319,7 +328,14 @@ class EmgIntentBridge(Node):
                     f"handshake not confirmed"
                 )
                 continue
-            self._publish_intent(confirmed, source_ros_ns)
+            # Deferred CONFIRM is released by a later REST liveness packet.
+            # Preserve the paired MCU event's source stamp rather than using
+            # release time; the mapper preserves device-time intervals.
+            confirmed_source_ros_ns = source_ros_ns - max(
+                0,
+                received.intent.timestamp_us - confirmed.timestamp_us,
+            ) * 1000
+            self._publish_intent(confirmed, confirmed_source_ros_ns)
 
     def _publish_intent(self, intent, source_ros_ns):
         message = AssistiveIntent()

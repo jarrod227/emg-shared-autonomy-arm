@@ -22,15 +22,30 @@ def intent(command, timestamp_us, *, confidence=200, quality=255,
     )
 
 
-@pytest.mark.parametrize("command", (NEXT_TARGET, CONFIRM))
-def test_next_and_confirm_require_two_matching_events(command):
+def test_next_target_publishes_as_soon_as_two_events_match():
     gate = IntentConfirmationGate(confirmation_window_sec=3.0)
 
-    assert gate.push(intent(command, 1_000_000, confidence=210)) is None
-    assert gate.push(intent(REST, 1_050_000)) is None
-    result = gate.push(intent(command, 2_500_000, confidence=180))
+    assert gate.push(intent(NEXT_TARGET, 1_000_000, confidence=210)) is None
+    result = gate.push(intent(NEXT_TARGET, 2_500_000, confidence=180))
 
-    assert result.command == command
+    assert result.command == NEXT_TARGET
+    assert result.timestamp_us == 2_500_000
+    assert result.confidence == 180
+    assert gate.pending_command is None
+
+
+def test_confirm_waits_for_the_abort_override_window():
+    gate = IntentConfirmationGate(
+        confirmation_window_sec=3.0,
+        abort_override_window_sec=0.25,
+    )
+
+    assert gate.push(intent(CONFIRM, 1_000_000, confidence=210)) is None
+    assert gate.push(intent(CONFIRM, 2_500_000, confidence=180)) is None
+    assert gate.push(intent(REST, 2_749_999)) is None
+    result = gate.push(intent(REST, 2_750_000))
+
+    assert result.command == CONFIRM
     assert result.timestamp_us == 2_500_000
     assert result.confidence == 180
     assert gate.pending_command is None
@@ -60,6 +75,18 @@ def test_abort_is_immediate_and_clears_pending_pair():
 
     assert result.command == ABORT
     assert result.confidence == 99
+    assert gate.pending_command is None
+
+
+def test_abort_cancels_a_confirm_waiting_for_release():
+    gate = IntentConfirmationGate(abort_override_window_sec=0.25)
+    gate.push(intent(CONFIRM, 1_000_000))
+    gate.push(intent(CONFIRM, 2_000_000))
+
+    result = gate.push(intent(ABORT, 2_250_000, confidence=77))
+
+    assert result.command == ABORT
+    assert result.confidence == 77
     assert gate.pending_command is None
 
 
@@ -93,7 +120,8 @@ def test_low_margin_never_blocks_an_event():
     gate = IntentConfirmationGate()
 
     assert gate.push(intent(CONFIRM, 1_000_000, confidence=0)) is None
-    result = gate.push(intent(CONFIRM, 2_000_000, confidence=1))
+    assert gate.push(intent(CONFIRM, 2_000_000, confidence=1)) is None
+    result = gate.push(intent(REST, 2_250_000))
 
     assert result.command == CONFIRM
     assert result.confidence == 0
@@ -128,6 +156,8 @@ def test_stream_gap_prevents_pairing_across_missing_packets():
 def test_invalid_configuration_and_input_are_rejected():
     with pytest.raises(ValueError, match="positive"):
         IntentConfirmationGate(0)
+    with pytest.raises(ValueError, match="non-negative"):
+        IntentConfirmationGate(abort_override_window_sec=-0.1)
     with pytest.raises(TypeError, match="DeviceIntent"):
         IntentConfirmationGate().push(object())
 
