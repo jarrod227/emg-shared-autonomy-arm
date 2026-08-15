@@ -1,5 +1,7 @@
 """ROS 2 USB CDC bridge for Objective 3.5 discrete EMG intent events."""
 
+import json
+import pathlib
 import time
 
 from assistive_interfaces.msg import AssistiveIntent
@@ -21,7 +23,22 @@ from .confirmation import (
     REST,
     IntentConfirmationGate,
 )
+from .protocol_loader import (
+    SET_MODE_APPLY,
+    SET_MODE_DEFAULTS,
+    SET_RESULT_ACCEPTED,
+    encode_set_activation,
+)
 from .runtime import DeviceClockMapper, SerialIntentReader
+
+
+# The handshake is confirmed by the board *being in* the wanted state, not
+# by matching an acknowledgement to a send: a board already holding the
+# right configuration from an identical previous session is exactly as
+# calibrated as one that just applied it. Resends therefore reuse one
+# sequence value; the firmware's application is idempotent.
+_HANDSHAKE_SEQUENCE = 1
+_HANDSHAKE_RESEND_SEC = 3.0
 
 
 COMMAND_NAMES = {
@@ -34,8 +51,9 @@ COMMAND_NAMES = {
 class EmgIntentBridge(Node):
     """Decode MCU packets, reject stale evidence, and publish confirmed intent."""
 
-    def __init__(self, *, reader=None):
-        super().__init__("emg_intent_bridge")
+    def __init__(self, *, reader=None, parameter_overrides=None):
+        super().__init__("emg_intent_bridge",
+                         parameter_overrides=parameter_overrides)
         self.declare_parameter("port", "/dev/ttyACM0")
         self.declare_parameter("baudrate", 115200)
         self.declare_parameter("serial_timeout_sec", 0.05)
@@ -44,6 +62,12 @@ class EmgIntentBridge(Node):
         self.declare_parameter("confirmation_window_sec", 5.5)
         self.declare_parameter("intent_topic", "/assistive_intent")
         self.declare_parameter("frame_id", "stm32_emg")
+        # Path to a calibration JSON from emg_calibrate.py, or "" for none.
+        # Both cases send an explicit request on startup: with a file, the
+        # calibrated values; without one, a return to compile-time defaults.
+        # "Send nothing" is deliberately not a state — an un-reset board
+        # would silently keep a previous wearer's RAM configuration.
+        self.declare_parameter("calibration_file", "")
 
         self._port = str(self.get_parameter("port").value)
         self._max_receipt_age_sec = float(
@@ -89,13 +113,119 @@ class EmgIntentBridge(Node):
         self._last_receipt_monotonic_ns = None
         self._last_source_age_sec = None
         self._reported_reader_error = None
+        self._handshake = self._load_handshake(
+            str(self.get_parameter("calibration_file").value)
+        )
+        self._handshake_confirmed = False
+        self._handshake_sends = 0
+        self._handshake_last_send_monotonic = None
+        self._held_for_handshake = 0
         self._reader.start()
         self._poll_timer = self.create_timer(poll_period_sec, self._poll_serial)
         self._diagnostic_timer = self.create_timer(1.0, self._publish_diagnostics)
+        self._handshake_timer = self.create_timer(0.5, self._drive_handshake)
         self.get_logger().info(
             f"reading {self._port}; NEXT_TARGET/CONFIRM require two events "
-            f"within {confirmation_window_sec:.2f}s; ABORT is immediate"
+            f"within {confirmation_window_sec:.2f}s; ABORT is immediate; "
+            f"activation handshake: {self._handshake['description']}"
         )
+
+    @staticmethod
+    def _load_handshake(calibration_file):
+        """Build the startup request the board must be brought to."""
+        if not calibration_file:
+            return {
+                "mode": SET_MODE_DEFAULTS,
+                # Values are ignored for mode=0 but the packet carries them;
+                # send the compile-time defaults so a captured trace reads
+                # sensibly.
+                "factor": 3,
+                "baseline_shift": 4,
+                "threshold_floor": 110,
+                "description": "no calibration file; restoring defaults",
+            }
+        path = pathlib.Path(calibration_file)
+        summary = json.loads(path.read_text())
+        verdict = summary.get("verdict")
+        if verdict == "fail":
+            # A failing calibration means the donning could not separate
+            # preparation from gesture. Refusing to start is the honest
+            # response; silently falling back to defaults would look like a
+            # calibrated system.
+            raise ValueError(
+                f"{path} records a failed calibration; re-place the "
+                f"electrodes and calibrate again"
+            )
+        request = {
+            "mode": SET_MODE_APPLY,
+            "factor": int(summary["factor"]),
+            "baseline_shift": int(summary["baseline_shift"]),
+            "threshold_floor": int(summary["threshold_floor"]),
+            "description": (
+                f"{path.name} (floor {summary['threshold_floor']}, "
+                f"verdict {verdict})"
+            ),
+        }
+        # Encode once now so an out-of-range file fails at startup with a
+        # clear message instead of as an endless rejected handshake.
+        encode_set_activation(
+            _HANDSHAKE_SEQUENCE, mode=request["mode"],
+            factor=request["factor"],
+            baseline_shift=request["baseline_shift"],
+            threshold_floor=request["threshold_floor"],
+        )
+        return request
+
+    def _handshake_state_matches(self, state):
+        """Is the board in the state the handshake is driving it to?"""
+        if state is None:
+            return False
+        if self._handshake["mode"] == SET_MODE_DEFAULTS:
+            # Defaults are the wanted state however the board got there --
+            # including power-on, before any request arrives.
+            return not state.from_host
+        return (
+            state.from_host
+            and state.last_result == SET_RESULT_ACCEPTED
+            and (state.factor, state.baseline_shift, state.threshold_floor)
+            == (self._handshake["factor"], self._handshake["baseline_shift"],
+                self._handshake["threshold_floor"])
+        )
+
+    def _drive_handshake(self):
+        if self._handshake_confirmed:
+            return
+        state = self._reader.decoder.last_activation_state
+        if self._handshake_state_matches(state):
+            self._handshake_confirmed = True
+            self.get_logger().info(
+                f"activation handshake confirmed: K={state.factor} "
+                f"shift={state.baseline_shift} floor={state.threshold_floor} "
+                f"source={'host' if state.from_host else 'defaults'}"
+            )
+            return
+        now = time.monotonic()
+        overdue = (
+            self._handshake_last_send_monotonic is None
+            or now - self._handshake_last_send_monotonic
+            >= _HANDSHAKE_RESEND_SEC
+        )
+        if not overdue:
+            return
+        sent = self._reader.write(encode_set_activation(
+            _HANDSHAKE_SEQUENCE, mode=self._handshake["mode"],
+            factor=self._handshake["factor"],
+            baseline_shift=self._handshake["baseline_shift"],
+            threshold_floor=self._handshake["threshold_floor"],
+        ))
+        if sent:
+            self._handshake_last_send_monotonic = now
+            self._handshake_sends += 1
+            if self._handshake_sends > 1:
+                self.get_logger().warning(
+                    f"activation handshake unconfirmed after "
+                    f"{self._handshake_sends - 1} attempt(s); resending"
+                )
 
     def _poll_serial(self):
         if self._reader.queue_drops != self._last_queue_drops:
@@ -175,8 +305,21 @@ class EmgIntentBridge(Node):
                 )
 
             confirmed = self._gate.push(received.intent)
-            if confirmed is not None:
-                self._publish_intent(confirmed, source_ros_ns)
+            if confirmed is None:
+                continue
+            if not self._handshake_confirmed and confirmed.command != ABORT:
+                # The board has not confirmed it is judging with the wanted
+                # activation configuration, so ordinary commands may have
+                # passed the wrong threshold. ABORT still goes through:
+                # refusing a stop because of an unfinished handshake trades
+                # a certain hazard for a configuration formality.
+                self._held_for_handshake += 1
+                self.get_logger().warning(
+                    f"held {COMMAND_NAMES[confirmed.command]}: activation "
+                    f"handshake not confirmed"
+                )
+                continue
+            self._publish_intent(confirmed, source_ros_ns)
 
     def _publish_intent(self, intent, source_ros_ns):
         message = AssistiveIntent()
@@ -231,6 +374,11 @@ class EmgIntentBridge(Node):
             "mcu_rest_windows": self._reader.decoder.command_counts[REST],
             "mcu_last_signal_quality":
                 self._reader.decoder.last_signal_quality,
+            "handshake_confirmed": self._handshake_confirmed,
+            "handshake_request": self._handshake["description"],
+            "handshake_sends": self._handshake_sends,
+            "held_for_handshake": self._held_for_handshake,
+            "mcu_activation_state": self._reader.decoder.last_activation_state,
             "queue_drops": self._reader.queue_drops,
             "stale_packets": self._stale_count,
             "clock_reanchors": self._clock_mapper.reanchors,
@@ -256,6 +404,13 @@ class EmgIntentBridge(Node):
         if self._reader.error is not None or not self._reader.connected:
             level = DiagnosticStatus.ERROR
             summary = self._reader.error or "serial port not connected"
+        elif not self._handshake_confirmed and self._handshake_sends > 1:
+            # More than one send means the first confirmation window
+            # elapsed. NEXT_TARGET/CONFIRM are being held; ABORT passes.
+            level = DiagnosticStatus.ERROR
+            summary = (
+                "activation handshake unconfirmed; ordinary commands held"
+            )
         elif anomalies:
             level = DiagnosticStatus.WARN
             summary = "stream anomalies detected; affected evidence discarded"

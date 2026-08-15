@@ -84,3 +84,28 @@ def test_wrong_sized_intent_payload_is_counted_and_dropped():
 
     assert decoder.feed(packet(TYPE_INTENT, 0, 0, b"\x00")) == []
     assert decoder.payload_errors == 1
+
+
+def test_activation_state_is_captured_without_entering_the_intent_stream():
+    from emg_intent_bridge.protocol_loader import TYPE_ACTIVATION_STATE
+
+    decoder = IntentStreamDecoder()
+    state_payload = struct.pack("<BBBBiHH", 1, 3, 4, 1, 158, 9, 0)
+    wire = (
+        packet(TYPE_ACTIVATION_STATE, 0, 0, state_payload)
+        + intent_packet(1, 400_000, CONFIRM)
+    )
+
+    decoded = decoder.feed(wire)
+
+    # The state is a side channel: it must not appear as an intent, and its
+    # sequence numbering must not disturb the intent continuity tracking.
+    assert len(decoded) == 1
+    assert decoded[0].command == CONFIRM
+    assert decoded[0].stream_discontinuity is False
+    state = decoder.last_activation_state
+    assert state.from_host
+    assert (state.factor, state.baseline_shift) == (3, 4)
+    assert state.threshold_floor == 158
+    assert state.applied_sequence == 9
+    assert decoder.activation_state_count == 1

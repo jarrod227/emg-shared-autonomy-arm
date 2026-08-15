@@ -4,8 +4,10 @@ from collections import Counter
 
 from .protocol_loader import (
     COMMAND_NAMES,
+    TYPE_ACTIVATION_STATE,
     TYPE_INTENT,
     PacketParser,
+    decode_activation_state,
     decode_intent,
 )
 
@@ -29,6 +31,13 @@ class IntentStreamDecoder:
         self.last_signal_quality = None
         self.payload_errors = 0
         self.unknown_commands = 0
+        # ACTIVATION_STATE is a side channel, not part of the intent stream:
+        # the startup handshake and diagnostics read these directly rather
+        # than draining feed()'s return list, so a caller that only wants
+        # intents is unaffected by their arrival.
+        self.activation_state_errors = 0
+        self.activation_state_count = 0
+        self.last_activation_state = None
         self.duplicate_intents = 0
         self.reversed_intents = 0
         self.intent_sequence_gaps = 0
@@ -53,6 +62,15 @@ class IntentStreamDecoder:
         """Return every new, forward INTENT contained in ``chunk``."""
         decoded = []
         for packet in self.parser.feed(chunk):
+            if packet.type == TYPE_ACTIVATION_STATE:
+                try:
+                    self.last_activation_state = decode_activation_state(
+                        packet.payload
+                    )
+                    self.activation_state_count += 1
+                except ValueError:
+                    self.activation_state_errors += 1
+                continue
             if packet.type != TYPE_INTENT:
                 continue
             try:

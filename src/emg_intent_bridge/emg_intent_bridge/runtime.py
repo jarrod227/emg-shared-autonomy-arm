@@ -150,6 +150,24 @@ class SerialIntentReader:
         except queue.Empty:
             return None
 
+    def write(self, data):
+        """Send bytes to the device. Returns False if nothing is open yet.
+
+        Safe to call from a different thread than _run(): on POSIX, pyserial
+        read() and write() are independent os.read()/os.write() calls on the
+        same fd, so one thread reading while another writes needs no lock --
+        the two directions do not share mutable state.
+        """
+        connection = self._connection
+        if connection is None:
+            return False
+        try:
+            connection.write(data)
+            return True
+        except Exception as error:  # serial backends use several error types
+            self.error = f"{type(error).__name__}: {error}"
+            return False
+
     def stop(self):
         self._stop.set()
         connection = self._connection

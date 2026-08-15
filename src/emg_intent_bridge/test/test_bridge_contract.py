@@ -9,6 +9,7 @@ would have been discarded after the whole pipeline had already accepted
 them. This test runs a real node against a fake reader and pins the contract.
 """
 
+import json
 import queue
 
 from assistive_interfaces.msg import AssistiveIntent
@@ -17,10 +18,49 @@ import rclpy
 
 from emg_intent_bridge.bridge_node import EmgIntentBridge
 from emg_intent_bridge.confirmation import ABORT, CONFIRM, DeviceIntent
+from emg_intent_bridge.protocol_loader import (
+    ACTIVATION_SOURCE_DEFAULTS,
+    ACTIVATION_SOURCE_HOST,
+    SET_RESULT_ACCEPTED,
+    SET_RESULT_NONE,
+    ActivationState,
+)
 from emg_intent_bridge.runtime import ReceivedIntent
 
 
 SELECTOR_DEFAULT_MIN_CONFIDENCE = 0.5
+
+
+def activation_state(*, source=ACTIVATION_SOURCE_DEFAULTS, factor=3,
+                     baseline_shift=4, threshold_floor=110,
+                     last_result=SET_RESULT_NONE, applied_sequence=0):
+    return ActivationState(source, factor, baseline_shift, last_result,
+                           threshold_floor, applied_sequence)
+
+
+class _FakeStats:
+    def __init__(self):
+        self.accepted = 0
+        self.lost = 0
+        self.malformed = 0
+        self.duplicated = 0
+        self.time_reversed = 0
+        self.discarded_bytes = 0
+
+
+class _FakeParser:
+    def __init__(self):
+        self.stats = _FakeStats()
+
+
+class _FakeDecoder:
+    def __init__(self):
+        self.parser = _FakeParser()
+        self.intent_sequence_gaps = 0
+        self.payload_errors = 0
+        self.command_counts = {0: 0}
+        self.last_signal_quality = None
+        self.last_activation_state = None
 
 
 class FakeReader:
@@ -34,6 +74,7 @@ class FakeReader:
         self.bytes_received = 0
         self.started = False
         self.stopped = False
+        self.written = []
         self._queue = queue.Queue()
 
     def offer(self, intent, received_monotonic_ns):
@@ -45,30 +86,15 @@ class FakeReader:
     def stop(self):
         self.stopped = True
 
+    def write(self, data):
+        self.written.append(bytes(data))
+        return True
+
     def pop_nowait(self):
         try:
             return self._queue.get_nowait()
         except queue.Empty:
             return None
-
-
-class _FakeStats:
-    accepted = 0
-    lost = 0
-    malformed = 0
-    duplicated = 0
-    time_reversed = 0
-    discarded_bytes = 0
-
-
-class _FakeParser:
-    stats = _FakeStats()
-
-
-class _FakeDecoder:
-    parser = _FakeParser()
-    intent_sequence_gaps = 0
-    payload_errors = 0
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -82,6 +108,11 @@ def ros():
 def bridge():
     reader = FakeReader()
     node = EmgIntentBridge(reader=reader)
+    # The board reports the power-on default state, which satisfies the
+    # no-calibration-file handshake; these tests are about the intent path.
+    reader.decoder.last_activation_state = activation_state()
+    node._drive_handshake()
+    assert node._handshake_confirmed
     published = []
     node.create_subscription(
         AssistiveIntent, "/assistive_intent", published.append, 10
@@ -153,3 +184,101 @@ def test_stamps_advance_with_the_device_grid(bridge):
         for message in published
     )
     assert second - first == 500_000_000
+
+
+def test_unconfirmed_handshake_holds_ordinary_commands_but_not_abort():
+    reader = FakeReader()
+    node = EmgIntentBridge(reader=reader)
+    published = []
+    node.create_subscription(
+        AssistiveIntent, "/assistive_intent", published.append, 10
+    )
+    try:
+        # No ACTIVATION_STATE has arrived at all: the board's configuration
+        # is unknown, so ordinary commands must wait. The handshake request
+        # itself must have gone out.
+        node._drive_handshake()
+        assert not node._handshake_confirmed
+        assert len(reader.written) == 1
+
+        drain(node, reader, [
+            device_intent(CONFIRM, 1_000_000),
+            device_intent(CONFIRM, 2_000_000),
+            device_intent(ABORT, 3_000_000),
+        ], expect=(published, 1))
+
+        assert [message.command for message in published] == [
+            AssistiveIntent.ABORT
+        ]
+        assert node._held_for_handshake == 1
+
+        # The board comes back with the default state: the held pair is
+        # gone (fail-closed), but new pairs flow.
+        reader.decoder.last_activation_state = activation_state()
+        node._drive_handshake()
+        assert node._handshake_confirmed
+        drain(node, reader, [
+            device_intent(CONFIRM, 10_000_000),
+            device_intent(CONFIRM, 11_000_000),
+        ], expect=(published, 2))
+        assert published[-1].command == AssistiveIntent.CONFIRM
+    finally:
+        node.destroy_node()
+
+
+def test_calibration_file_drives_the_handshake_to_the_stored_values(tmp_path):
+    from rclpy.parameter import Parameter
+
+    calibration = tmp_path / "calibration.json"
+    calibration.write_text(json.dumps({
+        "factor": 3, "baseline_shift": 4, "threshold_floor": 158,
+        "verdict": "pass",
+    }))
+    reader = FakeReader()
+    node = EmgIntentBridge(reader=reader, parameter_overrides=[
+        Parameter("calibration_file", value=str(calibration)),
+    ])
+    try:
+        node._drive_handshake()
+        assert len(reader.written) == 1
+
+        # The power-on default state is NOT the wanted state when a
+        # calibration was configured: the board must actually hold it.
+        reader.decoder.last_activation_state = activation_state()
+        node._drive_handshake()
+        assert not node._handshake_confirmed
+
+        # Host-sourced but with a different floor is a different
+        # calibration, not this one.
+        reader.decoder.last_activation_state = activation_state(
+            source=ACTIVATION_SOURCE_HOST, threshold_floor=110,
+            last_result=SET_RESULT_ACCEPTED,
+        )
+        node._drive_handshake()
+        assert not node._handshake_confirmed
+
+        reader.decoder.last_activation_state = activation_state(
+            source=ACTIVATION_SOURCE_HOST, threshold_floor=158,
+            last_result=SET_RESULT_ACCEPTED,
+        )
+        node._drive_handshake()
+        assert node._handshake_confirmed
+    finally:
+        node.destroy_node()
+
+
+def test_a_failed_calibration_file_refuses_to_start(tmp_path):
+    from rclpy.parameter import Parameter
+
+    calibration = tmp_path / "failed.json"
+    calibration.write_text(json.dumps({
+        "factor": 3, "baseline_shift": 4, "threshold_floor": 103,
+        "verdict": "fail",
+    }))
+
+    # Refusing beats silently falling back to defaults, which would look
+    # like a calibrated system to everything downstream.
+    with pytest.raises(ValueError, match="failed calibration"):
+        EmgIntentBridge(reader=FakeReader(), parameter_overrides=[
+            Parameter("calibration_file", value=str(calibration)),
+        ])

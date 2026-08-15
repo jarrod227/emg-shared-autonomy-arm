@@ -42,6 +42,17 @@ COMMAND_NAMES = protocol.COMMAND_NAMES
 MAGIC = protocol.MAGIC
 TYPE_INTENT = protocol.TYPE_INTENT
 TYPE_RAW = protocol.TYPE_RAW
+TYPE_ACTIVATION_STATE = protocol.TYPE_ACTIVATION_STATE
 PacketParser = protocol.PacketParser
 crc16 = protocol.crc16
 decode_intent = protocol.decode_intent
+
+ActivationState = protocol.ActivationState
+ACTIVATION_SOURCE_DEFAULTS = protocol.ACTIVATION_SOURCE_DEFAULTS
+ACTIVATION_SOURCE_HOST = protocol.ACTIVATION_SOURCE_HOST
+SET_MODE_APPLY = protocol.SET_MODE_APPLY
+SET_MODE_DEFAULTS = protocol.SET_MODE_DEFAULTS
+SET_RESULT_ACCEPTED = protocol.SET_RESULT_ACCEPTED
+SET_RESULT_NONE = protocol.SET_RESULT_NONE
+decode_activation_state = protocol.decode_activation_state
+encode_set_activation = protocol.encode_set_activation
