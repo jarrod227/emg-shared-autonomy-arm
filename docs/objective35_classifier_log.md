@@ -672,6 +672,139 @@ deriving the grid phase from the stream itself instead of assuming residue
 zero, and unwrapping across in-file wraps — is queued; until then the tool
 quietly imposes a "freshly reset boards only" precondition it never states.
 
+## A calibration downlink, and three failed calibrations that were the tool's fault
+
+The protocol grew its first host-to-device packet the same day: `SET_ACTIVATION`
+(host to device, apply values or restore compile-time defaults) and
+`ACTIVATION_STATE` (device to host, a state report rather than an ACK, so a
+lost reply just means the host keeps watching rather than guessing whether to
+resend). No version bump — `0x80`-`0xFF` was reserved for this direction from
+the protocol's first draft. Firmware gained a lock-free single-producer/
+single-consumer ring so the USB interrupt callback can hand bytes to the main
+loop without parsing in interrupt context, and `emg_activation_reconfigure`
+changes K/shift/floor on a running instance without losing the measured
+baseline, rescaling the accumulator on a shift change so the baseline cannot
+silently move by a power of two. Verified live end to end before any real
+calibration was attempted: apply, reject-without-mutating (a hand-built
+out-of-range request left the previous configuration provably untouched), and
+restore-defaults all confirmed via `ACTIVATION_STATE` with zero packet loss.
+
+`emg_calibrate.py` then measures one donning's rest, preparation, and gesture
+bands and computes `T_session` as the geometric mean of the preparation upper
+bound and the weakest gesture's sustained level, gated on a three-tier
+separation ratio (`>= 3.0` pass, `2.5-3.0` marginal, `< 2.5` fail). The first
+three real attempts, all on 2026-08-15, all failed: separation 1.52, then
+1.40 despite better contact and a more realistic preparation prompt, with
+`ABORT` sustaining a reported 98-130 against a preparation of 70-86. That
+pattern — the metric getting worse while everything observable about the
+donning got better — was the signal something was wrong with the tool, not
+the arm.
+
+A scope trace of the same `ABORT` motion made it undeniable: a clean
+contraction reaching roughly ±500-600 counts on two channels, occupying the
+back 28% of a 3-second capture window. Reconstructing the actual held level
+from that trace gave about 536 total MAV against a reported 98 — a 5.5x
+error. The plateau estimator was the 75th percentile of the whole trial. With
+a second or so of reaction time before the hold started, the top quartile of
+windows landed on the onset ramp, not the hold; preparation used the 95th
+percentile, which *does* catch a brief peak, so the two errors moved in
+opposite directions and compounded. Three consecutive real failures, and the
+hardware had been fine throughout.
+
+The fix replaces both percentiles with one rule: the highest level sustained
+for at least as many consecutive windows as the event gate requires before it
+will fire anything (`VALIDATED_GATE.stable_windows`, imported rather than
+restated so the two cannot drift apart). It is insensitive to where in the
+trial the hold happened and states the correct thing about preparation for
+free — a movement too brief to fill the gate's stable run cannot fire an
+event at any threshold, so it must not be allowed to drag the threshold down.
+Gesture and preparation prompts were also lengthened from 3 s to 4 s for
+reaction time, and the tool now stores the raw per-window arrays in the
+output JSON — the first version stored only the summary, and the bug that
+produced the 5.5x error was actually found from a screenshot, because there
+was nothing left in the file to re-derive it from.
+
+A same-session, same-electrodes repeat with the fixed estimator scored
+separation 3.24, `ABORT` sustaining 295 against a preparation of 91, and
+passed. The board confirmed `K=3 shift=4 floor=164` via `ACTIVATION_STATE`.
+
+### Live acceptance, and a hold-duration floor nobody had stated
+
+`CONFIRM` and `ABORT` both fired correctly on the bridge's first attempt at
+each. `NEXT_TARGET` did not, six times in a row, despite a directly measured
+sustained level (208 against the 164 floor) that should have cleared it. The
+first diagnostic script explained nothing new; a second, which replays the
+recorded samples through the real filter, classifier, activation, and gate
+in sequence rather than trusting any single stage's summary, did: the
+classifier called every loud window `NEXT_TARGET` correctly and the
+activation stage passed them, but each attempt held the contraction for only
+about 15-17 feature windows, and the gate needs `hold-off(12) + stable(5) =
+17` consecutive windows past the moment it leaves REST before it will emit
+anything — a floor of roughly **0.85 s**, in exactly the position the wire
+protocol reports no window-by-window classifier state, so a wearer failing
+against it sees nothing but silence. A seventh attempt, held deliberately
+longer, fired at window 61 exactly on schedule. Amplitude was never the
+problem; every failure was a hold shorter than the gate's own requirement,
+and nothing before this session had ever measured or stated that number.
+
+Lowering the floor was considered and rejected: the trace showed comfortable
+margin above threshold throughout every failed attempt, so a lower floor
+would not have helped duration and would have eroded exactly the amplitude
+margin the floor exists to protect. Shortening the 12-window onset hold-off
+was also considered — it was frozen before the activation stage existed, and
+the activation stage now independently removes the low-amplitude ramp the
+hold-off was originally built to cover, so the two may be paying the same
+cost twice. Rejected for today on the same principle as the floor: it is a
+frozen, evidence-backed safety parameter, and the fix for an unstated latency
+requirement is to state it, not to spend margin nobody has re-measured. Left
+as an open question for a dedicated sweep against the existing acceptance
+recordings, now that the activation stage is part of the pipeline being
+swept.
+
+One more finding, unrelated to any bug: showering removes the skin's own
+conductive layer (sebum, salts), and the wear-detect lines read the
+resulting high impedance as no contact — reproduced on ch2 within the same
+session. Touching the electrode with a slightly oily fingertip restored
+contact immediately. Not logged as a defect; logged as a real, reproducible
+donning variable a wearer should know about, alongside electrode placement
+and gel condition.
+
+### The ordinary-activity false-trigger check, re-run under today's config
+
+Today changed three things that the earlier 10-minute ordinary-activity
+false-trigger result (2026-08-14, `/tmp/emg_ordinary_10min.bin`) never saw
+together: a per-session calibrated floor (164, not the compile-time default
+110), a measured confirmation window (5.5 s, not the original 3.0 s
+estimate), and the startup handshake gate. Re-collecting ten more unscripted
+minutes was unnecessary — the recorded RAW samples are unaffected by any of
+it — so the same file was replayed through the exact pipeline in production
+today instead.
+
+One subtlety in doing this correctly: `emg_runtime_compare.replay_host`
+constructs `ActivationGate()` with no arguments, and that class's defaults
+are bound once, when `emg_activation_ref.py`'s class body first executes —
+poking `emg_activation_ref.THRESHOLD_FLOOR` afterward does not reach it,
+because Python binds default-argument values at `def` time, not at call
+time. The correct injection point is the name `ActivationGate` as looked up
+inside `emg_runtime_compare`'s own module namespace at call time, which
+*does* follow a rebinding. This matters retroactively: an earlier same-day
+floor regression check used the constants-poking approach and reported
+"identical events with and without the floor" on all three prior recordings
+— a result that is still probably true (three independent live-hardware
+acceptances after it agree), but was not actually proven by that script,
+since both of its runs may silently have used the same real default rather
+than the two floors being compared.
+
+Result, replayed through today's actual floor (164) and window (5.5 s): 4
+MCU-equivalent candidate events over ten minutes (2 `ABORT`, 1
+`NEXT_TARGET`, 1 `CONFIRM`), of which 2 reached `/assistive_intent` — both
+`ABORT`, the safe-side direction. Neither the `NEXT_TARGET` nor the
+`CONFIRM` candidate found a matching second event inside the window, so
+neither published; this is the double-event policy working as designed, not
+an absence of signal. Zero events in the hazardous direction, and fewer
+total candidate events than the original floor=110 check, which is the
+expected direction for a higher, better-measured floor.
+
 ## Lessons
 
 - **Held-out is a property of the split, not of the file name.** Five
@@ -748,3 +881,26 @@ quietly imposes a "freshly reset boards only" precondition it never states.
   recording made more than 71.6 minutes after reset. The precondition was
   real from the first commit and only became visible when a board stayed
   powered overnight.
+- **A percentile is a plateau estimator only when the trial is mostly
+  plateau.** A second of reaction time before a held gesture put the
+  75th-percentile "plateau" on the onset ramp instead, misreporting a
+  536-count `ABORT` as 98 and failing three real calibrations before a
+  scope trace made the actual hardware undeniable. Measure the thing the
+  consumer (the event gate) actually needs — a level sustained for as many
+  windows as the gate requires — not a statistic that happens to coincide
+  with it under a timing assumption nobody wrote down.
+- **A patched module-level constant only reaches code that looks it up at
+  call time, not code whose default argument already bound it.** Poking
+  `emg_activation_ref.THRESHOLD_FLOOR` after import does nothing to
+  `ActivationGate()` calls inside `emg_runtime_compare.replay_host`, whose
+  default parameter values were fixed when the class body first executed.
+  The fix is to patch the name the caller's module actually resolves at
+  call time. An earlier same-day "floor makes no difference" regression
+  check used the broken pattern; its conclusion happened to hold up against
+  independent live evidence, but the check itself proved nothing.
+- **Every existing recording is worth re-running before asking for a new
+  one.** The 10-minute ordinary-activity false-trigger result depended on
+  the activation floor and the confirmation window, both of which changed
+  today. Replaying the same RAW samples through today's actual
+  configuration answered the safety question without costing anyone ten
+  more minutes.
