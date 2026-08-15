@@ -570,6 +570,108 @@ episode from its threshold — and is recorded as such rather than rounded up to
 a session that pushes closer to it on purpose, would say whether three counts
 is a robust separation or a second lucky number.
 
+## The day the threshold's own assumption failed (2026-08-15)
+
+The bridge's first live acceptance rounds surfaced three separate findings in
+one morning, each of a different kind: a parameter estimated instead of
+measured, a hardware repair that broke a software protection, and a design
+assumption that two donnings of data finally falsified.
+
+### The confirmation window was estimated, and sat below reality
+
+The bridge requires two complete MCU events within a window before
+publishing `NEXT_TARGET` or `CONFIRM`. The window shipped at 3.0 s, derived
+from MCU timing — hold-off plus stable run plus re-arm. A live round then
+measured the actual cadence: consecutive deliberate events arrived 3.80,
+3.95, and 4.15 s apart, because the human relax time between gestures is
+part of the interval and was never in the derivation. Every pair missed the
+window; the bridge published nothing at all.
+
+The replacement was measured from both sides. The floor is 4.15 s, the
+slowest deliberate gap. The ceiling is 7.05 s, the closest two same-command
+events in the ten-minute ordinary-activity recording — and that pair
+deserves its footnote: at any window of 7 s or more it is held apart only by
+an `ABORT` landing 0.05 s later and clearing the pending half, which is
+passing on interference, not margin. 5.5 s sits 1.35 s above the floor and
+1.55 s below the ceiling.
+
+### A repaired electrode broke the activation threshold
+
+A silent acceptance round — link healthy, quality 255, zero events over five
+gestures — led back to the scope. The signal had degraded across the
+redonning: rest at 32 total MAV but gestures at only 98–143 against the
+3 × 32 = 96 threshold, with `ABORT` at 98 clearing it by 2 counts and never
+accumulating five agreeing windows. The cause was one electrode: ch0 rested
+at MAV 19 with ±100 spikes where ch2 rested at 3. Re-gelling it fixed the
+noise — and exposed the design flaw.
+
+With contact repaired, rest fell to a drifting 6–43. The threshold followed
+it down to as little as 3 × 6 = 18, below the measured 73-count preparatory
+movement the activation stage exists to suppress. Meanwhile the gesture band
+barely moved. Laid side by side, the two donnings falsify the scaling rule
+itself:
+
+| | rest | preparation | weakest gesture | needed K |
+| --- | --- | --- | --- | --- |
+| 2026-08-14 donning | 29–35 | 65–79 | 318 | ≈ 3 |
+| 2026-08-15, re-gelled | 6–43 | 73 | 145 | 2.5–18 |
+
+Rest amplitude is a contact-noise figure; the preparation/gesture band is
+set by physiology and electrode placement. The two do not covary, so no
+single multiple of rest can place a threshold between preparation and
+gesture across donnings. K = 3 worked on 2026-08-14 because that donning's
+noise happened to put 3 × rest inside the band — a coincidence that one
+electrode repair undid.
+
+### An interim floor, and the measured fix it stands in for
+
+The stopgap is an absolute floor under the relative rule:
+`threshold = max(K × baseline, 110)`, with 110 sitting 31 counts above the
+loudest measured preparation (79) and 35 below the weakest measured gesture
+(145). It also closes a cold-start gap: before the first classified-REST
+window the stage used to pass everything unjudged, and now suppresses
+sub-floor movement while keeping a forceful cold-start `ABORT` reachable.
+Replaying all three existing recordings — the defect session, the frozen 6/6
+acceptance, and the ten-minute ordinary-activity run — with and without the
+floor produced identical events on all three, and the reflashed firmware
+passed a live round: `NEXT_TARGET` paired and published, `CONFIRM` paired
+and published, `ABORT` fired single-shot with margin 20 — the first
+successful `ABORT` of the day. The floor is recorded as interim on two
+donnings of evidence, not frozen.
+
+The real fix, agreed in design: per-donning calibration. Measure rest and a
+few comfortable real gestures at each donning; take the preparation band
+from the onset segments of those same trials; place `T_session` midway
+between the preparation upper bound and the weakest-gesture lower bound; and
+make the separation ratio itself the acceptance criterion — today's donning
+separates by 2.0 (73 to 145) where yesterday's separated by 4.0, and a
+calibration that measures 2.0 should fail loudly and ask for re-placement
+rather than proceed on a sliver. One candidate was evaluated and cut:
+normalizing by comfortable effort, `(mav − rest) / (effort − rest)`, does
+not remove the guessed constant, because comfortable effort itself swung
+3.7× between donnings (736 vs 197) — the normalized preparation of one
+donning (0.351) nearly reaches the normalized weakest gesture of the other
+(0.404). Anchoring on the measured gap between preparation and gesture keeps
+both bounds inside the same donning. Delivering `T_session` to the MCU
+requires a host-to-device configuration path the wire protocol does not yet
+have; that is the next milestone, and the same downlink later carries the
+proportional-control calibration.
+
+### A comparison tool that expires 72 minutes after power-on
+
+Verifying the floor against the new donning's recording tripped a latent
+bug in `emg_runtime_compare.py`: it rejects the capture with "RAW timestamp
+is not on the device frame grid." The timestamps are fine. The wire
+timestamp is uint32 microseconds and wraps every 71.6 minutes, and
+2³² mod 500 = 296, so each wrap shifts the timestamp residue by 296 µs. The
+tool checks `timestamp % 500 == 0` as an absolute property, which only holds
+during the first wrap period after MCU reset. Every recording taken from a
+board powered longer than 71.6 minutes fails the check; the recording in
+question was taken about 3.7 hours in (residue 112 = three wraps). The fix —
+deriving the grid phase from the stream itself instead of assuming residue
+zero, and unwrapping across in-file wraps — is queued; until then the tool
+quietly imposes a "freshly reset boards only" precondition it never states.
+
 ## Lessons
 
 - **Held-out is a property of the split, not of the file name.** Five
@@ -624,3 +726,25 @@ is a robust separation or a second lucky number.
 - **State the margin, not just the verdict.** Three counts of separation is
   recorded next to the freeze, not smoothed into "validated," because the
   next session that measures it might come back different.
+- **A parameter derived from the machine's timing forgets the human's.** The
+  3.0 s confirmation window accounted for hold-off, stable run, and re-arm,
+  and omitted the second or two a person takes to relax between gestures.
+  The result was not a degraded pass rate but zero output.
+- **Fixing the hardware can break the software that compensated for it.**
+  Re-gelling a noisy electrode cut resting amplitude five-fold and, with it,
+  a threshold defined as a multiple of resting amplitude. An improvement in
+  the signal is a change in the operating point, and anything calibrated
+  against the old one has to be re-checked.
+- **A ratio is only a rule if both its terms move together.** Rest is
+  contact noise, the gesture band is physiology. K = 3 was never a law; it
+  was one donning's coincidence, and it survived exactly until an electrode
+  was repaired.
+- **Reject the tidy normalization if its denominator is not repeatable.**
+  Dividing by comfortable effort looks dimensionless and principled, but
+  effort itself varied 3.7× between donnings, so it relocated the guessed
+  constant instead of removing it.
+- **An absolute check on a wrapping counter has a shelf life.** `timestamp %
+  500 == 0` was true of every recording made so far and false of every
+  recording made more than 71.6 minutes after reset. The precondition was
+  real from the first commit and only became visible when a board stayed
+  powered overnight.

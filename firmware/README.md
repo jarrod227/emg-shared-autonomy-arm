@@ -266,12 +266,13 @@ host before flashing.
 | Wear-detect GPIO reads | done; one mask per half, shared by the RAW packet and by window validity so the two cannot disagree |
 | Classifier inference | Q18 pure C scorer matches the Python reference on 297/297 hops of real recorded data; live on hardware |
 | Event gate (`src/emg_gate.c`) | done; frozen counts, and a 1024-decision fixture the Python gate reproduces event for event |
-| Activation threshold (`src/emg_activation.c`) | done and in the live loop; rest-relative, cross-checked step for step against the Python mirror. Frozen `K=3`, `shift=4` after an independent self-paced session, 6/6 correct; margin is 3 counts and should be re-measured |
+| Activation threshold (`src/emg_activation.c`) | done and in the live loop; `threshold = max(K x rest baseline, floor)`, cross-checked step for step against the Python mirror. `K=3`/`shift=4` frozen 2026-08-14 on an independent self-paced session, 6/6 correct, margin 3 counts. `floor=110` added 2026-08-15 after re-gelling an electrode dropped rest 32 -> 6-43 and falsified rest-scaling alone; interim on two donnings, verified event-identical on all three prior recordings and 3/3 live |
 | Host: probe/scope/record/replay/analyze/reference tools | done and live-used |
 | Host: guided labelled capture GUI | implemented, headless-tested, and used for six complete balanced sessions across two donnings |
 | Host: event-gate validation capture | two real complete sequences; the second passed independent validation 9/9 with pre-registered counts |
 | Host: training pipeline | session-aware continuous-Q29 ridge-LDA LOSO plus Q18/C export implemented and measured |
-| ROS 2 bridge | not started |
+| Host: MCU/host runtime comparison (`tools/emg_runtime_compare.py`) | done, absolute-frame-grid aligned; blind to uint32 timestamp wrap past 71.6 min of uptime — see TODO.md |
+| ROS 2 bridge | `emg_intent_bridge` package live: double-event confirmation for `NEXT_TARGET`/`CONFIRM` (5.5 s window, measured — see docs/objective35_classifier_log.md), single-shot `ABORT`, `confidence=1.0` on publish (MCU margin is diagnostic-only, in `/diagnostics`), frozen monotonic clock mapping. Verified live: all three commands published correctly, `ABORT` margin 20 the first time it fired |
 
 RAW remains available as the replayable source of truth, but it is no longer
 the only live path. The MCU also runs filter, features, Q18 classification,
