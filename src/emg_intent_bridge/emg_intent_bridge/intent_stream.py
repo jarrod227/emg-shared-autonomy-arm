@@ -1,5 +1,7 @@
 """Incremental adapter from protocol-v1 bytes to safe device intent records."""
 
+from collections import Counter
+
 from .protocol_loader import (
     COMMAND_NAMES,
     TYPE_INTENT,
@@ -19,6 +21,12 @@ class IntentStreamDecoder:
 
     def __init__(self):
         self.parser = PacketParser()
+        # Counted per command so a silent bridge can be told apart from a
+        # silent MCU. Without this the published count alone cannot say
+        # whether the gate dropped events or none ever arrived.
+        self.command_counts = Counter()
+        self.last_command = None
+        self.last_signal_quality = None
         self.payload_errors = 0
         self.unknown_commands = 0
         self.duplicate_intents = 0
@@ -74,6 +82,9 @@ class IntentStreamDecoder:
 
             gap = 0 if sequence_delta is None else max(0, sequence_delta - 1)
             self.intent_sequence_gaps += gap
+            self.command_counts[intent.command] += 1
+            self.last_command = intent.command
+            self.last_signal_quality = intent.signal_quality
             self._last_sequence = packet.sequence
             self._last_wire_timestamp = packet.timestamp_us
             self._unwrapped_timestamp = timestamp

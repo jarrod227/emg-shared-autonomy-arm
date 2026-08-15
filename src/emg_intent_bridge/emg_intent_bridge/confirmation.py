@@ -7,6 +7,16 @@ eight ordinary-activity events through, while K=5 lost half the deliberate
 gestures. The MVP therefore asks for a second occurrence of the same ordinary
 command. ABORT remains single-shot because stopping must never wait for a
 confirmation gesture.
+
+The window is measured from both sides, not assumed. A live self-paced round
+put consecutive deliberate events 3.80, 3.95 and 4.15 s apart, because each
+one costs the MCU its onset hold-off, five agreeing windows and a REST re-arm
+before the wearer's own relax time is counted; the original 3.0 s estimate sat
+below that floor and paired nothing at all. The ceiling comes from the
+ten-minute ordinary-activity recording, whose closest two same-command events
+are 7.05 s apart. That pair is worth naming: at a wider window it is held
+apart only by an ABORT landing 0.05 s later and clearing the pending half, so
+anything at or above 7 s would be passing on interference rather than margin.
 """
 
 from dataclasses import dataclass

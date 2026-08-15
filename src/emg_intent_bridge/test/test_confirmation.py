@@ -130,3 +130,27 @@ def test_invalid_configuration_and_input_are_rejected():
         IntentConfirmationGate(0)
     with pytest.raises(TypeError, match="DeviceIntent"):
         IntentConfirmationGate().push(object())
+
+
+def test_window_admits_the_measured_deliberate_cadence():
+    # 4.15 s was the slowest gap between two deliberate MCU events in a live
+    # self-paced round. The default window must clear it, or the bridge
+    # publishes nothing a wearer can actually produce.
+    gate = IntentConfirmationGate(confirmation_window_sec=5.5)
+
+    assert gate.push(intent(NEXT_TARGET, 1_000_000)) is None
+    result = gate.push(intent(NEXT_TARGET, 5_150_000))
+
+    assert result is not None
+    assert result.command == NEXT_TARGET
+
+
+def test_window_stays_below_the_measured_ordinary_activity_gap():
+    # The closest two same-command events in ten minutes of ordinary activity
+    # were 7.05 s apart, and only an ABORT arriving 0.05 s later kept them
+    # from pairing. The window must reject that gap on its own.
+    gate = IntentConfirmationGate(confirmation_window_sec=5.5)
+
+    assert gate.push(intent(CONFIRM, 1_000_000)) is None
+    assert gate.push(intent(CONFIRM, 8_050_000)) is None
+    assert gate.pending_command == CONFIRM

@@ -18,6 +18,7 @@ from .confirmation import (
     ABORT,
     CONFIRM,
     NEXT_TARGET,
+    REST,
     IntentConfirmationGate,
 )
 from .runtime import DeviceClockMapper, SerialIntentReader
@@ -40,7 +41,7 @@ class EmgIntentBridge(Node):
         self.declare_parameter("serial_timeout_sec", 0.05)
         self.declare_parameter("poll_period_sec", 0.01)
         self.declare_parameter("max_receipt_age_sec", 0.25)
-        self.declare_parameter("confirmation_window_sec", 3.0)
+        self.declare_parameter("confirmation_window_sec", 5.5)
         self.declare_parameter("intent_topic", "/assistive_intent")
         self.declare_parameter("frame_id", "stm32_emg")
 
@@ -84,6 +85,7 @@ class EmgIntentBridge(Node):
         self._last_queue_drops = 0
         self._last_event_margin = None
         self._last_event_quality = None
+        self._last_mcu_event_us = None
         self._last_receipt_monotonic_ns = None
         self._last_source_age_sec = None
         self._reported_reader_error = None
@@ -154,6 +156,24 @@ class EmgIntentBridge(Node):
                 self._gate.invalidate()
                 continue
 
+            if received.intent.command != REST:
+                # Every MCU event is logged with its device time, published or
+                # not. Counters alone cannot say whether a pair missed the
+                # confirmation window or the second gesture never arrived.
+                gap = "first"
+                if self._last_mcu_event_us is not None:
+                    gap = (
+                        f"{(received.intent.timestamp_us - self._last_mcu_event_us) / 1e6:.2f}s"
+                        " since previous"
+                    )
+                self._last_mcu_event_us = received.intent.timestamp_us
+                self.get_logger().info(
+                    f"MCU event {COMMAND_NAMES.get(received.intent.command)} "
+                    f"at {received.intent.timestamp_us / 1e6:.2f}s ({gap}), "
+                    f"margin={received.intent.confidence}, "
+                    f"quality={received.intent.signal_quality}"
+                )
+
             confirmed = self._gate.push(received.intent)
             if confirmed is not None:
                 self._publish_intent(confirmed, source_ros_ns)
@@ -201,6 +221,16 @@ class EmgIntentBridge(Node):
             "discarded_bytes": parser.discarded_bytes,
             "intent_sequence_gaps": self._reader.decoder.intent_sequence_gaps,
             "intent_payload_errors": self._reader.decoder.payload_errors,
+            "mcu_events": {
+                COMMAND_NAMES[command]: count
+                for command, count in sorted(
+                    self._reader.decoder.command_counts.items()
+                )
+                if command in COMMAND_NAMES
+            },
+            "mcu_rest_windows": self._reader.decoder.command_counts[REST],
+            "mcu_last_signal_quality":
+                self._reader.decoder.last_signal_quality,
             "queue_drops": self._reader.queue_drops,
             "stale_packets": self._stale_count,
             "clock_reanchors": self._clock_mapper.reanchors,
