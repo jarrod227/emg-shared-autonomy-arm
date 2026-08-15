@@ -140,6 +140,21 @@ typedef struct {
 bool emg_activation_init(emg_activation_t *activation, uint16_t factor,
                          uint16_t baseline_shift, int32_t threshold_floor);
 
+/* Change parameters on a running instance without losing the measured
+ * baseline — a host calibration must not force the wearer back through a
+ * re-seeding period. Validation is identical to init; on rejection nothing
+ * changes and false is returned, so a bad request can never half-apply.
+ *
+ * When baseline_shift changes, the accumulator is re-scaled so the
+ * *baseline* is preserved: acc' = (acc >> old_shift) << new_shift. Leaving
+ * the accumulator alone would silently multiply the baseline by
+ * 2^(old-new), which is the kind of error that looks like a working system
+ * with a mysteriously wrong threshold. The sub-LSB EMA residue is dropped
+ * in the exchange; it is worth strictly less than one MAV count. */
+bool emg_activation_reconfigure(emg_activation_t *activation, uint16_t factor,
+                                uint16_t baseline_shift,
+                                int32_t threshold_floor);
+
 /* Baseline in MAV counts; 0 until the first classified-REST window. */
 int32_t emg_activation_baseline(const emg_activation_t *activation);
 

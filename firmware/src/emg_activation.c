@@ -27,6 +27,37 @@ bool emg_activation_init(emg_activation_t *activation, uint16_t factor,
     return true;
 }
 
+bool emg_activation_reconfigure(emg_activation_t *activation, uint16_t factor,
+                                uint16_t baseline_shift,
+                                int32_t threshold_floor)
+{
+    if (activation == NULL) {
+        return false;
+    }
+    if (factor == 0u) {
+        return false;
+    }
+    if (baseline_shift == 0u || baseline_shift > 8u) {
+        return false;
+    }
+    if (threshold_floor <= 0 || threshold_floor >= EMG_ACTIVATION_TOTAL_LIMIT) {
+        return false;
+    }
+    if (activation->has_baseline
+        && baseline_shift != activation->baseline_shift) {
+        /* Preserve the baseline, not the accumulator: the accumulator is
+         * baseline << shift, so under a new shift it must be rebuilt or
+         * the baseline silently scales by 2^(old-new). */
+        const int32_t baseline =
+            activation->accumulator >> activation->baseline_shift;
+        activation->accumulator = baseline << baseline_shift;
+    }
+    activation->factor = factor;
+    activation->baseline_shift = baseline_shift;
+    activation->threshold_floor = threshold_floor;
+    return true;
+}
+
 int32_t emg_activation_baseline(const emg_activation_t *activation)
 {
     if (activation == NULL || !activation->has_baseline) {

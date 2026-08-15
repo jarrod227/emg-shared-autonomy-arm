@@ -66,3 +66,4 @@ weights/
 *.pt
 *.onnx
 *.engine
+firmware/test/test_emg_rx

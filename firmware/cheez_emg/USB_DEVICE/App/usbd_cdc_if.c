@@ -22,7 +22,7 @@
 #include "usbd_cdc_if.h"
 
 /* USER CODE BEGIN INCLUDE */
-
+#include "emg_rx.h"
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -31,6 +31,10 @@
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
+
+/* Owned by main.c; this callback only pushes bytes into it. Parsing stays
+ * out of interrupt context by design — see emg_rx.h. */
+extern emg_rx_t emg_usb_rx;
 
 /* USER CODE END PV */
 
@@ -259,6 +263,8 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
 {
   /* USER CODE BEGIN 6 */
+  /* Interrupt context: copy and leave. The main loop parses. */
+  emg_rx_push(&emg_usb_rx, Buf, *Len);
   USBD_CDC_SetRxBuffer(&hUsbDeviceFS, &Buf[0]);
   USBD_CDC_ReceivePacket(&hUsbDeviceFS);
   return (USBD_OK);

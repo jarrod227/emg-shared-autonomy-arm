@@ -34,6 +34,7 @@
 #include "emg_filter.h"
 #include "emg_gate.h"
 #include "emg_packet.h"
+#include "emg_rx.h"
 #include "usbd_cdc_if.h"
 /* USER CODE END Includes */
 
@@ -105,6 +106,20 @@ static emg_gate_t emg_gate;
 static emg_activation_t emg_activation;
 static uint16_t emg_intent_sequence;
 
+/* Host-to-device receive path. Not static: the USB CDC receive callback in
+ * usbd_cdc_if.c pushes into it from interrupt context. Zero-initialised is
+ * a valid empty state, so bytes arriving before USER CODE 2 runs land in a
+ * working ring rather than undefined behaviour. */
+emg_rx_t emg_usb_rx;
+
+/* How the activation threshold came to hold its current values, reported in
+ * every ACTIVATION_STATE packet. RAM only: a reset returns to the compile-
+ * time defaults and the host re-sends on its startup handshake. */
+static uint8_t emg_activation_source; /* emg_activation_source_t */
+static uint8_t emg_activation_last_result; /* emg_set_result_t */
+static uint16_t emg_activation_applied_sequence;
+static uint16_t emg_state_sequence;
+
 /* Frames processed by the DSP, which is not the same as frames captured: the
  * count only advances over samples that actually entered the filters, so the
  * INTENT timestamp names the frame the decision was made on and the host can
@@ -124,6 +139,8 @@ void SystemClock_Config(void);
 static uint8_t emg_read_wear_mask(void);
 static bool emg_transmit(const uint8_t *data, uint16_t length);
 static void emg_send_info(void);
+static void emg_send_activation_state(void);
+static void emg_apply_set_activation(const emg_set_activation_t *request);
 static void emg_send_raw_half(uint32_t index, uint8_t wear_mask);
 static void emg_dsp_init(void);
 static void emg_dsp_discontinuity(void);
@@ -181,6 +198,73 @@ static void emg_send_info(void)
   /* Advance even when the send failed: the host should see a gap rather than
    * a repeat, because a repeat looks like working firmware. */
   emg_info_sequence++;
+}
+
+static void emg_send_activation_state(void)
+{
+  emg_activation_state_t state;
+  uint8_t *buffer = emg_tx_buffer[emg_tx_slot];
+  size_t length;
+
+  state.source = emg_activation_source;
+  state.factor = (uint8_t)emg_activation.factor;
+  state.baseline_shift = (uint8_t)emg_activation.baseline_shift;
+  state.last_result = emg_activation_last_result;
+  state.threshold_floor = emg_activation.threshold_floor;
+  state.applied_sequence = emg_activation_applied_sequence;
+  length = emg_encode_activation_state(
+      buffer, EMG_TX_BUFFER_SIZE, emg_state_sequence,
+      emg_frames_processed * EMG_FRAME_PERIOD_US, &state);
+  if (length != 0u)
+  {
+    emg_tx_slot ^= 1u;
+    (void)emg_transmit(buffer, (uint16_t)length);
+  }
+  emg_state_sequence++;
+}
+
+/* Apply one decoded host request and report the outcome immediately, so the
+ * sender never waits a full periodic-state interval to learn it. A rejected
+ * request changes nothing: emg_activation_reconfigure validates before it
+ * touches state, so there is no partial apply to undo. */
+static void emg_apply_set_activation(const emg_set_activation_t *request)
+{
+  bool accepted = false;
+
+  if (request->mode == (uint8_t)EMG_SET_MODE_DEFAULTS)
+  {
+    /* A deliberate un-calibration: a stale calibration from a previous
+     * wearer or donning is worse than none. Value fields are ignored. */
+    accepted = emg_activation_reconfigure(&emg_activation,
+                                          EMG_ACTIVATION_FACTOR,
+                                          EMG_ACTIVATION_BASELINE_SHIFT,
+                                          EMG_ACTIVATION_THRESHOLD_FLOOR);
+    if (accepted)
+    {
+      emg_activation_source = (uint8_t)EMG_ACTIVATION_SOURCE_DEFAULTS;
+    }
+  }
+  else if (request->mode == (uint8_t)EMG_SET_MODE_APPLY)
+  {
+    accepted = emg_activation_reconfigure(&emg_activation, request->factor,
+                                          request->baseline_shift,
+                                          request->threshold_floor);
+    if (accepted)
+    {
+      emg_activation_source = (uint8_t)EMG_ACTIVATION_SOURCE_HOST;
+    }
+  }
+
+  if (accepted)
+  {
+    emg_activation_last_result = (uint8_t)EMG_SET_RESULT_ACCEPTED;
+    emg_activation_applied_sequence = request->sequence;
+  }
+  else
+  {
+    emg_activation_last_result = (uint8_t)EMG_SET_RESULT_REJECTED;
+  }
+  emg_send_activation_state();
 }
 
 static void emg_send_raw_half(uint32_t index, uint8_t wear_mask)
@@ -431,7 +515,20 @@ int main(void)
     if ((int32_t)(HAL_GetTick() - emg_next_info_tick) >= 0)
     {
       emg_send_info();
+      /* On the INFO cadence so a host that just attached learns what the
+       * board is judging with without asking. */
+      emg_send_activation_state();
       emg_next_info_tick += EMG_INFO_PERIOD_MS;
+    }
+
+    {
+      /* One request per loop pass keeps arrival order and bounds the time
+       * spent here; configuration traffic is a few packets per session. */
+      emg_set_activation_t request;
+      if (emg_rx_poll(&emg_usb_rx, &request))
+      {
+        emg_apply_set_activation(&request);
+      }
     }
 
     const uint32_t produced = emg_halves_produced;

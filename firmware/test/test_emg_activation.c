@@ -251,6 +251,81 @@ static void test_abort_is_judged_like_every_other_class(void)
     CHECK(judge(&activation, EMG_COMMAND_ABORT, 400) == EMG_COMMAND_ABORT);
 }
 
+static void test_reconfigure_preserves_the_baseline(void)
+{
+    emg_activation_t activation;
+    init_floored(&activation);
+
+    /* A host calibration lands mid-session; the wearer must not be forced
+     * back through a re-seeding period. */
+    CHECK(judge(&activation, EMG_COMMAND_REST, 30) == EMG_COMMAND_REST);
+    CHECK(emg_activation_reconfigure(&activation, 3u, 4u, 150));
+    CHECK(emg_activation_baseline(&activation) == 30);
+
+    /* The new floor judges immediately: 140 cleared the old 110 floor and
+     * the relative threshold (3 x 30 = 90), and fails only the new 150. */
+    CHECK(judge(&activation, EMG_COMMAND_CONFIRM, 140) == EMG_COMMAND_REST);
+    CHECK(judge(&activation, EMG_COMMAND_CONFIRM, 160)
+          == EMG_COMMAND_CONFIRM);
+}
+
+static void test_reconfigure_rescales_the_accumulator_across_a_shift_change(void)
+{
+    emg_activation_t activation;
+
+    CHECK(emg_activation_init(&activation, 5u, 4u, 110));
+    CHECK(judge(&activation, EMG_COMMAND_REST, 29) == EMG_COMMAND_REST);
+    CHECK(emg_activation_baseline(&activation) == 29);
+
+    /* The trap this guards: the accumulator is baseline << shift, so
+     * changing the shift without rebuilding it would read back
+     * 464 >> 6 = 7 instead of 29 — a working system with a mysteriously
+     * wrong threshold. */
+    CHECK(emg_activation_reconfigure(&activation, 5u, 6u, 110));
+    CHECK(emg_activation_baseline(&activation) == 29);
+
+    /* And the EMA keeps converging under the new shift. */
+    for (int index = 0; index < 400; index++) {
+        (void)judge(&activation, EMG_COMMAND_REST, 20);
+    }
+    CHECK(emg_activation_baseline(&activation) == 20);
+}
+
+static void test_reconfigure_rejects_bad_values_without_touching_state(void)
+{
+    emg_activation_t activation;
+    init_floored(&activation);
+    CHECK(judge(&activation, EMG_COMMAND_REST, 30) == EMG_COMMAND_REST);
+
+    CHECK(!emg_activation_reconfigure(NULL, 3u, 4u, 110));
+    CHECK(!emg_activation_reconfigure(&activation, 0u, 4u, 110));
+    CHECK(!emg_activation_reconfigure(&activation, 3u, 0u, 110));
+    CHECK(!emg_activation_reconfigure(&activation, 3u, 9u, 110));
+    CHECK(!emg_activation_reconfigure(&activation, 3u, 4u, 0));
+    CHECK(!emg_activation_reconfigure(&activation, 3u, 4u, -5));
+    CHECK(!emg_activation_reconfigure(&activation, 3u, 4u,
+                                      EMG_ACTIVATION_TOTAL_LIMIT));
+
+    /* Nothing half-applied: the original factor 5 / floor 110 still judge.
+     * 149 fails the relative threshold (5 x 30 = 150); 150 passes both. */
+    CHECK(emg_activation_baseline(&activation) == 30);
+    CHECK(judge(&activation, EMG_COMMAND_ABORT, 149) == EMG_COMMAND_REST);
+    CHECK(judge(&activation, EMG_COMMAND_ABORT, 150) == EMG_COMMAND_ABORT);
+}
+
+static void test_reconfigure_before_any_baseline_stays_unseeded(void)
+{
+    emg_activation_t activation;
+    init_floored(&activation);
+
+    CHECK(emg_activation_reconfigure(&activation, 3u, 4u, 130));
+    CHECK(emg_activation_baseline(&activation) == 0);
+    /* Cold-start behaviour under the new floor: sub-floor suppressed,
+     * at-floor passes unjudged by the (still absent) relative rule. */
+    CHECK(judge(&activation, EMG_COMMAND_ABORT, 129) == EMG_COMMAND_REST);
+    CHECK(judge(&activation, EMG_COMMAND_ABORT, 130) == EMG_COMMAND_ABORT);
+}
+
 static void test_corrupt_totals_cannot_poison_the_accumulator(void)
 {
     emg_activation_t activation;
@@ -489,6 +564,10 @@ int main(int argc, char **argv)
     test_floor_holds_when_good_contact_collapses_the_baseline();
     test_relative_rule_still_governs_above_the_floor();
     test_floor_never_touches_rest_or_the_baseline();
+    test_reconfigure_preserves_the_baseline();
+    test_reconfigure_rescales_the_accumulator_across_a_shift_change();
+    test_reconfigure_rejects_bad_values_without_touching_state();
+    test_reconfigure_before_any_baseline_stays_unseeded();
     test_suppressed_windows_never_feed_the_baseline();
     test_baseline_tracks_drift_without_a_deadband();
     test_rest_windows_update_the_baseline_even_when_loud();
