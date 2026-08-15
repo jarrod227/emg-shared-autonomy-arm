@@ -273,6 +273,7 @@ host before flashing.
 | Host: training pipeline | session-aware continuous-Q29 ridge-LDA LOSO plus Q18/C export implemented and measured |
 | Host: MCU/host runtime comparison (`tools/emg_runtime_compare.py`) | done, absolute-frame-grid aligned; blind to uint32 timestamp wrap past 71.6 min of uptime — see TODO.md |
 | ROS 2 bridge | `emg_intent_bridge` package live: double-event confirmation for `NEXT_TARGET`/`CONFIRM` (5.5 s window, measured — see docs/objective35_classifier_log.md), single-shot `ABORT`, `confidence=1.0` on publish (MCU margin is diagnostic-only, in `/diagnostics`), frozen monotonic clock mapping. Verified live: all three commands published correctly, `ABORT` margin 20 the first time it fired |
+| Host-to-device calibration downlink (`src/emg_rx.c`, `SET_ACTIVATION`/`ACTIVATION_STATE`) | done and live-verified: apply, reject-without-mutating, and restore-defaults all confirmed on real hardware with zero packet loss during the exchange. `emg_activation_reconfigure` preserves the measured baseline across a parameter change and re-scales the accumulator on a `baseline_shift` change so the baseline itself does not silently move. RAM-only — a reset returns to compile-time defaults, no flash writes. The per-donning calibration flow that sends real values is not built yet |
 
 RAW remains available as the replayable source of truth, but it is no longer
 the only live path. The MCU also runs filter, features, Q18 classification,
