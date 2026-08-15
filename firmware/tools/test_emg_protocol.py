@@ -17,14 +17,21 @@ from emg_protocol import (
     HEADER_SIZE,
     MAGIC,
     MAX_PAYLOAD,
+    SET_MODE_APPLY,
+    SET_RESULT_ACCEPTED,
+    TYPE_ACTIVATION_STATE,
     TYPE_INFO,
     TYPE_INTENT,
     TYPE_RAW,
+    TYPE_SET_ACTIVATION,
     PacketParser,
     crc16,
+    decode_activation_state,
     decode_info,
     decode_intent,
     decode_raw,
+    encode_packet,
+    encode_set_activation,
 )
 
 FIXTURE = pathlib.Path(__file__).resolve().parents[1] / "test" / "fixture.bin"
@@ -225,6 +232,61 @@ def test_raw_decoder_rejects_a_payload_too_short_for_its_header():
         decode_raw(b"\x07", 3)
 
 
+def test_activation_state_decoder():
+    state = decode_activation_state(
+        struct.pack("<BBBBiHH", 1, 3, 4, 1, 110, 0x0102, 0)
+    )
+
+    assert state.from_host
+    assert (state.factor, state.baseline_shift) == (3, 4)
+    assert state.last_result == SET_RESULT_ACCEPTED
+    assert state.threshold_floor == 110
+    assert state.applied_sequence == 0x0102
+    with pytest.raises(ValueError):
+        decode_activation_state(b"\x00" * 11)
+
+
+def test_own_encoder_round_trips_through_own_parser():
+    parser = PacketParser()
+    wire = encode_set_activation(5, mode=SET_MODE_APPLY, factor=3,
+                                 baseline_shift=4, threshold_floor=110)
+
+    packets = parser.feed(wire)
+
+    assert len(packets) == 1
+    assert packets[0].type == TYPE_SET_ACTIVATION
+    assert packets[0].sequence == 5
+    # timestamp is 0 by contract: the host does not own the device clock.
+    assert packets[0].timestamp_us == 0
+    mode, factor, shift, _reserved, floor = struct.unpack(
+        "<BBBBi", packets[0].payload
+    )
+    assert (mode, factor, shift, floor) == (1, 3, 4, 110)
+
+
+def test_set_encoder_rejects_what_the_firmware_would():
+    # A host bug should fail loudly at the sender, not travel to the board
+    # and come back as a silent last_result=2.
+    good = dict(mode=SET_MODE_APPLY, factor=3, baseline_shift=4,
+                threshold_floor=110)
+    for bad in (
+        dict(good, mode=7),
+        dict(good, factor=0),
+        dict(good, factor=256),
+        dict(good, baseline_shift=0),
+        dict(good, baseline_shift=9),
+        dict(good, threshold_floor=0),
+        dict(good, threshold_floor=3 * 32767),
+    ):
+        with pytest.raises(ValueError):
+            encode_set_activation(0, **bad)
+
+
+def test_generic_encoder_rejects_oversized_payloads():
+    with pytest.raises(ValueError):
+        encode_packet(TYPE_RAW, 0, 0, b"\x00" * (MAX_PAYLOAD + 1))
+
+
 def test_decodes_the_fixture_produced_by_the_c_encoder():
     """Cross-implementation check: C wrote these bytes, Python reads them.
 
@@ -235,10 +297,12 @@ def test_decodes_the_fixture_produced_by_the_c_encoder():
         pytest.skip(f"run `make check` in firmware/test to generate {FIXTURE.name}")
 
     parser = PacketParser()
-    packets = parser.feed(FIXTURE.read_bytes())
+    fixture_bytes = FIXTURE.read_bytes()
+    packets = parser.feed(fixture_bytes)
 
     assert [packet.type for packet in packets] == [
-        TYPE_INFO, TYPE_RAW, TYPE_RAW, TYPE_RAW, TYPE_INTENT, TYPE_INTENT
+        TYPE_INFO, TYPE_RAW, TYPE_RAW, TYPE_RAW, TYPE_INTENT, TYPE_INTENT,
+        TYPE_ACTIVATION_STATE, TYPE_SET_ACTIVATION,
     ]
 
     info = decode_info(packets[0].payload)
@@ -256,9 +320,25 @@ def test_decodes_the_fixture_produced_by_the_c_encoder():
     assert (intent.confidence, intent.signal_quality) == (200, 150)
     assert (intent.direction, intent.activation) == (-1, 40000)
 
+    state = decode_activation_state(packets[6].payload)
+    assert state.from_host
+    assert (state.factor, state.baseline_shift) == (3, 4)
+    assert state.threshold_floor == 110
+    assert state.applied_sequence == 0x0102
+
+    # The C-encoded SET_ACTIVATION must be byte-identical to this module's
+    # own encoding of the same request: the Python sender and the firmware
+    # receiver were written independently from PROTOCOL.md, and this is
+    # where a disagreement would surface.
+    python_wire = encode_set_activation(5, mode=SET_MODE_APPLY, factor=3,
+                                        baseline_shift=4,
+                                        threshold_floor=110)
+    assert python_wire in fixture_bytes
+    assert packets[7].sequence == 5
+
     # The fixture deliberately embeds leading junk, a RAW sequence jump of
     # 1 -> 3, and a repeated INTENT sequence.
-    assert parser.stats.accepted == 6
+    assert parser.stats.accepted == 8
     assert parser.stats.malformed == 0
     assert parser.stats.lost == 1
     assert parser.stats.duplicated == 1

@@ -25,6 +25,8 @@
 
 #define EMG_INFO_PAYLOAD_SIZE 8u
 #define EMG_INTENT_PAYLOAD_SIZE 8u
+#define EMG_ACTIVATION_STATE_PAYLOAD_SIZE 12u
+#define EMG_SET_ACTIVATION_PAYLOAD_SIZE 8u
 
 /* RAW payloads open with a wear bitmask and one reserved byte, so the samples
  * that follow stay 2-byte aligned. */
@@ -34,8 +36,27 @@
 typedef enum {
     EMG_TYPE_INFO = 0x00,
     EMG_TYPE_RAW = 0x01,
-    EMG_TYPE_INTENT = 0x02
+    EMG_TYPE_INTENT = 0x02,
+    EMG_TYPE_ACTIVATION_STATE = 0x03,
+    /* 0x80-0xFF is the host-to-device range. */
+    EMG_TYPE_SET_ACTIVATION = 0x80
 } emg_packet_type_t;
+
+typedef enum {
+    EMG_ACTIVATION_SOURCE_DEFAULTS = 0,
+    EMG_ACTIVATION_SOURCE_HOST = 1
+} emg_activation_source_t;
+
+typedef enum {
+    EMG_SET_RESULT_NONE = 0,
+    EMG_SET_RESULT_ACCEPTED = 1,
+    EMG_SET_RESULT_REJECTED = 2
+} emg_set_result_t;
+
+typedef enum {
+    EMG_SET_MODE_DEFAULTS = 0,
+    EMG_SET_MODE_APPLY = 1
+} emg_set_mode_t;
 
 typedef enum {
     EMG_COMMAND_REST = 0,
@@ -59,6 +80,29 @@ typedef struct {
     int8_t direction;
     uint16_t activation;
 } emg_intent_t;
+
+/* What the firmware is judging with right now, and how it got there. A state
+ * report rather than an ACK: an ACK can be lost and leaves the sender
+ * guessing, a periodic state is idempotent. */
+typedef struct {
+    uint8_t source;         /* emg_activation_source_t */
+    uint8_t factor;
+    uint8_t baseline_shift;
+    uint8_t last_result;    /* emg_set_result_t */
+    int32_t threshold_floor;
+    uint16_t applied_sequence; /* sequence of the last accepted SET */
+} emg_activation_state_t;
+
+/* One decoded host-to-device SET_ACTIVATION request. Range checking is the
+ * applier's job, not the decoder's: a rejected request must still be
+ * reportable as `last_result = 2`, which requires it to reach the caller. */
+typedef struct {
+    uint8_t mode;           /* emg_set_mode_t */
+    uint8_t factor;
+    uint8_t baseline_shift;
+    int32_t threshold_floor;
+    uint16_t sequence;      /* wire sequence, echoed in applied_sequence */
+} emg_set_activation_t;
 
 /* CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final XOR. */
 uint16_t emg_crc16(const uint8_t *data, size_t length);
@@ -87,5 +131,16 @@ size_t emg_encode_raw(uint8_t *out, size_t out_size, uint16_t sequence,
 
 size_t emg_encode_intent(uint8_t *out, size_t out_size, uint16_t sequence,
                          uint32_t timestamp_us, const emg_intent_t *intent);
+
+size_t emg_encode_activation_state(uint8_t *out, size_t out_size,
+                                   uint16_t sequence, uint32_t timestamp_us,
+                                   const emg_activation_state_t *state);
+
+/* Host-to-device encoder. On the MCU this exists for the host-side tests
+ * (they build the bytes the firmware receiver must parse); the production
+ * sender is the Python host. */
+size_t emg_encode_set_activation(uint8_t *out, size_t out_size,
+                                 uint16_t sequence,
+                                 const emg_set_activation_t *request);
 
 #endif /* EMG_PACKET_H */

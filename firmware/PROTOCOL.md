@@ -149,6 +149,71 @@ marginal, so a confidence floor would have passed them.
   needed clamping in that window. It reports contact and headroom, not
   certainty: a clipped window can still produce a confident wrong score.
 
+### `0x03` ACTIVATION_STATE
+
+The activation-threshold parameters the firmware is actually judging with,
+plus how it came to hold them. Emitted on the INFO cadence (startup, then
+every 2 seconds) and once immediately after every accepted **or rejected**
+`SET_ACTIVATION`, so a host that just sent one never waits a full period to
+learn the outcome.
+
+| Offset | Size | Field | Notes |
+| ---: | ---: | --- | --- |
+| 0 | 1 | `source` | `0` compile-time defaults, `1` host configuration |
+| 1 | 1 | `factor` | K in effect |
+| 2 | 1 | `baseline_shift` | shift in effect |
+| 3 | 1 | `last_result` | `0` no SET ever received, `1` last SET accepted, `2` last SET rejected (values out of range) |
+| 4 | 4 | `threshold_floor` | `int32`, floor in effect |
+| 8 | 2 | `applied_sequence` | `sequence` of the last **accepted** SET; `0` before the first |
+| 10 | 2 | `reserved` | write `0` |
+
+Payload length 12.
+
+This is a state report, not an acknowledgement. An ACK can be lost and
+leaves the sender guessing whether to repeat; a periodic state is idempotent
+— the host sends `SET_ACTIVATION` and watches ACTIVATION_STATE until it
+reflects the request, resending if it does not. It also answers "what is
+this board judging with right now" without any request, which the ROS
+bridge surfaces in `/diagnostics`.
+
+### `0x80` SET_ACTIVATION (host → device)
+
+The first host-to-device packet, carrying the per-donning calibration for
+the activation threshold. Same framing, same CRC, same resync rules as the
+device-to-host direction.
+
+| Offset | Size | Field | Notes |
+| ---: | ---: | --- | --- |
+| 0 | 1 | `mode` | `0` discard any host configuration and return to compile-time defaults (the value fields are ignored but must be present), `1` apply the values below |
+| 1 | 1 | `factor` | K, `1`–`255` |
+| 2 | 1 | `baseline_shift` | `1`–`8` |
+| 3 | 1 | `reserved` | write `0` |
+| 4 | 4 | `threshold_floor` | `int32`, `1` to `3*32767 - 1` |
+
+Payload length 8.
+
+- `mode = 0` exists so a host can *deliberately un-calibrate* the board — a
+  stale calibration from a previous wearer or donning is worse than none.
+  The bridge sends one of the two modes on every startup; "send nothing" is
+  not a state, because an un-reset MCU would silently keep the previous
+  session's RAM configuration.
+- `sequence` counts per type on the host side, like every other type.
+- `timestamp_us` is written as `0` and ignored: the host does not own the
+  device clock, and pretending otherwise would put fabricated timestamps
+  next to real ones.
+- Out-of-range values reject the packet as a whole (`last_result = 2`) and
+  leave the previous configuration untouched — never a partial apply.
+- Configuration lives in RAM only. A reset returns to defaults; the host
+  re-sends on its next startup handshake. No flash writes, no wear, and no
+  board that remembers the previous wearer.
+
+The firmware receiver obeys the same resynchronization rule as the host
+parser: on any malformed candidate, discard one byte and rescan for the
+magic. Bytes of unknown type in this direction are discarded the same way.
+Its receive buffer is small (configuration traffic is sparse); overflow
+drops bytes and counts them, and a packet torn by the drop fails CRC and
+resyncs like any other corruption.
+
 ## Receiver requirements
 
 The host parser must detect and count all four failure classes named in the
@@ -182,6 +247,14 @@ Version 1 now has real INFO/RAW recordings. Any incompatible change to an
 existing packet layout or field meaning requires a version bump; adding code
 that emits the already-specified INTENT packet does not.
 
+- **2026-08-15** — added `ACTIVATION_STATE` (`0x03`) and the first
+  host-to-device packet, `SET_ACTIVATION` (`0x80`), for per-donning
+  activation-threshold calibration. No version bump: `0x03` is a new
+  device-to-host type old parsers already skip by the unknown-type rule, and
+  `0x80` is the first use of the range this document reserved for
+  host-to-device traffic from the start. No existing field changed meaning
+  or layout.
+
 - **2026-08-14** — exercised INFO and RAW against the real STM32 acquisition
   firmware at 2000.1 Hz with zero lost, malformed, or duplicated packets in a
   15-second run. INTENT remains specified and host-tested but not emitted.
@@ -201,5 +274,6 @@ that emits the already-specified INTENT packet does not.
   loss is reported to the consumer, not repaired. A dropped RAW packet is a
   logged gap in the dataset, not an error to recover from.
 - **No encryption or authentication.** It is a wired point-to-point link.
-- **No host-to-device commands yet.** Reserved: `type` `0x80`–`0xFF` is the
-  host-to-device range and stays unused in v1.
+- **No host-to-device commands beyond `SET_ACTIVATION`.** `type`
+  `0x81`–`0xFF` remains reserved for future host-to-device traffic
+  (proportional-control calibration is the expected next tenant).

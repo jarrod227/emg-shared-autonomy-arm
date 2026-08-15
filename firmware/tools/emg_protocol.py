@@ -1,7 +1,10 @@
-"""Host-side decoder for the Cheez sEMG serial protocol v1.
+"""Host side of the Cheez sEMG serial protocol v1.
 
-Written independently from `../src/emg_packet.c` against `../PROTOCOL.md`;
-`test_emg_protocol.py` checks the two agree on bytes the C encoder produced.
+Decodes every device-to-host packet and encodes the host-to-device
+SET_ACTIVATION request. Written independently from `../src/emg_packet.c`
+against `../PROTOCOL.md`; `test_emg_protocol.py` checks the two agree on
+bytes the C encoder produced — in both directions, since the C fixture also
+contains a SET_ACTIVATION this encoder must reproduce byte for byte.
 
 The parser is fail-closed. A packet reaches the caller only after its magic,
 version, type, length bound, and CRC all check out, and every rejection is
@@ -24,7 +27,19 @@ MAX_PACKET = HEADER_SIZE + MAX_PAYLOAD + CRC_SIZE
 TYPE_INFO = 0x00
 TYPE_RAW = 0x01
 TYPE_INTENT = 0x02
-KNOWN_TYPES = (TYPE_INFO, TYPE_RAW, TYPE_INTENT)
+TYPE_ACTIVATION_STATE = 0x03
+# 0x80-0xFF is the host-to-device range.
+TYPE_SET_ACTIVATION = 0x80
+KNOWN_TYPES = (TYPE_INFO, TYPE_RAW, TYPE_INTENT, TYPE_ACTIVATION_STATE,
+               TYPE_SET_ACTIVATION)
+
+ACTIVATION_SOURCE_DEFAULTS = 0
+ACTIVATION_SOURCE_HOST = 1
+SET_RESULT_NONE = 0
+SET_RESULT_ACCEPTED = 1
+SET_RESULT_REJECTED = 2
+SET_MODE_DEFAULTS = 0
+SET_MODE_APPLY = 1
 
 COMMAND_NAMES = {0: "REST", 1: "NEXT_TARGET", 2: "CONFIRM", 3: "ABORT"}
 
@@ -105,6 +120,70 @@ def decode_intent(payload):
         "<BBBbHH", payload
     )
     return Intent(command, confidence, quality, direction, activation)
+
+
+@dataclass(frozen=True)
+class ActivationState:
+    """What the firmware is judging with right now, and how it got there.
+
+    A state report rather than an ACK: the host sends SET_ACTIVATION and
+    watches this until it reflects the request, resending if it does not.
+    """
+
+    source: int          # ACTIVATION_SOURCE_*
+    factor: int
+    baseline_shift: int
+    last_result: int     # SET_RESULT_*
+    threshold_floor: int
+    applied_sequence: int
+
+    @property
+    def from_host(self):
+        return self.source == ACTIVATION_SOURCE_HOST
+
+
+def decode_activation_state(payload):
+    if len(payload) != 12:
+        raise ValueError(
+            f"ACTIVATION_STATE payload must be 12 bytes, got {len(payload)}"
+        )
+    source, factor, shift, result, floor, applied, _ = struct.unpack(
+        "<BBBBiHH", payload
+    )
+    return ActivationState(source, factor, shift, result, floor, applied)
+
+
+def encode_packet(packet_type, sequence, timestamp_us, payload=b""):
+    """Frame one packet exactly as the C encoder does."""
+    if not 0 <= len(payload) <= MAX_PAYLOAD:
+        raise ValueError(f"payload must be 0..{MAX_PAYLOAD} bytes")
+    header = MAGIC + bytes([PROTOCOL_VERSION, packet_type]) + struct.pack(
+        "<HHI", len(payload), sequence % _SEQUENCE_MODULO,
+        timestamp_us % _TIMESTAMP_MODULO
+    )
+    body = header[2:] + payload
+    return header + payload + struct.pack("<H", crc16(body))
+
+
+def encode_set_activation(sequence, *, mode, factor, baseline_shift,
+                          threshold_floor):
+    """Build the host-to-device calibration packet.
+
+    Range checking here mirrors what the firmware will accept, so a host
+    bug fails loudly at the sender instead of as a silent last_result=2.
+    timestamp_us is 0 by contract: the host does not own the device clock.
+    """
+    if mode not in (SET_MODE_DEFAULTS, SET_MODE_APPLY):
+        raise ValueError(f"unknown SET_ACTIVATION mode {mode}")
+    if not 1 <= factor <= 255:
+        raise ValueError("factor must be in 1..255")
+    if not 1 <= baseline_shift <= 8:
+        raise ValueError("baseline_shift must be in 1..8")
+    if not 1 <= threshold_floor < 3 * 32767:
+        raise ValueError("threshold_floor must be in 1..3*32767-1")
+    payload = struct.pack("<BBBBi", mode, factor, baseline_shift, 0,
+                          threshold_floor)
+    return encode_packet(TYPE_SET_ACTIVATION, sequence, 0, payload)
 
 
 @dataclass(frozen=True)

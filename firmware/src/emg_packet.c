@@ -136,6 +136,49 @@ size_t emg_encode_raw(uint8_t *out, size_t out_size, uint16_t sequence,
     return total;
 }
 
+size_t emg_encode_activation_state(uint8_t *out, size_t out_size,
+                                   uint16_t sequence, uint32_t timestamp_us,
+                                   const emg_activation_state_t *state)
+{
+    uint8_t payload[EMG_ACTIVATION_STATE_PAYLOAD_SIZE];
+
+    if (state == NULL) {
+        return 0u;
+    }
+    payload[0] = state->source;
+    payload[1] = state->factor;
+    payload[2] = state->baseline_shift;
+    payload[3] = state->last_result;
+    put_u32(&payload[4], (uint32_t)state->threshold_floor);
+    put_u16(&payload[8], state->applied_sequence);
+    payload[10] = 0u;
+    payload[11] = 0u;
+    return emg_encode(out, out_size, (uint8_t)EMG_TYPE_ACTIVATION_STATE,
+                      sequence, timestamp_us, payload,
+                      EMG_ACTIVATION_STATE_PAYLOAD_SIZE);
+}
+
+size_t emg_encode_set_activation(uint8_t *out, size_t out_size,
+                                 uint16_t sequence,
+                                 const emg_set_activation_t *request)
+{
+    uint8_t payload[EMG_SET_ACTIVATION_PAYLOAD_SIZE];
+
+    if (request == NULL) {
+        return 0u;
+    }
+    payload[0] = request->mode;
+    payload[1] = request->factor;
+    payload[2] = request->baseline_shift;
+    payload[3] = 0u;
+    put_u32(&payload[4], (uint32_t)request->threshold_floor);
+    /* timestamp_us is 0 by contract: the host does not own the device
+     * clock, and a fabricated value next to real ones would mislead. */
+    return emg_encode(out, out_size, (uint8_t)EMG_TYPE_SET_ACTIVATION,
+                      sequence, 0u, payload,
+                      EMG_SET_ACTIVATION_PAYLOAD_SIZE);
+}
+
 size_t emg_encode_intent(uint8_t *out, size_t out_size, uint16_t sequence,
                          uint32_t timestamp_us, const emg_intent_t *intent)
 {

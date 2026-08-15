@@ -150,6 +150,49 @@ static void test_info_and_intent_fields_round_trip(void)
     CHECK(read_u16(&out[16]) == 40000u);
 }
 
+static void test_activation_state_layout(void)
+{
+    uint8_t out[EMG_MAX_PACKET];
+    const emg_activation_state_t state = {
+        1u, 3u, 4u, 1u, 110, 0x0102u,
+    };
+
+    CHECK(emg_encode_activation_state(out, sizeof(out), 11u, 7000u, &state)
+          == EMG_HEADER_SIZE + EMG_ACTIVATION_STATE_PAYLOAD_SIZE
+             + EMG_CRC_SIZE);
+    CHECK(out[3] == EMG_TYPE_ACTIVATION_STATE);
+    CHECK(read_u16(&out[4]) == EMG_ACTIVATION_STATE_PAYLOAD_SIZE);
+    CHECK(out[12] == 1u);                    /* source */
+    CHECK(out[13] == 3u && out[14] == 4u);   /* factor, shift */
+    CHECK(out[15] == 1u);                    /* last_result */
+    CHECK(read_u32(&out[16]) == 110u);       /* threshold_floor */
+    CHECK(read_u16(&out[20]) == 0x0102u);    /* applied_sequence */
+    CHECK(out[22] == 0u && out[23] == 0u);   /* reserved */
+    CHECK(emg_encode_activation_state(out, sizeof(out), 0u, 0u, NULL) == 0u);
+}
+
+static void test_set_activation_layout_and_zero_timestamp(void)
+{
+    uint8_t out[EMG_MAX_PACKET];
+    emg_set_activation_t request = {0};
+
+    request.mode = 1u;
+    request.factor = 3u;
+    request.baseline_shift = 4u;
+    request.threshold_floor = 110;
+    CHECK(emg_encode_set_activation(out, sizeof(out), 5u, &request)
+          == EMG_HEADER_SIZE + EMG_SET_ACTIVATION_PAYLOAD_SIZE
+             + EMG_CRC_SIZE);
+    CHECK(out[3] == EMG_TYPE_SET_ACTIVATION);
+    /* The host does not own the device clock: timestamp is 0 by contract. */
+    CHECK(read_u32(&out[8]) == 0u);
+    CHECK(out[12] == 1u);
+    CHECK(out[13] == 3u && out[14] == 4u);
+    CHECK(out[15] == 0u);                    /* reserved */
+    CHECK(read_u32(&out[16]) == 110u);
+    CHECK(emg_encode_set_activation(out, sizeof(out), 0u, NULL) == 0u);
+}
+
 /* Written to fixture.bin for the Python parser tests. Deliberately includes
  * leading junk, a sequence gap, and a repeated sequence so the decoder's
  * resync and loss/duplicate accounting are exercised against bytes this
@@ -180,6 +223,24 @@ static int emit_fixture(const char *path)
     fwrite(out, 1, emg_encode_intent(out, sizeof(out), 0u, 5000u, &intent), file);
     /* Repeats sequence 0 -> one INTENT duplicate. */
     fwrite(out, 1, emg_encode_intent(out, sizeof(out), 0u, 5000u, &intent), file);
+    {
+        /* The two 2026-08-15 additions, so the Python side can check its
+         * decoder against these bytes and its own SET encoder against the
+         * exact bytes this one produced. */
+        const emg_activation_state_t state = {1u, 3u, 4u, 1u, 110, 0x0102u};
+        emg_set_activation_t request = {0};
+
+        request.mode = 1u;
+        request.factor = 3u;
+        request.baseline_shift = 4u;
+        request.threshold_floor = 110;
+        fwrite(out, 1,
+               emg_encode_activation_state(out, sizeof(out), 0u, 6000u,
+                                           &state), file);
+        fwrite(out, 1,
+               emg_encode_set_activation(out, sizeof(out), 5u, &request),
+               file);
+    }
     fclose(file);
     printf("  wrote %s\n", path);
     return 0;
@@ -199,6 +260,8 @@ int main(int argc, char **argv)
     test_raw_samples_are_little_endian_and_unmodified();
     test_wear_mask_travels_with_its_samples();
     test_info_and_intent_fields_round_trip();
+    test_activation_state_layout();
+    test_set_activation_layout_and_zero_timestamp();
 
     if (failures == 0) {
         printf("  all checks passed\n");
