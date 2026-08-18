@@ -12,7 +12,7 @@ them. This test runs a real node against a fake reader and pins the contract.
 import json
 import queue
 
-from assistive_interfaces.msg import AssistiveIntent
+from assistive_interfaces.msg import AssistiveIntent, ViewControlCommand
 import pytest
 import rclpy
 
@@ -35,6 +35,9 @@ from emg_intent_bridge.runtime import ReceivedIntent
 
 
 SELECTOR_DEFAULT_MIN_CONFIDENCE = 0.5
+# handoff_controller's view_confidence_min / view_signal_quality_min defaults.
+CONTROLLER_VIEW_MIN_CONFIDENCE = 0.6
+CONTROLLER_VIEW_MIN_SIGNAL_QUALITY = 0.5
 
 
 def activation_state(*, source=ACTIVATION_SOURCE_DEFAULTS, factor=3,
@@ -127,14 +130,26 @@ def bridge():
     node.destroy_node()
 
 
-def device_intent(command, timestamp_us, *, confidence=200, quality=255):
+def device_intent(command, timestamp_us, *, confidence=200, quality=255,
+                  direction=0, activation=0):
     return DeviceIntent(
         sequence=timestamp_us // 50_000,
         timestamp_us=timestamp_us,
         command=command,
         confidence=confidence,
         signal_quality=quality,
+        direction=direction,
+        activation=activation,
     )
+
+
+def view_sink(node):
+    """Collect everything the node publishes on the view-control topic."""
+    received = []
+    node.create_subscription(
+        ViewControlCommand, "/assistive_view_control", received.append, 10
+    )
+    return received
 
 
 def drain(node, reader, intents, *, expect):
@@ -148,6 +163,101 @@ def drain(node, reader, intents, *, expect):
         rclpy.spin_once(node, timeout_sec=0.05)
         if len(expect[0]) >= expect[1]:
             return
+
+
+def test_published_view_confidence_clears_the_controller_gate(bridge):
+    # The same defect the discrete path had, on a different gate. The MCU byte
+    # is a classifier margin; live events measured 2..162, which is
+    # 0.008..0.635 once scaled, against a view_confidence_min of 0.6. Mapping
+    # it would drop almost every view command silently.
+    node, reader, _published = bridge
+    views = view_sink(node)
+
+    drain(node, reader, [
+        device_intent(REST, 1_000_000, confidence=2, direction=1,
+                      activation=40_000),
+    ], expect=(views, 1))
+
+    assert len(views) == 1
+    assert views[0].confidence >= CONTROLLER_VIEW_MIN_CONFIDENCE
+    assert 0.0 <= views[0].confidence <= 1.0
+
+
+def test_signal_quality_is_mapped_faithfully_unlike_confidence(bridge):
+    # signal_quality measures ADC saturation in the window, which is a real
+    # reason to refuse to steer, so it is not overridden the way confidence is.
+    node, reader, _published = bridge
+    views = view_sink(node)
+
+    drain(node, reader, [
+        device_intent(REST, 1_000_000, quality=255),
+        device_intent(REST, 1_050_000, quality=0),
+    ], expect=(views, 2))
+
+    assert views[0].signal_quality == pytest.approx(1.0)
+    assert views[1].signal_quality == pytest.approx(0.0)
+    assert views[1].signal_quality < CONTROLLER_VIEW_MIN_SIGNAL_QUALITY
+
+
+def test_every_packet_publishes_a_view_command_including_rest(bridge):
+    # A silent view channel is indistinguishable from a dead one. REST is
+    # published as HOLD so the controller's watchdog is never left guessing.
+    node, reader, _published = bridge
+    views = view_sink(node)
+
+    drain(node, reader, [
+        device_intent(REST, 1_000_000),
+        device_intent(REST, 1_050_000, direction=-1, activation=65_535),
+        device_intent(REST, 1_100_000, direction=1, activation=0),
+    ], expect=(views, 3))
+
+    assert [view.direction for view in views] == [
+        ViewControlCommand.HOLD,
+        ViewControlCommand.LEFT,
+        ViewControlCommand.RIGHT,
+    ]
+    assert [view.activation for view in views] == pytest.approx(
+        [0.0, 1.0, 0.0]
+    )
+    assert [view.sequence for view in views] == [0, 1, 2]
+
+
+def test_the_view_stream_does_not_wait_for_the_confirmation_gate(bridge):
+    # The gate rejects a single spurious *event*; it has no meaning for a
+    # stream the wearer is steering by watching the arm. One packet is enough.
+    node, reader, published = bridge
+    views = view_sink(node)
+
+    drain(node, reader, [
+        device_intent(NEXT_TARGET, 1_000_000, direction=1, activation=32_768),
+    ], expect=(views, 1))
+
+    assert published == []
+    assert len(views) == 1
+    assert views[0].direction == ViewControlCommand.RIGHT
+    assert views[0].activation == pytest.approx(0.5, abs=1e-4)
+
+
+def test_an_unconfirmed_handshake_publishes_hold_not_silence():
+    # activation is normalized against the configuration the board confirms it
+    # is judging with. Without that confirmation the number means nothing, but
+    # going silent would make a deliberately still source and a dead link look
+    # identical to the watchdog.
+    reader = FakeReader()
+    node = EmgIntentBridge(reader=reader)
+    views = view_sink(node)
+    try:
+        assert not node._handshake_confirmed
+
+        drain(node, reader, [
+            device_intent(REST, 1_000_000, direction=-1, activation=65_535),
+        ], expect=(views, 1))
+
+        assert len(views) == 1
+        assert views[0].direction == ViewControlCommand.HOLD
+        assert views[0].activation == pytest.approx(0.0)
+    finally:
+        node.destroy_node()
 
 
 def test_published_confidence_clears_the_selector_default(bridge):

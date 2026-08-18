@@ -113,5 +113,7 @@ class IntentStreamDecoder:
                 confidence=intent.confidence,
                 signal_quality=intent.signal_quality,
                 stream_discontinuity=gap > 0,
+                direction=intent.direction,
+                activation=intent.activation,
             ))
         return decoded

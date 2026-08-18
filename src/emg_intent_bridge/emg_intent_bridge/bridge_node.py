@@ -4,7 +4,7 @@ import json
 import pathlib
 import time
 
-from assistive_interfaces.msg import AssistiveIntent
+from assistive_interfaces.msg import AssistiveIntent, ViewControlCommand
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 import rclpy
 from rclpy.node import Node
@@ -37,6 +37,15 @@ from .runtime import DeviceClockMapper, SerialIntentReader
 # right configuration from an identical previous session is exactly as
 # calibrated as one that just applied it. Resends therefore reuse one
 # sequence value; the firmware's application is idempotent.
+# The wire uses -1/0/+1; ROS uses named constants. Kept as a table so an
+# unexpected value raises a KeyError instead of silently steering one way:
+# DeviceIntent already rejects anything outside this domain on construction.
+_VIEW_DIRECTIONS = {
+    -1: ViewControlCommand.LEFT,
+    0: ViewControlCommand.HOLD,
+    1: ViewControlCommand.RIGHT,
+}
+
 _HANDSHAKE_SEQUENCE = 1
 _HANDSHAKE_RESEND_SEC = 3.0
 
@@ -62,6 +71,9 @@ class EmgIntentBridge(Node):
         self.declare_parameter("confirmation_window_sec", 5.5)
         self.declare_parameter("confirm_abort_override_sec", 0.25)
         self.declare_parameter("intent_topic", "/assistive_intent")
+        self.declare_parameter(
+            "view_control_topic", "/assistive_view_control"
+        )
         self.declare_parameter("frame_id", "stm32_emg")
         # Path to a calibration JSON from emg_calibrate.py, or "" for none.
         # Both cases send an explicit request on startup: with a file, the
@@ -95,6 +107,21 @@ class EmgIntentBridge(Node):
             str(self.get_parameter("intent_topic").value),
             intent_qos,
         )
+        # Matches the controller's subscription exactly: KEEP_LAST(1) and
+        # VOLATILE, per the ViewControlCommand contract. A mismatch here is not
+        # an error anyone sees, it is silence.
+        view_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self._view_publisher = self.create_publisher(
+            ViewControlCommand,
+            str(self.get_parameter("view_control_topic").value),
+            view_qos,
+        )
+        self._view_sequence = 0
+        self._view_published_count = 0
         self._diagnostic_publisher = self.create_publisher(
             DiagnosticArray, "/diagnostics", 10
         )
@@ -295,6 +322,8 @@ class EmgIntentBridge(Node):
                 self._gate.invalidate()
                 continue
 
+            self._publish_view_command(received.intent, source_ros_ns)
+
             if received.intent.command != REST:
                 # Every MCU event is logged with its device time, published or
                 # not. Counters alone cannot say whether a pair missed the
@@ -336,6 +365,54 @@ class EmgIntentBridge(Node):
                 received.intent.timestamp_us - confirmed.timestamp_us,
             ) * 1000
             self._publish_intent(confirmed, confirmed_source_ros_ns)
+
+    def _publish_view_command(self, intent, source_ros_ns):
+        """Publish the proportional half of one INTENT packet.
+
+        Every packet carries both halves. The event gate emits at most one
+        discrete command per gesture; direction and activation are continuous,
+        one per 50 ms hop, and go to a different consumer. They are published
+        here without waiting on the confirmation gate, which exists to reject
+        single spurious *events* and has no meaning for a stream the wearer is
+        steering visually.
+
+        REST packets are published too, as HOLD. The protocol states the
+        absence of intent rather than implying it, and a silent view channel is
+        indistinguishable from a dead one; the controller's watchdog would then
+        have to guess which it was.
+        """
+        message = ViewControlCommand()
+        message.header.stamp = Time(nanoseconds=source_ros_ns).to_msg()
+        message.header.frame_id = self._frame_id
+        if not self._handshake_confirmed:
+            # The board has not confirmed which activation configuration it is
+            # judging with, and activation is normalized against exactly that.
+            # HOLD rather than silence: it keeps the controller's watchdog fed
+            # with a true statement instead of making a dead link and a
+            # deliberately still one look identical.
+            direction = ViewControlCommand.HOLD
+            activation = 0.0
+        else:
+            direction = _VIEW_DIRECTIONS[intent.direction]
+            activation = intent.activation / 65535.0
+        message.direction = direction
+        message.activation = activation
+        # Same reasoning as the discrete path, and the same measured numbers:
+        # the MCU byte is a Q18 classifier margin, and live events ran 2..162.
+        # Scaled into [0, 1] that is 0.008..0.635 against a view_confidence_min
+        # of 0.6, so almost every view command would be dropped by a gate the
+        # margin was never validated against. Publication is the confidence
+        # statement; the raw margin stays observable in /diagnostics.
+        message.confidence = 1.0
+        # signal_quality is mapped faithfully, unlike confidence, because it
+        # does measure something physical: the firmware derives it from ADC
+        # saturations in the window, and a clipping window is a real reason to
+        # refuse to steer.
+        message.signal_quality = intent.signal_quality / 255.0
+        message.sequence = self._view_sequence
+        self._view_sequence = (self._view_sequence + 1) & 0xFFFF_FFFF
+        self._view_publisher.publish(message)
+        self._view_published_count += 1
 
     def _publish_intent(self, intent, source_ros_ns):
         message = AssistiveIntent()

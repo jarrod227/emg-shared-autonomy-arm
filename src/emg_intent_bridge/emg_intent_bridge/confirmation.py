@@ -47,6 +47,14 @@ class DeviceIntent:
     confidence: int
     signal_quality: int
     stream_discontinuity: bool = False
+    # The proportional half of the same packet. `command` is the event gate's
+    # output, at most one per gesture; these two are a continuous stream, one
+    # per 50 ms hop, and the two halves are read by different consumers. The
+    # firmware normalizes `activation` against the session reference it was
+    # calibrated with, so an uncalibrated board reports direction 0, which
+    # reads downstream as HOLD and claims no search episode.
+    direction: int = 0
+    activation: int = 0
 
     def __post_init__(self):
         if self.command not in KNOWN_COMMANDS:
@@ -55,6 +63,10 @@ class DeviceIntent:
             raise ValueError("confidence must be in 0..255")
         if not 0 <= self.signal_quality <= 255:
             raise ValueError("signal_quality must be in 0..255")
+        if self.direction not in (-1, 0, 1):
+            raise ValueError(f"direction must be -1, 0 or 1, got {self.direction}")
+        if not 0 <= self.activation <= 65535:
+            raise ValueError("activation must be in 0..65535")
 
 
 @dataclass(frozen=True)
