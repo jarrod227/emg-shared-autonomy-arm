@@ -663,13 +663,34 @@ action. It uses independent, tighter angle and speed limits.
 Stable hand acquisition cancels search, waits for a confirmed stop, and then
 uses a new fresh stereo burst before entering `HANDOFF_READY`.
 
-Only the search states accept proportional view commands. Activation selects
-angle, not speed; configured relative travel is capped at 45 degrees and by
+Only the search states accept proportional view commands, and the converse
+also holds: while a search is actively sweeping, proportional view commands are
+the *only* live input. `NEXT_TARGET` and `CONFIRM` do not act until the search
+has seen what it was looking for -- an object for `TARGET_SEARCH`, the hand for
+`HANDOFF_SEARCH` -- at which point the sweep stops and they become live. One
+gesture can therefore serve as both a discrete intent and a continuous
+direction without ambiguity, because state and search phase decide which
+reading applies, not the order commands happen to arrive. The stopping sweep is
+also the only mode feedback the wearer gets, and it is why the mode is
+observable at all: the system has no display, sound, or haptic.
+
+Activation selects angle, not speed; configured relative travel is capped at 45 degrees and by
 absolute joint/collision limits. Two search goals may never execute
 concurrently. A newer command smoothly preempts the old goal, stale command
 holds position, and search timeout follows the defined hold/return/failure
 policy. `ABORT` bypasses smoothing, cancels active motion, and has global
 priority.
+
+`ABORT` ends with an empty gripper. An abort taken while holding releases the
+object where the arm stopped and then returns home, so reaching `IDLE` always
+means the gripper is empty rather than merely being assumed to. Carrying the
+object home was rejected: it needs an "idle but holding" condition, and that
+weakens the invariant instead of keeping it. Releasing in place is scoped to
+the tabletop setting and is not a general policy. The release does not reuse
+the handover `RELEASE` path, whose gates require a fresh, confident hand ready
+to receive; an abort implies no such thing. `ABORT` remains immediate, because
+what stops instantly is the arm, and the release happens at the pose it already
+stopped in. `ABORT` is not accepted in `IDLE` or during `RETURN_HOME`.
 
 `HANDOFF_READY -> RELEASE` additionally requires a fresh, confident,
 N-frame-stable hand point inside the configured 3D delivery volume plus the
