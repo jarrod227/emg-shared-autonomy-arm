@@ -12,6 +12,7 @@ import pytest
 import rclpy
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import Bool
 from target_selector.markerless_candidate_gate_node import (
     MarkerlessCandidateGateNode,
 )
@@ -726,5 +727,202 @@ def test_tf_recovery_and_target_loss_require_new_confirm():
             gate_node.destroy_node()
         if helper is not None:
             helper.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+def sweeping_qos():
+    """Return the latched QoS the handoff controller publishes the flag with."""
+    return QoSProfile(
+        depth=1,
+        durability=DurabilityPolicy.TRANSIENT_LOCAL,
+    )
+
+
+def test_intent_is_suppressed_while_a_search_sweeps():
+    # While a search sweeps, a gesture means view direction and nothing else.
+    # This node had no idea the robot was searching, so it cycled candidates
+    # underneath a wearer who was aiming the camera.
+    candidate_topic = '/test/markerless_sweep_gate/candidates'
+    intent_topic = '/test/markerless_sweep_gate/intent'
+    sweeping_topic = '/test/markerless_sweep_gate/sweeping'
+    rclpy.init()
+    gate_node = None
+    helper = None
+    try:
+        gate_node = MarkerlessCandidateGateNode(
+            parameter_overrides=[
+                Parameter('candidate_topic', value=candidate_topic),
+                Parameter('intent_topic', value=intent_topic),
+                Parameter('search_sweeping_topic', value=sweeping_topic),
+                Parameter('required_frames', value=1),
+                Parameter('max_age_sec', value=1.0),
+                Parameter('last_seen_timeout_sec', value=1.0),
+            ]
+        )
+        helper = rclpy.create_node('markerless_sweep_gate_test_helper')
+        candidate_publisher = helper.create_publisher(
+            ObjectCandidateArray, candidate_topic, 10
+        )
+        intent_publisher = helper.create_publisher(
+            AssistiveIntent, intent_topic, 10
+        )
+        sweeping_publisher = helper.create_publisher(
+            Bool, sweeping_topic, sweeping_qos()
+        )
+        assert spin_until(
+            (gate_node, helper),
+            lambda: (
+                candidate_publisher.get_subscription_count() == 1
+                and intent_publisher.get_subscription_count() == 1
+                and sweeping_publisher.get_subscription_count() == 1
+            ),
+        )
+
+        source_time = helper.get_clock().now().nanoseconds - 50_000_000
+        candidate_publisher.publish(
+            candidate_message(
+                source_time,
+                detections=(
+                    (2, 'bottle', (0.3, 0.0, 0.7)),
+                    (7, 'cup', (0.4, 0.0, 0.7)),
+                ),
+            )
+        )
+        assert spin_until(
+            (gate_node, helper),
+            lambda: gate_node.processed_message_count == 1,
+        )
+        assert gate_node.last_lock_decision.selected_candidate.track_id == 2
+
+        sweeping_publisher.publish(Bool(data=True))
+        assert spin_until(
+            (gate_node, helper), lambda: gate_node.search_sweeping
+        )
+
+        intent_publisher.publish(
+            intent_message(helper, AssistiveIntent.NEXT_TARGET, 0)
+        )
+        assert spin_until(
+            (gate_node, helper),
+            lambda: gate_node.suppressed_intent_count == 1,
+        )
+        assert gate_node.last_lock_decision.selected_candidate.track_id == 2
+
+        # Suppression is not rejection: the sequence watermark still advanced,
+        # so the same command cannot be replayed once the sweep ends.
+        sweeping_publisher.publish(Bool(data=False))
+        assert spin_until(
+            (gate_node, helper), lambda: not gate_node.search_sweeping
+        )
+        intent_publisher.publish(
+            intent_message(helper, AssistiveIntent.NEXT_TARGET, 0)
+        )
+        assert spin_until(
+            (gate_node, helper),
+            lambda: gate_node.processed_intent_count == 2,
+        )
+        assert gate_node.last_lock_decision.selected_candidate.track_id == 2
+
+        # A newer sequence acts normally again.
+        intent_publisher.publish(
+            intent_message(helper, AssistiveIntent.NEXT_TARGET, 1)
+        )
+        assert spin_until(
+            (gate_node, helper),
+            lambda: (
+                gate_node.last_lock_decision.selected_candidate.track_id == 7
+            ),
+        )
+        assert gate_node.suppressed_intent_count == 1
+    finally:
+        if gate_node is not None:
+            gate_node.destroy_node()
+        if helper is not None:
+            helper.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+def test_abort_still_clears_the_lock_during_a_sweep():
+    # ABORT keeps global priority. It is handled before the sweep gate for the
+    # same reason it is handled before every other check in this callback.
+    candidate_topic = '/test/markerless_sweep_abort/candidates'
+    intent_topic = '/test/markerless_sweep_abort/intent'
+    sweeping_topic = '/test/markerless_sweep_abort/sweeping'
+    rclpy.init()
+    gate_node = None
+    helper = None
+    try:
+        gate_node = MarkerlessCandidateGateNode(
+            parameter_overrides=[
+                Parameter('candidate_topic', value=candidate_topic),
+                Parameter('intent_topic', value=intent_topic),
+                Parameter('search_sweeping_topic', value=sweeping_topic),
+                Parameter('required_frames', value=1),
+                Parameter('max_age_sec', value=1.0),
+                Parameter('last_seen_timeout_sec', value=1.0),
+            ]
+        )
+        helper = rclpy.create_node('markerless_sweep_abort_test_helper')
+        candidate_publisher = helper.create_publisher(
+            ObjectCandidateArray, candidate_topic, 10
+        )
+        intent_publisher = helper.create_publisher(
+            AssistiveIntent, intent_topic, 10
+        )
+        sweeping_publisher = helper.create_publisher(
+            Bool, sweeping_topic, sweeping_qos()
+        )
+        assert spin_until(
+            (gate_node, helper),
+            lambda: (
+                candidate_publisher.get_subscription_count() == 1
+                and intent_publisher.get_subscription_count() == 1
+                and sweeping_publisher.get_subscription_count() == 1
+            ),
+        )
+
+        source_time = helper.get_clock().now().nanoseconds - 50_000_000
+        candidate_publisher.publish(candidate_message(source_time))
+        assert spin_until(
+            (gate_node, helper),
+            lambda: gate_node.processed_message_count == 1,
+        )
+        sweeping_publisher.publish(Bool(data=True))
+        assert spin_until(
+            (gate_node, helper), lambda: gate_node.search_sweeping
+        )
+
+        intent_publisher.publish(
+            intent_message(helper, AssistiveIntent.ABORT, 3)
+        )
+        assert spin_until(
+            (gate_node, helper),
+            lambda: gate_node.last_lock_decision.selected_candidate is None,
+        )
+        assert gate_node.suppressed_intent_count == 0
+    finally:
+        if gate_node is not None:
+            gate_node.destroy_node()
+        if helper is not None:
+            helper.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+def test_the_flag_defaults_to_not_sweeping_before_any_controller_speaks():
+    # The default has to be permissive, because the publisher is latched: a
+    # node that starts after the controller gets the real value immediately,
+    # and with no controller running there is no sweep to protect against.
+    rclpy.init()
+    gate_node = None
+    try:
+        gate_node = MarkerlessCandidateGateNode()
+        assert not gate_node.search_sweeping
+        assert gate_node.suppressed_intent_count == 0
+    finally:
+        if gate_node is not None:
+            gate_node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

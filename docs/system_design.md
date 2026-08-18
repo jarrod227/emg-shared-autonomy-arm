@@ -674,6 +674,14 @@ reading applies, not the order commands happen to arrive. The stopping sweep is
 also the only mode feedback the wearer gets, and it is why the mode is
 observable at all: the system has no display, sound, or haptic.
 
+The controller states this as one derived public fact on latched
+`/handoff_search_sweeping`, and every consumer of the discrete intent stream
+respects it. Its internal search phases stay internal: what is published is
+what the system will do with a gesture, not how the controller is organized.
+`ABORT` is judged before that gate everywhere it appears, keeping global
+priority. A consumer suppressing a command still advances its intent-sequence
+watermark, so a command dropped during a sweep cannot be replayed after it.
+
 Activation selects angle, not speed; configured relative travel is capped at 45 degrees and by
 absolute joint/collision limits. Two search goals may never execute
 concurrently. A newer command smoothly preempts the old goal, stale command

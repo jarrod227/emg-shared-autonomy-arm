@@ -7,6 +7,7 @@ from ament_index_python.packages import get_package_share_directory
 from assistive_interfaces.msg import AssistiveIntent, ObjectCandidateArray
 from geometry_msgs.msg import PointStamped, PoseStamped
 import rclpy
+from std_msgs.msg import Bool
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -127,6 +128,7 @@ class MarkerlessCandidateGateNode(Node):
         self._last_intent_sequence = None
         self._processed_message_count = 0
         self._processed_intent_count = 0
+        self._suppressed_intent_count = 0
         self._published_target_count = 0
         target_qos = QoSProfile(
             depth=1,
@@ -149,6 +151,20 @@ class MarkerlessCandidateGateNode(Node):
             intent_topic.strip(),
             self._on_intent,
             10,
+        )
+        # While a search sweeps, a gesture means view direction and nothing
+        # else, so cycling or confirming a candidate would answer a command
+        # the wearer did not give. Latched to match the publisher, so starting
+        # mid-sweep reads the real value rather than the permissive default.
+        self._search_sweeping = False
+        self._sweeping_subscription = self.create_subscription(
+            Bool,
+            str(self.get_parameter('search_sweeping_topic').value).strip(),
+            self._on_search_sweeping,
+            QoSProfile(
+                depth=1,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            ),
         )
         self._watchdog_timer = self.create_timer(
             self._watchdog_period_sec,
@@ -179,6 +195,16 @@ class MarkerlessCandidateGateNode(Node):
     def processed_intent_count(self):
         """Return how many intent messages reached this subscription."""
         return self._processed_intent_count
+
+    @property
+    def suppressed_intent_count(self):
+        """Return how many intents were dropped for an active search sweep."""
+        return self._suppressed_intent_count
+
+    @property
+    def search_sweeping(self):
+        """Return whether a handoff search is currently sweeping."""
+        return self._search_sweeping
 
     @property
     def last_built_target_pose(self):
@@ -219,6 +245,9 @@ class MarkerlessCandidateGateNode(Node):
         self.declare_parameter('intent_max_age_sec', 0.5)
         self.declare_parameter('intent_future_tolerance_sec', 0.05)
         self.declare_parameter('intent_min_confidence', 0.5)
+        self.declare_parameter(
+            'search_sweeping_topic', '/handoff_search_sweeping'
+        )
 
     def _on_candidates(self, message):
         now_sec = self.get_clock().now().nanoseconds / 1_000_000_000
@@ -287,6 +316,17 @@ class MarkerlessCandidateGateNode(Node):
         if not self._accept_intent_sequence(message):
             return
 
+        if self._search_sweeping:
+            # Deliberately after the sequence check, so the watermark still
+            # advances: a command suppressed during the sweep must not become
+            # replayable once the sweep ends.
+            self._suppressed_intent_count += 1
+            self.get_logger().info(
+                f'ignored intent command {message.command} during an active '
+                f'search sweep: the gesture is view direction there'
+            )
+            return
+
         if message.command == AssistiveIntent.NEXT_TARGET:
             self._last_lock_decision = self._lock.next_target(now_sec)
         else:
@@ -310,6 +350,16 @@ class MarkerlessCandidateGateNode(Node):
     def _sequence_is_newer(sequence, previous):
         delta = (sequence - previous) & 0xFFFFFFFF
         return 0 < delta < 0x80000000
+
+    def _on_search_sweeping(self, message):
+        sweeping = bool(message.data)
+        if sweeping != self._search_sweeping:
+            self._search_sweeping = sweeping
+            self.get_logger().info(
+                'search sweep started: discrete intents are view direction'
+                if sweeping
+                else 'search sweep ended: discrete intents act again'
+            )
 
     def _accept_intent_sequence(self, message):
         sequence = int(message.sequence)

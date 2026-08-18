@@ -63,7 +63,7 @@ from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile
 from rclpy.time import Time
-from std_msgs.msg import Float64, String
+from std_msgs.msg import Bool, Float64, String
 
 from assistive_interfaces.msg import (
     AssistiveIntent,
@@ -283,6 +283,23 @@ class HandoffController(Node):
         )
 
         self._state_pub = self.create_publisher(String, "/handoff_state", 10)
+        # One derived, public fact: is a search actively sweeping right now?
+        # Consumers of the discrete intent stream need it because while the
+        # sweep runs, a gesture means view direction and nothing else, so
+        # acting on NEXT_TARGET or CONFIRM would answer a command the wearer
+        # did not give. SearchPhase itself stays internal; what is published
+        # is what the system will do with a gesture, not how this node is
+        # organized. Latched, so a consumer that starts or restarts mid-sweep
+        # learns the current value instead of assuming the permissive one.
+        self._sweeping_pub = self.create_publisher(
+            Bool,
+            "/handoff_search_sweeping",
+            QoSProfile(
+                depth=1,
+                durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            ),
+        )
+        self._published_sweeping: bool | None = None
         self._view_angle_pub = self.create_publisher(
             Float64, "/simulated_view_angle", 10
         )
@@ -293,6 +310,9 @@ class HandoffController(Node):
             self._view_update_period_sec, self._on_view_tick
         )
         self._publish_view_angle()
+        # Seed the latched flag at startup rather than waiting for the first
+        # change, so a consumer that comes up first has a value to read.
+        self._publish_sweeping()
 
         self.get_logger().info(
             "handoff_controller started in state 'idle' "
@@ -537,6 +557,9 @@ class HandoffController(Node):
     def _on_view_tick(self) -> None:
         self._view_motion.step(self._view_update_period_sec)
         self._publish_view_angle()
+        # Before the early return: a phase change is what ends a sweep, and
+        # ending one has to be announced as promptly as starting one.
+        self._publish_sweeping()
         if self._state not in (
             HandoffState.TARGET_SEARCH,
             HandoffState.HANDOFF_SEARCH,
@@ -1138,6 +1161,25 @@ class HandoffController(Node):
 
     def _publish_state(self) -> None:
         self._state_pub.publish(String(data=self._state.value))
+        self._publish_sweeping()
+
+    def _publish_sweeping(self) -> None:
+        """Publish whether a search is actively sweeping, on change only.
+
+        Called from the state publisher and from the view tick rather than
+        from each of the several places SearchPhase is assigned: the tick runs
+        far faster than a wearer can produce a gesture, so the flag cannot be
+        stale when it matters, and there is no assignment site left to forget.
+        """
+        sweeping = (
+            self._state
+            in (HandoffState.TARGET_SEARCH, HandoffState.HANDOFF_SEARCH)
+            and self._search_phase is SearchPhase.ACTIVE
+        )
+        if sweeping == self._published_sweeping:
+            return
+        self._published_sweeping = sweeping
+        self._sweeping_pub.publish(Bool(data=sweeping))
 
 
 def main() -> None:
