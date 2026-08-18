@@ -76,6 +76,85 @@ class SearchProfile:
         return min(self.max_angle, max(self.min_angle, target))
 
 
+class DiscreteViewSweep:
+    """One bounded step per event, reversing at the ends of the sweep band.
+
+    The discrete input has exactly one gesture to spend. NEXT_TARGET says
+    "another step" and carries no direction, so direction cannot come from the
+    wearer and has to be a property of the sweep: it runs to one end of the
+    band, turns around, and runs back. That is the whole reason this policy
+    exists rather than the caller adding a step to the current angle.
+
+    Decisions worth stating, because each one is arguable:
+
+    - The band is ``center +/- relative_limit`` clipped to the absolute
+      bounds, which is exactly the set ``SearchProfile.target_for`` can reach.
+      Both input modes then sweep the same space, so switching between them
+      cannot expose an angle the other mode considers unsafe.
+    - Overshooting the band clamps to the edge instead of reversing early, so
+      the edge is actually reachable when the band is not a whole number of
+      steps. Reversal happens on the *next* event, once the edge is where the
+      axis already is. Reversing early would leave a sliver at each end that
+      no sequence of steps can visit.
+    - Every call returns an angle different from the one passed in. A press
+      that produces no motion reads as a dropped event to the wearer, who
+      responds by pressing again, which is the opposite of what a bounded
+      search wants.
+    - The first step is positive regardless of where the axis starts. There is
+      no wearer input to infer a preference from, and a fixed choice is easier
+      to learn than one that depends on the starting angle.
+
+    ``next_target`` anchors on the position it is given rather than on its own
+    running total: the axis may have been clamped, preempted, or stopped
+    short, and the sweep must continue from where the axis actually is.
+    """
+
+    def __init__(self, profile: SearchProfile, step_angle: float) -> None:
+        if not isinstance(profile, SearchProfile):
+            raise TypeError("profile must be a SearchProfile")
+        step_angle = _finite(step_angle, "step_angle")
+        if step_angle <= 0.0:
+            raise ValueError(f"step_angle must be > 0, got {step_angle}")
+        self._step_angle = step_angle
+        self._lower = max(
+            profile.min_angle, profile.center_angle - profile.relative_limit
+        )
+        self._upper = min(
+            profile.max_angle, profile.center_angle + profile.relative_limit
+        )
+        self._direction = 1
+
+    @property
+    def direction(self) -> int:
+        return self._direction
+
+    @property
+    def bounds(self) -> tuple[float, float]:
+        return (self._lower, self._upper)
+
+    def next_target(self, current_position: float) -> float:
+        """Return the angle one step away, reversing at the band edges."""
+
+        position = _finite(current_position, "current_position")
+        for _ in range(2):
+            bound = self._upper if self._direction > 0 else self._lower
+            at_bound = abs(position - bound) <= _EPSILON
+            if not at_bound:
+                target = position + self._direction * self._step_angle
+                if self._direction > 0:
+                    target = min(target, self._upper)
+                else:
+                    target = max(target, self._lower)
+                # A position outside the band clamps back onto the edge, which
+                # is still real motion, so this cannot return the input.
+                if abs(target - position) > _EPSILON:
+                    return target
+            self._direction = -self._direction
+        # Both directions are blocked only if the band is a single point,
+        # which SearchProfile's positive relative_limit already excludes.
+        raise RuntimeError("sweep band admits no step in either direction")
+
+
 class SimulatedViewMotion:
     """Single-axis simulator with smooth, serialized preemption.
 

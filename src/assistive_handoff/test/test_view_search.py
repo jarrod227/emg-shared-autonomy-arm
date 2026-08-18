@@ -6,6 +6,7 @@ import pytest
 
 from assistive_handoff.view_search import (
     MAX_RELATIVE_LIMIT_RAD,
+    DiscreteViewSweep,
     SearchProfile,
     SimulatedViewMotion,
 )
@@ -31,6 +32,84 @@ def advance_until_stopped(motion, timeout_steps=500, dt_sec=0.01):
         if not motion.moving:
             return
     raise AssertionError("simulated view motion did not stop")
+
+
+def sweep_positions(sweep, start, count):
+    positions = []
+    position = start
+    for _ in range(count):
+        position = sweep.next_target(position)
+        positions.append(position)
+    return positions
+
+
+def test_sweep_steps_out_to_the_band_edge_then_turns_around():
+    # The band is center +/- relative_limit, the same set target_for reaches.
+    sweep = DiscreteViewSweep(make_profile(relative_limit=0.6), 0.2)
+
+    assert sweep.bounds == pytest.approx((-0.6, 0.6))
+    assert sweep_positions(sweep, 0.0, 9) == pytest.approx(
+        [0.2, 0.4, 0.6, 0.4, 0.2, 0.0, -0.2, -0.4, -0.6]
+    )
+    assert sweep.direction == -1
+
+
+def test_a_band_that_is_not_a_whole_number_of_steps_still_reaches_its_edge():
+    # Reversing as soon as a full step would overshoot leaves a sliver at each
+    # end that no sequence of steps can visit.
+    sweep = DiscreteViewSweep(make_profile(relative_limit=0.6), 0.25)
+
+    positions = sweep_positions(sweep, 0.0, 4)
+
+    assert positions == pytest.approx([0.25, 0.5, 0.6, 0.35])
+
+
+def test_a_step_wider_than_the_band_alternates_between_the_two_edges():
+    sweep = DiscreteViewSweep(make_profile(relative_limit=0.6), 2.0)
+
+    assert sweep_positions(sweep, 0.0, 4) == pytest.approx(
+        [0.6, -0.6, 0.6, -0.6]
+    )
+
+
+def test_a_position_outside_the_band_is_brought_back_onto_the_edge():
+    # configure() can move the band under an axis that is already parked.
+    sweep = DiscreteViewSweep(make_profile(relative_limit=0.6), 0.2)
+
+    assert sweep_positions(sweep, 0.9, 2) == pytest.approx([0.6, 0.4])
+
+
+def test_the_band_is_clipped_by_the_absolute_bounds():
+    sweep = DiscreteViewSweep(
+        make_profile(center_angle=0.5, relative_limit=0.6, max_angle=0.7),
+        0.3,
+    )
+
+    assert sweep.bounds == pytest.approx((-0.1, 0.7))
+    assert sweep_positions(sweep, 0.5, 4) == pytest.approx(
+        [0.7, 0.4, 0.1, -0.1]
+    )
+
+
+def test_every_step_moves_the_axis():
+    # A press that produces no motion reads as a dropped event, and the wearer
+    # answers a dropped event by pressing again.
+    for step in (0.05, 0.2, 0.37, 1.5):
+        sweep = DiscreteViewSweep(make_profile(relative_limit=0.6), step)
+        position = -1.0
+        for _ in range(40):
+            target = sweep.next_target(position)
+            assert target != pytest.approx(position, abs=1e-9)
+            position = target
+
+
+def test_sweep_rejects_a_non_positive_or_non_finite_step():
+    profile = make_profile()
+    for bad in (0.0, -0.1, float("nan"), float("inf")):
+        with pytest.raises(ValueError):
+            DiscreteViewSweep(profile, bad)
+    with pytest.raises(TypeError, match="SearchProfile"):
+        DiscreteViewSweep(object(), 0.2)
 
 
 def test_relative_limit_cannot_exceed_45_degrees():
