@@ -682,6 +682,14 @@ what the system will do with a gesture, not how the controller is organized.
 priority. A consumer suppressing a command still advances its intent-sequence
 watermark, so a command dropped during a sweep cannot be replayed after it.
 
+Which mechanism steers a search -- proportional `LEFT`/`RIGHT` or discrete
+`NEXT_TARGET` stepping -- is a property of the session, not of whichever
+message opens the episode. It follows from whether that session has a
+calibrated activation reference to normalize against: without one, activation
+carries no information and only stepping is real evidence. The mechanism the
+session does not use cannot open a search episode at all, so an episode's
+mode never depends on message arrival order.
+
 Activation selects angle, not speed; configured relative travel is capped at 45 degrees and by
 absolute joint/collision limits. Two search goals may never execute
 concurrently. A newer command smoothly preempts the old goal, stale command

@@ -779,8 +779,13 @@ def make_search_graph(
     *,
     publish_target=False,
     publish_hand=False,
+    proportional=True,
 ):
+    # Which mechanism searches is a session fact, so every search test has to
+    # say which session it is. Most exercise LEFT/RIGHT, so that is the
+    # default; the discrete-stepping tests ask for the other one.
     params = dict(SEARCH_PARAMS)
+    params["proportional_search_available"] = proportional
     if overrides:
         params.update(overrides)
     return make_graph(
@@ -791,7 +796,7 @@ def make_search_graph(
 
 
 def test_next_target_drives_bounded_discrete_steps(make_graph):
-    g = make_search_graph(make_graph)
+    g = make_search_graph(make_graph, proportional=False)
     g.settle(0.2)
 
     g.send_intent(AssistiveIntent.NEXT_TARGET)
@@ -823,7 +828,7 @@ def test_next_target_drives_bounded_discrete_steps(make_graph):
 
 
 def test_stale_next_target_does_not_start_discrete_search(make_graph):
-    g = make_search_graph(make_graph)
+    g = make_search_graph(make_graph, proportional=False)
     g.settle(0.2)
 
     g.send_intent(AssistiveIntent.NEXT_TARGET, age_sec=1.0)
@@ -834,7 +839,7 @@ def test_stale_next_target_does_not_start_discrete_search(make_graph):
 
 
 def test_discrete_search_ignores_proportional_commands(make_graph):
-    g = make_search_graph(make_graph)
+    g = make_search_graph(make_graph, proportional=False)
     g.settle(0.2)
     g.send_intent(AssistiveIntent.NEXT_TARGET)
     assert g.wait_for_state(HandoffState.TARGET_SEARCH)
@@ -845,6 +850,48 @@ def test_discrete_search_ignores_proportional_commands(make_graph):
 
     assert g.controller._search_input_mode == "discrete"
     assert g.controller._last_requested_view_target == target
+
+
+def test_a_discrete_session_never_opens_a_proportional_episode(make_graph):
+    # The mode used to be claimed by whichever message arrived first, so with
+    # both mechanisms live the same wearer action could open either kind of
+    # episode depending on serial timing. LEFT/RIGHT must not start a search
+    # at all in a session that has no calibrated activation reference.
+    g = make_search_graph(make_graph, proportional=False)
+    g.settle(0.2)
+
+    g.send_view(ViewControlCommand.LEFT)
+    g.settle(0.3)
+
+    assert g.state is HandoffState.IDLE
+    assert g.controller._search_input_mode is None
+
+
+def test_a_proportional_session_never_opens_a_discrete_episode(make_graph):
+    # The mirror of the rule above, and the half that used to be reachable:
+    # NEXT_TARGET would win the episode whenever it beat the 20 Hz view
+    # stream to the callback.
+    g = make_search_graph(make_graph, proportional=True)
+    g.settle(0.2)
+
+    g.send_intent(AssistiveIntent.NEXT_TARGET)
+    g.settle(0.3)
+
+    assert g.state is HandoffState.IDLE
+    assert g.controller._search_input_mode is None
+
+
+def test_the_session_decides_the_mode_not_the_first_message(make_graph):
+    # _start_search derives the mode rather than trusting what a caller set,
+    # so an episode's mode is the same no matter which message opened it.
+    g = make_search_graph(make_graph, proportional=True)
+    g.settle(0.2)
+
+    g.send_view(ViewControlCommand.LEFT)
+    assert g.wait_for_state(HandoffState.TARGET_SEARCH)
+
+    assert g.controller._search_input_mode == "proportional"
+    assert g.controller._discrete_sweep is None
 
 
 def test_view_search_not_started_by_hold_or_when_target_is_fresh(make_graph):

@@ -143,6 +143,14 @@ class HandoffController(Node):
         self.declare_parameter("view_stable_command_count", 2)
         self.declare_parameter("view_target_update_min_rad", 0.02)
         self.declare_parameter("view_step_angle", math.radians(10.0))
+        # Which input drives a search episode is a fact about this session's
+        # EMG configuration, not something to decide message by message: only
+        # one of the two direction mechanisms is real evidence at a time.
+        # Default False because today's firmware always reports direction 0 /
+        # activation 0 -- there is no calibrated reference to normalize
+        # against yet, so NEXT_TARGET is the only mechanism that actually
+        # works. Flip this once a session's activation is calibrated.
+        self.declare_parameter("proportional_search_available", False)
 
         self.declare_parameter("target_search_center_angle", 0.0)
         self.declare_parameter("target_search_relative_limit", math.pi / 4.0)
@@ -219,6 +227,9 @@ class HandoffController(Node):
             "view_target_update_min_rad"
         )
         self._view_step_angle = self._positive_finite_param("view_step_angle")
+        self._proportional_search_available = bool(
+            self.get_parameter("proportional_search_available").value
+        )
         self._target_search_profile = self._load_search_profile("target_search")
         self._handoff_search_profile = self._load_search_profile("handoff_search")
         if (
@@ -362,7 +373,15 @@ class HandoffController(Node):
         if self._state is HandoffState.IDLE:
             if self._target_is_available() or not requests_motion:
                 return
-            self._search_input_mode = "proportional"
+            if not self._proportional_search_available:
+                # Not a race to lose: this session has no calibrated
+                # reference to normalize activation against, so LEFT/RIGHT
+                # cannot start a search here at all this session.
+                self.get_logger().info(
+                    "LEFT/RIGHT ignored: this session searches with "
+                    "NEXT_TARGET only"
+                )
+                return
             self._transition(HandoffState.TARGET_SEARCH)
         elif self._state is HandoffState.READY:
             if not self._holding_object:
@@ -377,14 +396,19 @@ class HandoffController(Node):
                 or not requests_motion
             ):
                 return
-            self._search_input_mode = "proportional"
+            if not self._proportional_search_available:
+                self.get_logger().info(
+                    "LEFT/RIGHT ignored: this session searches with "
+                    "NEXT_TARGET only"
+                )
+                return
             self._transition(HandoffState.HANDOFF_SEARCH)
 
         if self._state in (
             HandoffState.TARGET_SEARCH,
             HandoffState.HANDOFF_SEARCH,
         ):
-            if self._search_input_mode == "discrete":
+            if self._search_input_mode != "proportional":
                 return
             self._apply_view_command(msg, activation)
 
@@ -656,7 +680,12 @@ class HandoffController(Node):
         if self._state is HandoffState.IDLE:
             if self._target_is_available():
                 return
-            self._search_input_mode = "discrete"
+            if self._proportional_search_available:
+                self.get_logger().info(
+                    "NEXT_TARGET ignored: this session searches with "
+                    "LEFT/RIGHT only"
+                )
+                return
             self._transition(HandoffState.TARGET_SEARCH)
         elif self._state is HandoffState.READY:
             if (
@@ -666,7 +695,12 @@ class HandoffController(Node):
                 )
             ):
                 return
-            self._search_input_mode = "discrete"
+            if self._proportional_search_available:
+                self.get_logger().info(
+                    "NEXT_TARGET ignored: this session searches with "
+                    "LEFT/RIGHT only"
+                )
+                return
             self._transition(HandoffState.HANDOFF_SEARCH)
 
         if self._state not in (
@@ -1048,8 +1082,15 @@ class HandoffController(Node):
         )
         self._view_motion.configure(profile)
         self._active_search_profile = profile
-        if self._search_input_mode is None:
-            self._search_input_mode = "proportional"
+        # Derived from the session, not from whichever message opened the
+        # episode. The two callers used to set this themselves, which made the
+        # mode depend on message arrival order: with both mechanisms live, the
+        # same wearer action could produce a stepping episode or a
+        # proportional one depending on serial timing.
+        self._search_input_mode = (
+            "proportional" if self._proportional_search_available
+            else "discrete"
+        )
         self._discrete_sweep = (
             DiscreteViewSweep(profile, self._view_step_angle)
             if self._search_input_mode == "discrete"
