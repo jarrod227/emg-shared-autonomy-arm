@@ -114,6 +114,72 @@ def test_event_gate_plan_wraps_every_event_in_labelled_rest():
         assert labels == set(GESTURE_LABELS) - {"REST"}
 
 
+CANDIDATE_GESTURES = {
+    "REST": "RELAX",
+    "NEXT_TARGET": "WRIST UP",
+    "CONFIRM": "MAKE A FIST",
+    "ABORT": "WRIST DOWN",
+    "RADIAL": "TILT WRIST THUMB SIDE",
+    "ULNAR": "TILT WRIST LITTLE-FINGER SIDE",
+    "PRONATE": "ROTATE PALM DOWN",
+}
+
+
+def test_an_injected_gesture_set_replaces_the_default_labels():
+    # Candidate-gesture screening needs labels the trained firmware does not
+    # have. Replacing rather than extending is deliberate: an exploratory run
+    # that silently kept a label it meant to drop would report an accuracy for
+    # a class set nobody chose.
+    plan = build_trial_plan(2, seed=7, gestures=CANDIDATE_GESTURES)
+
+    assert len(plan) == 2 * len(CANDIDATE_GESTURES)
+    assert {trial.label for trial in plan} == set(CANDIDATE_GESTURES)
+    for trial in plan:
+        assert trial.action == CANDIDATE_GESTURES[trial.label]
+
+
+def test_the_default_gesture_set_is_unchanged_by_the_new_parameter():
+    # The four protocol commands are what the live firmware model was trained
+    # on; adding the parameter must not move them.
+    assert build_trial_plan(3, seed=5) == build_trial_plan(3, seed=5, gestures=None)
+    assert {trial.label for trial in build_trial_plan(1, seed=5)} == set(
+        GESTURE_LABELS
+    )
+
+
+def test_an_injected_set_flows_through_the_collection_plan_and_manifest():
+    plan = build_collection_plan(
+        CLASSIFIER_PROTOCOL, 1, 9, CANDIDATE_GESTURES
+    )
+    session = GuidedSession(plan)
+
+    manifest = session.to_manifest(seed=9, status="aborted")
+
+    assert manifest["gesture_actions"] == CANDIDATE_GESTURES
+
+
+def test_event_gate_plan_requires_rest_in_the_gesture_set():
+    # Every event trial is bracketed by a labelled REST, so a set without it
+    # cannot express the protocol at all.
+    with pytest.raises(ValueError, match="must define REST"):
+        build_event_gate_plan(2, seed=1, gestures={"PRONATE": "ROTATE PALM DOWN"})
+    with pytest.raises(ValueError, match="at least one non-REST"):
+        build_event_gate_plan(2, seed=1, gestures={"REST": "RELAX"})
+
+
+@pytest.mark.parametrize("gestures", [
+    (),
+    {},
+    {"PRONATE": 3},
+    {4: "ROTATE PALM DOWN"},
+    {"PRONATE": "   "},
+    {"  ": "ROTATE PALM DOWN"},
+])
+def test_malformed_gesture_sets_are_rejected(gestures):
+    with pytest.raises((TypeError, ValueError)):
+        build_trial_plan(1, seed=1, gestures=gestures)
+
+
 def test_collection_plan_preserves_classifier_and_event_protocols():
     assert build_collection_plan(CLASSIFIER_PROTOCOL, 1, 9) == build_trial_plan(
         1, 9
@@ -305,7 +371,12 @@ def test_manifest_separates_schedule_labels_and_unlabelled_timing():
 
     assert manifest["status"] == "complete"
     assert manifest["collection_protocol"] == CLASSIFIER_PROTOCOL
-    assert manifest["gesture_actions"] == GESTURE_ACTIONS
+    # The manifest reports the gestures the plan actually contained, not the
+    # module default. This plan has one trial, and a manifest that claimed all
+    # four would tell a later trainer to expect labels no segment carries.
+    assert manifest["gesture_actions"] == {
+        "NEXT_TARGET": GESTURE_ACTIONS["NEXT_TARGET"]
+    }
     assert manifest["timing_seconds"]["transition_unlabelled"] == 0.5
     assert manifest["timing_seconds"]["verification_unlabelled"] == 0.1
     assert manifest["timing_seconds"]["recovery_unlabelled"] == 1.5
@@ -329,6 +400,39 @@ def test_session_rejects_non_positive_or_non_finite_timing():
         GuidedSession(one_trial(), recovery_seconds=float("inf"))
     with pytest.raises(ValueError, match="unsupported collection protocol"):
         GuidedSession(one_trial(), protocol="unknown")
+
+
+def test_gesture_cli_builds_a_replacement_set_and_defaults_to_none():
+    parsed = capture.parse_arguments([
+        "--gesture", "REST=RELAX",
+        "--gesture", "PRONATE=ROTATE PALM DOWN",
+    ])
+
+    assert parsed.gestures == {"REST": "RELAX", "PRONATE": "ROTATE PALM DOWN"}
+    # No --gesture means None, which the plan builders resolve to the four
+    # protocol commands. It must not become an empty dict, which would be
+    # rejected as a malformed set instead of meaning "unchanged".
+    assert capture.parse_arguments([]).gestures is None
+
+
+@pytest.mark.parametrize("entry", [
+    "PRONATE",          # no separator
+    "=ROTATE PALM DOWN",  # no label
+    "PRONATE=",         # no action
+])
+def test_malformed_gesture_arguments_exit_rather_than_collect(entry):
+    # argparse errors exit(2); collecting a session against a half-parsed
+    # label set would waste the wearer's time and produce unusable data.
+    with pytest.raises(SystemExit):
+        capture.parse_arguments(["--gesture", entry])
+
+
+def test_a_repeated_gesture_label_is_an_error_not_a_silent_overwrite():
+    with pytest.raises(SystemExit):
+        capture.parse_arguments([
+            "--gesture", "PRONATE=ROTATE PALM DOWN",
+            "--gesture", "PRONATE=TURN PALM DOWN",
+        ])
 
 
 def test_event_gate_cli_uses_short_independent_collection_defaults():

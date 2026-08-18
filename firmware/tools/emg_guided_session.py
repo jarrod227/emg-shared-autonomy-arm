@@ -13,6 +13,7 @@ frames, or an electrode-contact loss is rejected and the same trial is
 repeated.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 import math
@@ -29,6 +30,34 @@ GESTURE_LABELS = tuple(GESTURE_ACTIONS)
 CLASSIFIER_PROTOCOL = "classifier"
 EVENT_GATE_PROTOCOL = "event-gate"
 COLLECTION_PROTOCOLS = (CLASSIFIER_PROTOCOL, EVENT_GATE_PROTOCOL)
+
+
+def _resolve_gestures(gestures):
+    """Validate an optional gesture set, defaulting to the frozen four.
+
+    ``None`` is resolved here rather than written as a default argument on the
+    callers: a default binds its object at ``def`` time, so a caller that
+    replaced the module constant would silently keep getting the old mapping.
+
+    Exploratory label sets are the reason this is a parameter at all. Changing
+    the module constant instead would also change what the trained model may
+    emit as firmware, and ``emg_train_lda`` guards that on the four protocol
+    commands specifically.
+    """
+    if gestures is None:
+        return dict(GESTURE_ACTIONS)
+    if not isinstance(gestures, Mapping):
+        raise TypeError("gestures must be a mapping of label to action")
+    if not gestures:
+        raise ValueError("gestures must not be empty")
+    resolved = {}
+    for label, action in gestures.items():
+        if not isinstance(label, str) or not isinstance(action, str):
+            raise TypeError("gesture labels and actions must be strings")
+        if not label.strip() or not action.strip():
+            raise ValueError("gesture labels and actions must not be blank")
+        resolved[label] = action
+    return resolved
 
 
 class Phase(str, Enum):
@@ -72,11 +101,14 @@ class TrialSpec:
         }
 
 
-def build_trial_plan(repetitions, seed):
+def build_trial_plan(repetitions, seed, gestures=None):
     """Build balanced randomized blocks containing every label once.
 
     Randomizing within each complete block avoids collecting every gesture in
     one long run while still guaranteeing balance at every repetition count.
+    Blocking also spreads fatigue across labels rather than concentrating it
+    on whichever gesture was collected last, which matters here: three
+    consecutive held contractions have been measured to fall 43%.
     """
     if not isinstance(repetitions, int) or isinstance(repetitions, bool):
         raise TypeError("repetitions must be an integer")
@@ -85,24 +117,25 @@ def build_trial_plan(repetitions, seed):
     if not isinstance(seed, int) or isinstance(seed, bool):
         raise TypeError("seed must be an integer")
 
+    resolved = _resolve_gestures(gestures)
     generator = random.Random(seed)
     trials = []
     for repetition in range(1, repetitions + 1):
-        block = list(GESTURE_LABELS)
+        block = list(resolved)
         generator.shuffle(block)
         for label in block:
             trials.append(
                 TrialSpec(
                     index=len(trials),
                     label=label,
-                    action=GESTURE_ACTIONS[label],
+                    action=resolved[label],
                     repetition=repetition,
                 )
             )
     return tuple(trials)
 
 
-def build_event_gate_plan(repetitions, seed):
+def build_event_gate_plan(repetitions, seed, gestures=None):
     """Build an alternating REST/event plan for event-gate validation.
 
     Every active gesture has an explicit labelled REST trial immediately
@@ -116,16 +149,24 @@ def build_event_gate_plan(repetitions, seed):
     if not isinstance(seed, int) or isinstance(seed, bool):
         raise TypeError("seed must be an integer")
 
+    resolved = _resolve_gestures(gestures)
+    if "REST" not in resolved:
+        raise ValueError(
+            "the event-gate protocol brackets every gesture with a labelled "
+            "REST, so the gesture set must define REST"
+        )
     generator = random.Random(seed)
     trials = [
         TrialSpec(
             index=0,
             label="REST",
-            action=GESTURE_ACTIONS["REST"],
+            action=resolved["REST"],
             repetition=1,
         )
     ]
-    active_labels = [label for label in GESTURE_LABELS if label != "REST"]
+    active_labels = [label for label in resolved if label != "REST"]
+    if not active_labels:
+        raise ValueError("the gesture set must define at least one non-REST label")
     for repetition in range(1, repetitions + 1):
         block = list(active_labels)
         generator.shuffle(block)
@@ -135,19 +176,19 @@ def build_event_gate_plan(repetitions, seed):
                     TrialSpec(
                         index=len(trials),
                         label=planned_label,
-                        action=GESTURE_ACTIONS[planned_label],
+                        action=resolved[planned_label],
                         repetition=repetition,
                     )
                 )
     return tuple(trials)
 
 
-def build_collection_plan(protocol, repetitions, seed):
+def build_collection_plan(protocol, repetitions, seed, gestures=None):
     """Select the plan without changing either protocol's label semantics."""
     if protocol == CLASSIFIER_PROTOCOL:
-        return build_trial_plan(repetitions, seed)
+        return build_trial_plan(repetitions, seed, gestures)
     if protocol == EVENT_GATE_PROTOCOL:
-        return build_event_gate_plan(repetitions, seed)
+        return build_event_gate_plan(repetitions, seed, gestures)
     raise ValueError(f"unsupported collection protocol: {protocol}")
 
 
@@ -613,7 +654,9 @@ class GuidedSession:
             "schema_version": 1,
             "collection_protocol": self.protocol,
             "status": status,
-            "gesture_actions": dict(GESTURE_ACTIONS),
+            "gesture_actions": {
+                trial.label: trial.action for trial in self.plan
+            },
             "seed": seed,
             "timing_seconds": {
                 "prepare": self.prepare_seconds,

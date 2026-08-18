@@ -219,9 +219,38 @@ def select_complete_manifests(dataset_root):
     return selected, skipped
 
 
-def validate_complete_manifest(manifest, path=None):
+def manifest_labels(manifest, path=None):
+    """The label set this session actually collected, in a stable order.
+
+    Read from the session rather than from the module constant so an
+    exploratory label set trains against its own labels. The module constant
+    stays the four protocol commands, which is what the firmware emitter in
+    ``write_c_model`` still checks against.
+    """
+    source = str(path) if path is not None else "manifest"
+    actions = manifest.get("gesture_actions")
+    if not isinstance(actions, dict) or not actions:
+        raise ValueError(f"{source}: gesture_actions is missing or empty")
+    for label, action in actions.items():
+        if not isinstance(label, str) or not isinstance(action, str):
+            raise ValueError(f"{source}: gesture_actions must map str to str")
+        if not label.strip() or not action.strip():
+            raise ValueError(f"{source}: gesture_actions has a blank entry")
+    # Order matters and must not come from the JSON key order. Class order
+    # fixes the row order of the emitted coefficient table, and the firmware
+    # header is only emitted for exactly PROTOCOL_COMMAND_LABELS in exactly
+    # that order. Sorting the protocol commands alphabetically instead would
+    # silently stop the live model from being regenerable.
+    extra = sorted(set(actions) - set(PROTOCOL_COMMAND_LABELS))
+    return tuple(
+        [label for label in PROTOCOL_COMMAND_LABELS if label in actions] + extra
+    )
+
+
+def validate_complete_manifest(manifest, path=None, labels=None):
     """Fail closed on metadata that could shift or mislabel training windows."""
     source = str(path) if path is not None else "manifest"
+    expected = manifest_labels(manifest, path) if labels is None else tuple(labels)
     if manifest.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"{source}: expected schema_version {SCHEMA_VERSION}")
     if manifest.get("status") != "complete":
@@ -232,9 +261,9 @@ def validate_complete_manifest(manifest, path=None):
     included = [segment for segment in manifest.get("segments", ())
                 if segment.get("include") is True]
     counts = Counter(segment.get("trial", {}).get("label") for segment in included)
-    if set(counts) != set(LABELS) or len(set(counts.values())) != 1:
+    if set(counts) != set(expected) or len(set(counts.values())) != 1:
         raise ValueError(
-            f"{source}: accepted trials must be balanced across {LABELS}; "
+            f"{source}: accepted trials must be balanced across {expected}; "
             f"got {dict(counts)}"
         )
     if not included or any(count <= 0 for count in counts.values()):
@@ -269,6 +298,7 @@ def extract_feature_windows(
     filtered_columns,
     manifest,
     *,
+    labels=None,
     threshold=ZERO_CROSSING_THRESHOLD,
     window=WINDOW,
     hop=HOP,
@@ -285,7 +315,7 @@ def extract_feature_windows(
     if len(lengths) != 1:
         raise ValueError("all filtered channels must have equal lengths")
     total_frames = lengths.pop()
-    included = validate_complete_manifest(manifest)
+    included = validate_complete_manifest(manifest, labels=labels)
     session_id = manifest.get("session_id", "unknown_session")
 
     rows = []
@@ -324,10 +354,14 @@ def extract_feature_windows(
     )
 
 
-def load_feature_session(manifest_path, threshold=ZERO_CROSSING_THRESHOLD):
+def load_feature_session(
+    manifest_path, threshold=ZERO_CROSSING_THRESHOLD, expected_labels=None
+):
+    # Named ``expected_labels`` rather than ``labels`` because the local
+    # ``labels`` below holds this session's per-window label array.
     path = pathlib.Path(manifest_path)
     manifest = read_manifest(path)
-    validate_complete_manifest(manifest, path)
+    validate_complete_manifest(manifest, path, labels=expected_labels)
     raw_log = manifest.get("raw_log")
     if not isinstance(raw_log, str) or not raw_log:
         raise ValueError(f"{path}: raw_log is missing")
@@ -360,7 +394,7 @@ def load_feature_session(manifest_path, threshold=ZERO_CROSSING_THRESHOLD):
         for column in columns
     ]
     features, labels, trial_ids = extract_feature_windows(
-        filtered, manifest, threshold=threshold
+        filtered, manifest, labels=expected_labels, threshold=threshold
     )
     return SessionFeatures(
         session_id=manifest.get("session_id", path.parent.name),
@@ -372,11 +406,32 @@ def load_feature_session(manifest_path, threshold=ZERO_CROSSING_THRESHOLD):
 
 
 def load_dataset(dataset_root, threshold=ZERO_CROSSING_THRESHOLD):
+    """Load every complete session and the one label set they all share.
+
+    Sessions that disagree on their labels cannot be pooled: a fold would
+    train on classes the held-out session never collected, and the confusion
+    matrix would silently gain an all-zero row. That is a hard error rather
+    than an intersection, because dropping a label quietly would change what
+    the reported accuracy is an accuracy *of*.
+    """
     paths, skipped = select_complete_manifests(dataset_root)
-    sessions = [load_feature_session(path, threshold) for path in paths]
+    if not paths:
+        raise ValueError("no complete sessions are available for training")
+    labels = manifest_labels(read_manifest(paths[0]), paths[0])
+    for path in paths[1:]:
+        other = manifest_labels(read_manifest(path), path)
+        if set(other) != set(labels):
+            raise ValueError(
+                f"sessions disagree on their label set: {paths[0]} has "
+                f"{sorted(labels)}, {path} has {sorted(other)}"
+            )
+    sessions = [
+        load_feature_session(path, threshold, expected_labels=labels)
+        for path in paths
+    ]
     if len(sessions) < 2:
         raise ValueError("leave-one-session-out validation needs at least 2 sessions")
-    return sessions, skipped
+    return sessions, skipped, labels
 
 
 def fit_lda(features, labels, *, class_order=LABELS, ridge=DEFAULT_RIDGE):
@@ -596,7 +651,7 @@ def trial_predictions(actual, predicted, scores, trial_ids, labels=LABELS):
     return np.asarray(trial_actual, dtype=object), np.asarray(trial_predicted, dtype=object)
 
 
-def evaluate_loso(sessions, *, ridge=DEFAULT_RIDGE):
+def evaluate_loso(sessions, *, ridge=DEFAULT_RIDGE, labels=LABELS):
     if len(sessions) < 2:
         raise ValueError("leave-one-session-out validation needs at least 2 sessions")
     folds = []
@@ -608,19 +663,22 @@ def evaluate_loso(sessions, *, ridge=DEFAULT_RIDGE):
         training = [session for session in sessions if session is not held_out]
         train_features = np.vstack([session.features for session in training])
         train_labels = np.concatenate([session.labels for session in training])
-        model = fit_lda(train_features, train_labels, ridge=ridge)
+        model = fit_lda(
+            train_features, train_labels, class_order=labels, ridge=ridge
+        )
         scores = model.scores(held_out.features)
         predicted = model.predict(held_out.features)
         trial_actual, trial_predicted = trial_predictions(
-            held_out.labels, predicted, scores, held_out.trial_ids
+            held_out.labels, predicted, scores, held_out.trial_ids,
+            labels=labels,
         )
-        window_matrix = confusion_matrix(held_out.labels, predicted)
-        trial_matrix = confusion_matrix(trial_actual, trial_predicted)
+        window_matrix = confusion_matrix(held_out.labels, predicted, labels)
+        trial_matrix = confusion_matrix(trial_actual, trial_predicted, labels)
         folds.append({
             "held_out_session": held_out.session_id,
             "training_sessions": [session.session_id for session in training],
-            "window": matrix_metrics(window_matrix),
-            "trial": matrix_metrics(trial_matrix),
+            "window": matrix_metrics(window_matrix, labels),
+            "trial": matrix_metrics(trial_matrix, labels),
         })
         all_window_actual.extend(held_out.labels.tolist())
         all_window_predicted.extend(predicted.tolist())
@@ -631,10 +689,12 @@ def evaluate_loso(sessions, *, ridge=DEFAULT_RIDGE):
         "method": "leave_one_session_out",
         "folds": folds,
         "overall_window": matrix_metrics(
-            confusion_matrix(all_window_actual, all_window_predicted)
+            confusion_matrix(all_window_actual, all_window_predicted, labels),
+            labels,
         ),
         "overall_trial": matrix_metrics(
-            confusion_matrix(all_trial_actual, all_trial_predicted)
+            confusion_matrix(all_trial_actual, all_trial_predicted, labels),
+            labels,
         ),
     }
 
@@ -668,11 +728,12 @@ def build_output(
     quantized_agreement,
     threshold,
     ridge,
+    labels=LABELS,
 ):
     return {
         "schema_version": MODEL_SCHEMA_VERSION,
         "model_type": "standardized_ridge_lda",
-        "intent_labels": list(LABELS),
+        "intent_labels": list(labels),
         "source_sessions": [session.session_id for session in sessions],
         "skipped_sessions": skipped,
         "preprocessing": {
@@ -744,7 +805,14 @@ def main(argv=None):
     root = pathlib.Path(arguments.dataset_root)
     output = arguments.output or root / "lda_model.json"
     try:
-        sessions, skipped = load_dataset(root, arguments.zero_crossing_threshold)
+        sessions, skipped, labels = load_dataset(
+            root, arguments.zero_crossing_threshold
+        )
+        if tuple(labels) != PROTOCOL_COMMAND_LABELS:
+            print(
+                f"Label set {list(labels)} is not the four protocol commands; "
+                "this model can be scored but not emitted as firmware."
+            )
         print(f"Loaded {len(sessions)} complete sessions:")
         for session in sessions:
             trials = len(set(session.trial_ids))
@@ -753,7 +821,9 @@ def main(argv=None):
         for item in skipped:
             print(f"Skipped {item['session_id']}: status={item['status']}")
 
-        validation = evaluate_loso(sessions, ridge=arguments.ridge)
+        validation = evaluate_loso(
+            sessions, ridge=arguments.ridge, labels=labels
+        )
         print("\nLeave-one-session-out:")
         for fold in validation["folds"]:
             print(
@@ -762,17 +832,23 @@ def main(argv=None):
                 f"trial={_percent(fold['trial']['accuracy'])}"
             )
         print("\nOverall window confusion (rows=true, columns=predicted):")
-        print(format_confusion(validation["overall_window"]["confusion"]))
+        print(format_confusion(
+            validation["overall_window"]["confusion"], labels
+        ))
         print(f"window accuracy: "
               f"{_percent(validation['overall_window']['accuracy'])}")
         print("\nOverall trial confusion (rows=true, columns=predicted):")
-        print(format_confusion(validation["overall_trial"]["confusion"]))
+        print(format_confusion(
+            validation["overall_trial"]["confusion"], labels
+        ))
         print(f"trial accuracy: "
               f"{_percent(validation['overall_trial']['accuracy'])}")
 
         all_features = np.vstack([session.features for session in sessions])
         all_labels = np.concatenate([session.labels for session in sessions])
-        final_model = fit_lda(all_features, all_labels, ridge=arguments.ridge)
+        final_model = fit_lda(
+            all_features, all_labels, class_order=labels, ridge=arguments.ridge
+        )
         quantized_model = quantize_lda(final_model, arguments.fraction_bits)
         float_predictions = final_model.predict(all_features)
         quantized_predictions = quantized_model.predict(all_features)
@@ -799,6 +875,7 @@ def main(argv=None):
             quantized_agreement,
             arguments.zero_crossing_threshold,
             arguments.ridge,
+            labels,
         )
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")

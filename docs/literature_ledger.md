@@ -257,6 +257,46 @@ or message-semantics claim.
   + DMA1 channel 1 for three channels, and the corrected wording of the
   three-channel acquisition item in `TODO.md`.
 
+## Verified research papers not yet formally cited
+
+`VERIFIED` under the promotion workflow: the primary text and metadata were
+both checked, and the entry may support project prose. It is not yet `FORMAL`
+because no named project section cites it, so it has no `references.bib`
+entry. Promote it on first use.
+
+### `zhu2020emgforce`
+
+- Type: research paper
+- Primary source: [IEEE Xplore record](https://ieeexplore.ieee.org/document/9260149)
+- Full text: [author's final copy (WPI)](https://users.wpi.edu/~ted/full_text/2020zhu_martinezluna_ieee_tnsre_author.pdf)
+- DOI: [10.1109/TNSRE.2020.3038322](https://doi.org/10.1109/TNSRE.2020.3038322)
+- Metadata: Zhu, Martinez-Luna, Li, McDonald, Dai, Huang, Farrell, Clancy,
+  *IEEE Transactions on Neural Systems and Rehabilitation Engineering*
+  28(12):3040-3050, 2020. Volume, issue and pages were confirmed against both
+  the author's copy and the Crossref record.
+- Verified claim: in a forearm target-tracking study using a 16-channel bipolar
+  electrode array on 12 able-bodied and 7 unilateral transradial limb-absent
+  subjects, EMG-force model error averaged about 10 %MVC in the best case
+  (able-bodied dominant limb, unilateral, **with** force feedback), 12-16 %MVC
+  when a bilateral tracking source supplied the model output, and 25-30 %MVC
+  in the **no-feedback** condition. The paper states that the no-feedback error
+  was nearly half the tested force range of +/- 30 %MVC and concludes that the
+  no-feedback model output "was not acceptable."
+- Claim boundary: this is an offline system-identification result for EMG-force
+  regression models under target tracking. It is not a robot control-loop
+  evaluation, its error is a force/moment model error rather than an angular
+  positioning error, and its 16-channel gelled laboratory array is not this
+  project's three-channel band. It establishes that open-loop, no-feedback
+  proportional amplitude decoding is poor; it does **not** establish that
+  velocity control with visual feedback fixes it, and it says nothing about
+  this project's activation threshold, calibration, or event gate.
+- Use: Objective 3.5 proportional view-control design decision -- the reason
+  the `activation` field drives a continuous velocity command the wearer closes
+  visually, rather than a one-shot amplitude-to-angle step. This project's own
+  no-feedback repeatability, computed from the three per-gesture trials in
+  `datasets/emg_calibration/calibration_20260815_155306.json`, is consistent
+  with the paper's no-feedback figure and is not yet written up in a log.
+
 ## Candidate queue
 
 These sources are deliberately not in `references.bib` and must not yet be

@@ -17,6 +17,9 @@ from emg_train_lda import (
     extract_feature_windows,
     fit_lda,
     quantize_lda,
+    PROTOCOL_COMMAND_LABELS,
+    load_dataset,
+    manifest_labels,
     render_c_model_header,
     select_complete_manifests,
     trial_predictions,
@@ -25,13 +28,21 @@ from emg_train_lda import (
 )
 
 
-def manifest_for_segments(segments, *, session_id="session_test", status="complete"):
+def manifest_for_segments(segments, *, session_id="session_test", status="complete",
+                         gesture_actions=None):
     included = [segment for segment in segments if segment["include"]]
+    if gesture_actions is None:
+        # Derived from the planned trials, exactly as GuidedSession.to_manifest
+        # does, so a fixture cannot claim a label set the segments never used.
+        gesture_actions = {
+            item["trial"]["label"]: item["trial"]["action"] for item in segments
+        }
     return {
         "schema_version": 1,
         "session_id": session_id,
         "status": status,
         "final_phase": status,
+        "gesture_actions": gesture_actions,
         "total_trials": len(included),
         "completed_trials": len(included),
         "segments": segments,
@@ -54,9 +65,9 @@ def segment(index, label, start, end, *, include=True, attempt=1):
     }
 
 
-def balanced_manifest(*, session_id="session_test"):
+def balanced_manifest(*, session_id="session_test", labels=LABELS):
     segments = []
-    for index, label in enumerate(LABELS):
+    for index, label in enumerate(labels):
         start = 1000 + 1000 * index
         segments.append(segment(index, label, start, start + 600))
     return manifest_for_segments(segments, session_id=session_id)
@@ -71,6 +82,85 @@ def test_manifest_requires_complete_balanced_labels():
     manifest["total_trials"] -= 1
     with pytest.raises(ValueError, match="balanced"):
         validate_complete_manifest(manifest)
+
+
+CANDIDATE_LABELS = LABELS + ("RADIAL", "ULNAR", "PRONATE")
+
+
+def test_labels_come_from_the_session_not_the_module_constant():
+    # Candidate-gesture screening records label sets the firmware model does
+    # not contain. Validating against the module constant would reject those
+    # sessions as unbalanced even though they are perfectly balanced.
+    manifest = balanced_manifest(labels=CANDIDATE_LABELS)
+
+    # Order is a separate contract, covered below; what matters here is that
+    # every recorded label reaches the trainer.
+    assert set(manifest_labels(manifest)) == set(CANDIDATE_LABELS)
+    assert len(validate_complete_manifest(manifest)) == len(CANDIDATE_LABELS)
+
+
+def test_protocol_commands_keep_their_frozen_class_order():
+    # Class order fixes the row order of the emitted coefficient table, and
+    # render_c_model_header only accepts PROTOCOL_COMMAND_LABELS in exactly
+    # that order. Taking the order from the manifest's JSON keys silently
+    # alphabetized it, which left the live firmware model unregenerable while
+    # every test still passed.
+    alphabetical = {
+        label: label for label in sorted(PROTOCOL_COMMAND_LABELS)
+    }
+    manifest = balanced_manifest()
+    manifest["gesture_actions"] = alphabetical
+
+    assert manifest_labels(manifest) == PROTOCOL_COMMAND_LABELS
+
+
+def test_candidate_labels_sort_after_the_protocol_commands():
+    # Any deterministic position works for exploratory labels; what must not
+    # move is where the four protocol commands sit.
+    manifest = balanced_manifest(labels=CANDIDATE_LABELS)
+    ordered = manifest_labels(manifest)
+
+    assert ordered[:len(PROTOCOL_COMMAND_LABELS)] == PROTOCOL_COMMAND_LABELS
+    assert ordered[len(PROTOCOL_COMMAND_LABELS):] == ("PRONATE", "RADIAL", "ULNAR")
+
+
+def test_a_manifest_without_a_recorded_label_set_is_rejected():
+    # Assuming the four protocol commands would let a session whose real label
+    # set is unknown train silently against the wrong classes.
+    manifest = balanced_manifest()
+    del manifest["gesture_actions"]
+    with pytest.raises(ValueError, match="gesture_actions"):
+        validate_complete_manifest(manifest)
+
+    manifest["gesture_actions"] = {}
+    with pytest.raises(ValueError, match="gesture_actions"):
+        validate_complete_manifest(manifest)
+
+
+def test_an_explicit_label_set_overrides_what_the_session_recorded():
+    # This is how load_dataset enforces agreement: every session is validated
+    # against the set resolved from the first one.
+    manifest = balanced_manifest(labels=CANDIDATE_LABELS)
+    with pytest.raises(ValueError, match="balanced across"):
+        validate_complete_manifest(manifest, labels=LABELS)
+
+
+def test_sessions_that_disagree_on_labels_cannot_be_pooled(tmp_path):
+    # Pooling them would train a fold on classes the held-out session never
+    # collected, and the confusion matrix would gain a silent all-zero row.
+    for name, labels in (
+        ("session_a", LABELS),
+        ("session_b", CANDIDATE_LABELS),
+    ):
+        directory = tmp_path / name
+        directory.mkdir()
+        (directory / "session.json").write_text(
+            json.dumps(balanced_manifest(session_id=name, labels=labels)),
+            encoding="utf-8",
+        )
+
+    with pytest.raises(ValueError, match="disagree on their label set"):
+        load_dataset(tmp_path)
 
 
 def test_manifest_rejects_overlapping_accepted_segments():

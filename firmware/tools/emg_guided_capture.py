@@ -37,7 +37,6 @@ from emg_guided_session import (
     CLASSIFIER_PROTOCOL,
     COLLECTION_PROTOCOLS,
     EVENT_GATE_PROTOCOL,
-    GESTURE_ACTIONS,
     GuidedSession,
     Phase,
     RUNNING_PHASES,
@@ -346,6 +345,7 @@ class CaptureApp:
                 arguments.protocol,
                 arguments.repetitions,
                 seed,
+                arguments.gestures,
             ),
             protocol=arguments.protocol,
             prepare_seconds=arguments.prepare_seconds,
@@ -813,6 +813,25 @@ def math_is_finite(value):
     return math.isfinite(value)
 
 
+def _parse_gesture_overrides(parser, entries):
+    """Turn repeated LABEL=ACTION strings into a gesture mapping, or None."""
+    if not entries:
+        return None
+    gestures = {}
+    for entry in entries:
+        label, separator, action = entry.partition("=")
+        label = label.strip()
+        action = action.strip()
+        if not separator or not label or not action:
+            parser.error(
+                f"--gesture expects LABEL=ACTION, got {entry!r}"
+            )
+        if label in gestures:
+            parser.error(f"--gesture repeats the label {label!r}")
+        gestures[label] = action
+    return gestures
+
+
 def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -831,7 +850,21 @@ def parse_arguments(argv=None):
     parser.add_argument("--recovery-seconds", type=float)
     parser.add_argument("--window-seconds", type=float, default=2.0)
     parser.add_argument("--seed", type=int)
+    parser.add_argument(
+        "--gesture",
+        action="append",
+        metavar="LABEL=ACTION",
+        help=(
+            "replace the collected gesture set, repeat once per label, e.g. "
+            "--gesture PRONATE='ROTATE PALM DOWN'. Giving any --gesture "
+            "replaces the whole default set rather than adding to it, so an "
+            "exploratory run cannot silently keep a label it meant to drop. "
+            "A set that is not the four protocol commands trains and scores "
+            "normally but cannot be emitted as firmware."
+        ),
+    )
     arguments = parser.parse_args(argv)
+    arguments.gestures = _parse_gesture_overrides(parser, arguments.gesture)
     event_gate = arguments.protocol == EVENT_GATE_PROTOCOL
     if arguments.out_root is None:
         arguments.out_root = (
@@ -857,6 +890,7 @@ def main(argv=None):
             arguments.protocol,
             arguments.repetitions,
             seed,
+            arguments.gestures,
         )
         GuidedSession(
             plan,
