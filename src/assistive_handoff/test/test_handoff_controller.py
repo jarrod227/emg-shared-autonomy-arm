@@ -41,6 +41,7 @@ SEARCH_PARAMS = {
     "search_timeout_sec": 2.0,
     "view_stable_command_count": 1,
     "view_target_update_min_rad": 0.0,
+    "view_step_angle": 0.2,
     "target_search_relative_limit": 0.6,
     "target_search_min_angle": -1.0,
     "target_search_max_angle": 1.0,
@@ -192,14 +193,19 @@ class Graph:
             self.nodes, lambda: self.controller._last_target is not None, timeout
         )
 
-    def send_intent(self, command):
+    def send_intent(
+        self, command, *, age_sec=0.0, sequence=None
+    ):
         msg = AssistiveIntent()
-        msg.header.stamp = self.helper.get_clock().now().to_msg()
+        stamp = self.helper.get_clock().now() - Duration(seconds=age_sec)
+        msg.header.stamp = stamp.to_msg()
         msg.header.frame_id = "test_intent"
         msg.command = command
         msg.confidence = 1.0
-        msg.sequence = self._sequence
-        self._sequence += 1
+        if sequence is None:
+            sequence = self._sequence
+            self._sequence += 1
+        msg.sequence = sequence
         self._intent_pub.publish(msg)
 
     def send_view(
@@ -320,6 +326,87 @@ def test_abort_in_release_cancels_and_returns_home(make_graph):
     assert g.wait_for_state(HandoffState.RELEASE)
     g.send_intent(AssistiveIntent.ABORT)
     assert g.wait_for_state(HandoffState.IDLE), "abort did not cancel release"
+
+
+def count_releases(controller):
+    """Record every _release_in_place call without changing its behaviour."""
+    calls = []
+    original = controller._release_in_place
+
+    def counted():
+        calls.append(1)
+        original()
+
+    controller._release_in_place = counted
+    return calls
+
+
+def test_abort_while_holding_empties_the_gripper_before_the_arm_leaves(
+    make_graph
+):
+    # The flag used to be cleared on arrival at IDLE, which meant an abort
+    # taken while holding travelled home reporting an empty gripper with the
+    # object still in it, and the next cycle would approach a second object
+    # with a full one. Clearing must happen when RETURN_HOME is entered.
+    g = make_graph()
+    g.confirm_to_ready()
+    assert g.controller._holding_object
+
+    g.send_intent(AssistiveIntent.ABORT)
+
+    assert g.wait_for_state(HandoffState.RETURN_HOME)
+    assert not g.controller._holding_object
+    assert g.wait_for_state(HandoffState.IDLE)
+    # Releasing must not borrow the RELEASE state, whose gates encode "a
+    # fresh, confident hand is ready to receive"; an abort implies no such
+    # thing, and sharing the state would set a bypass precedent.
+    assert "release" not in g.states
+
+
+def test_the_handover_path_does_not_release_a_second_time(make_graph):
+    # _on_motion_result clears the flag for RELEASE before transitioning to
+    # RETURN_HOME, so the abort guard must find nothing left to release.
+    g = make_graph()
+    g.confirm_to_ready()
+    releases = count_releases(g.controller)
+
+    g.send_intent(AssistiveIntent.CONFIRM)
+    assert g.wait_for_state(HandoffState.RELEASE)
+    assert g.wait_for_state(HandoffState.RETURN_HOME)
+    assert g.wait_for_state(HandoffState.IDLE)
+
+    assert releases == []
+    assert not g.controller._holding_object
+
+
+def test_abort_before_the_grasp_completes_releases_nothing(make_graph):
+    # _holding_object is set when the APPROACH motion finishes, so an abort
+    # during APPROACH has nothing in the gripper and must not pretend it does.
+    g = make_graph({"simulate_stuck_motion": "approach"})
+    g.settle(0.3)
+    g.send_intent(AssistiveIntent.CONFIRM)
+    assert g.wait_for_state(HandoffState.APPROACH)
+    releases = count_releases(g.controller)
+    assert not g.controller._holding_object
+
+    g.send_intent(AssistiveIntent.ABORT)
+    assert g.wait_for_state(HandoffState.IDLE)
+
+    assert releases == []
+
+
+def test_ready_timeout_releases_in_place_too(make_graph):
+    # The dwell timeout reaches RETURN_HOME without an ABORT. It holds the
+    # object just the same, so the invariant has to hold on that path as well.
+    g = make_graph({"ready_timeout_sec": 0.4})
+    g.confirm_to_ready()
+    releases = count_releases(g.controller)
+    assert g.controller._holding_object
+
+    assert g.wait_for_state(HandoffState.RETURN_HOME)
+    assert not g.controller._holding_object
+    assert g.wait_for_state(HandoffState.IDLE)
+    assert len(releases) == 1
 
 
 def test_ready_timeout_returns_home(make_graph):
@@ -701,6 +788,63 @@ def make_search_graph(
         publish_target=publish_target,
         publish_hand=publish_hand,
     )
+
+
+def test_next_target_drives_bounded_discrete_steps(make_graph):
+    g = make_search_graph(make_graph)
+    g.settle(0.2)
+
+    g.send_intent(AssistiveIntent.NEXT_TARGET)
+    assert g.wait_for_state(HandoffState.TARGET_SEARCH)
+    assert g.controller._search_input_mode == "discrete"
+    assert g.controller._last_requested_view_target == pytest.approx(0.2)
+
+    # An event while the previous step is moving is ignored, not queued.
+    first_target = g.controller._last_requested_view_target
+    replayed_sequence = g._sequence
+    g.send_intent(AssistiveIntent.NEXT_TARGET)
+    g.settle(0.05)
+    assert g.controller._last_requested_view_target == first_target
+
+    assert spin_until(
+        g.nodes, lambda: not g.controller._view_motion.moving
+    )
+    g.send_intent(
+        AssistiveIntent.NEXT_TARGET, sequence=replayed_sequence
+    )
+    g.settle(0.05)
+    assert g.controller._last_requested_view_target == first_target
+
+    g.send_intent(AssistiveIntent.NEXT_TARGET)
+    assert spin_until(
+        g.nodes,
+        lambda: g.controller._last_requested_view_target == pytest.approx(0.4),
+    )
+
+
+def test_stale_next_target_does_not_start_discrete_search(make_graph):
+    g = make_search_graph(make_graph)
+    g.settle(0.2)
+
+    g.send_intent(AssistiveIntent.NEXT_TARGET, age_sec=1.0)
+    g.settle(0.1)
+
+    assert g.state is HandoffState.IDLE
+    assert g.controller._last_requested_view_target is None
+
+
+def test_discrete_search_ignores_proportional_commands(make_graph):
+    g = make_search_graph(make_graph)
+    g.settle(0.2)
+    g.send_intent(AssistiveIntent.NEXT_TARGET)
+    assert g.wait_for_state(HandoffState.TARGET_SEARCH)
+    target = g.controller._last_requested_view_target
+
+    g.send_view(ViewControlCommand.LEFT)
+    g.settle(0.05)
+
+    assert g.controller._search_input_mode == "discrete"
+    assert g.controller._last_requested_view_target == target
 
 
 def test_view_search_not_started_by_hold_or_when_target_is_fresh(make_graph):

@@ -17,6 +17,10 @@ States and transitions:
     RETURN_HOME --motion done-->                     IDLE
 
     SEARCH / APPROACH / READY / RELEASE --ABORT-->   RETURN_HOME
+        (ABORT is ignored in IDLE and in RETURN_HOME itself: there is
+        nothing to cancel, and returning home is already the safe action.
+        An ABORT taken while holding releases the object in place first,
+        so reaching IDLE always means the gripper is empty.)
         (Phase-0 release is simulated, so aborting it just cancels a timer;
          the irreversible-gripper policy is a hardware-phase decision)
     READY       --no CONFIRM within ready_timeout--> RETURN_HOME
@@ -67,7 +71,11 @@ from assistive_interfaces.msg import (
     ViewControlCommand,
 )
 
-from assistive_handoff.view_search import SearchProfile, SimulatedViewMotion
+from assistive_handoff.view_search import (
+    DiscreteViewSweep,
+    SearchProfile,
+    SimulatedViewMotion,
+)
 
 
 class HandoffState(enum.Enum):
@@ -134,6 +142,7 @@ class HandoffController(Node):
         self.declare_parameter("view_activation_smoothing_alpha", 0.4)
         self.declare_parameter("view_stable_command_count", 2)
         self.declare_parameter("view_target_update_min_rad", 0.02)
+        self.declare_parameter("view_step_angle", math.radians(10.0))
 
         self.declare_parameter("target_search_center_angle", 0.0)
         self.declare_parameter("target_search_relative_limit", math.pi / 4.0)
@@ -209,6 +218,7 @@ class HandoffController(Node):
         self._view_target_update_min_rad = self._nonnegative_finite_param(
             "view_target_update_min_rad"
         )
+        self._view_step_angle = self._positive_finite_param("view_step_angle")
         self._target_search_profile = self._load_search_profile("target_search")
         self._handoff_search_profile = self._load_search_profile("handoff_search")
         if (
@@ -239,6 +249,9 @@ class HandoffController(Node):
         self._view_candidate_count = 0
         self._view_smoothed_activation = 0.0
         self._last_requested_view_target: float | None = None
+        self._search_input_mode: str | None = None
+        self._discrete_sweep: DiscreteViewSweep | None = None
+        self._last_discrete_sequence: int | None = None
         self._active_search_profile = self._target_search_profile
         self._view_motion = SimulatedViewMotion(self._target_search_profile)
 
@@ -329,6 +342,7 @@ class HandoffController(Node):
         if self._state is HandoffState.IDLE:
             if self._target_is_available() or not requests_motion:
                 return
+            self._search_input_mode = "proportional"
             self._transition(HandoffState.TARGET_SEARCH)
         elif self._state is HandoffState.READY:
             if not self._holding_object:
@@ -343,12 +357,15 @@ class HandoffController(Node):
                 or not requests_motion
             ):
                 return
+            self._search_input_mode = "proportional"
             self._transition(HandoffState.HANDOFF_SEARCH)
 
         if self._state in (
             HandoffState.TARGET_SEARCH,
             HandoffState.HANDOFF_SEARCH,
         ):
+            if self._search_input_mode == "discrete":
+                return
             self._apply_view_command(msg, activation)
 
     def _validated_view_activation(
@@ -526,7 +543,10 @@ class HandoffController(Node):
         ):
             return
 
-        if self._search_phase is SearchPhase.ACTIVE:
+        if (
+            self._search_phase is SearchPhase.ACTIVE
+            and self._search_input_mode != "discrete"
+        ):
             watchdog_expired = self._last_view_source_time is None
             if self._last_view_source_time is not None:
                 age = (
@@ -575,18 +595,87 @@ class HandoffController(Node):
         elif command == AssistiveIntent.ABORT:
             self._on_abort()
         elif command == AssistiveIntent.NEXT_TARGET:
-            # Target cycling belongs to the upstream selector. This controller
-            # consumes whichever source-independent target it publishes.
-            self.get_logger().info(
-                "NEXT_TARGET ignored by handoff_controller; "
-                "handled by upstream selector"
-            )
+            self._on_next_target(msg)
         else:
             self.get_logger().warning(f"unknown intent command {command}: ignoring")
 
     # ------------------------------------------------------------------
     # Intent handling
     # ------------------------------------------------------------------
+
+    def _on_next_target(self, msg: AssistiveIntent) -> None:
+        """Advance one bounded view step in a discrete search episode."""
+
+        age = self._age_sec(msg.header.stamp)
+        if age < -self._view_future_tolerance_sec:
+            self.get_logger().warning(
+                f"NEXT_TARGET view step ignored: source stamp is {-age:.3f}s future"
+            )
+            return
+        if age > self._view_command_max_age_sec:
+            self.get_logger().warning(
+                f"NEXT_TARGET view step ignored: source stamp is {age:.3f}s old"
+            )
+            return
+        sequence = int(msg.sequence)
+        if (
+            self._last_discrete_sequence is not None
+            and not self._sequence_is_newer(
+                sequence, self._last_discrete_sequence
+            )
+        ):
+            self.get_logger().warning(
+                f"NEXT_TARGET view step ignored: sequence {sequence} is not newer"
+            )
+            return
+        self._last_discrete_sequence = sequence
+
+        if self._state is HandoffState.IDLE:
+            if self._target_is_available():
+                return
+            self._search_input_mode = "discrete"
+            self._transition(HandoffState.TARGET_SEARCH)
+        elif self._state is HandoffState.READY:
+            if (
+                not self._holding_object
+                or self._hand_is_release_ready(
+                    self._last_hand, log_reasons=False
+                )
+            ):
+                return
+            self._search_input_mode = "discrete"
+            self._transition(HandoffState.HANDOFF_SEARCH)
+
+        if self._state not in (
+            HandoffState.TARGET_SEARCH,
+            HandoffState.HANDOFF_SEARCH,
+        ):
+            self.get_logger().info(
+                "NEXT_TARGET handled by upstream selector outside search"
+            )
+            return
+        if self._search_input_mode != "discrete":
+            self.get_logger().info(
+                "NEXT_TARGET view step ignored: proportional search owns episode"
+            )
+            return
+        if (
+            self._search_phase is not SearchPhase.ACTIVE
+            or self._view_motion.moving
+        ):
+            self.get_logger().info(
+                "NEXT_TARGET view step ignored: previous step still active"
+            )
+            return
+
+        if self._discrete_sweep is None:
+            raise RuntimeError("discrete search has no sweep policy")
+        target = self._discrete_sweep.next_target(
+            self._view_motion.position
+        )
+        self._last_requested_view_target = (
+            self._view_motion.request_target(target)
+        )
 
     def _on_confirm(self) -> None:
         if self._state is HandoffState.IDLE:
@@ -838,6 +927,8 @@ class HandoffController(Node):
             self._search_phase = None
             self._search_started_at = None
             self._search_stopped_at = None
+            self._search_input_mode = None
+            self._discrete_sweep = None
 
         self._epoch += 1
         self._cancel_pending_timers()
@@ -860,6 +951,12 @@ class HandoffController(Node):
             # Phase-0 release is a simulated transition: no gripper actuation.
             self._start_motion(HandoffState.RETURN_HOME)
         elif new_state is HandoffState.RETURN_HOME:
+            # ABORT must end with an empty gripper, so an abort taken while
+            # holding puts the object down before the arm leaves. The normal
+            # handover path cannot double-release: _on_motion_result clears
+            # the flag for RELEASE before it transitions here.
+            if self._holding_object:
+                self._release_in_place()
             self._start_motion(HandoffState.IDLE)
         elif new_state is HandoffState.READY:
             epoch = self._epoch
@@ -870,12 +967,53 @@ class HandoffController(Node):
                 )
             )
         elif new_state is HandoffState.IDLE:
-            self._holding_object = False
+            # Asserted, not assigned. This used to clear the flag, which meant
+            # an abort taken while holding reached IDLE reporting an empty
+            # gripper while the object was still in it -- the state model went
+            # wrong silently and the next cycle would approach a second object
+            # with a full gripper. Releasing is now the only way the flag
+            # clears, so reaching here holding is a missing release, not a
+            # condition to paper over.
+            if self._holding_object:
+                raise RuntimeError(
+                    "reached IDLE while holding: some path to RETURN_HOME "
+                    "skipped the release"
+                )
             self._active_search_profile = self._target_search_profile
             self._view_motion = SimulatedViewMotion(
                 self._target_search_profile
             )
             self._publish_view_angle()
+
+    def _release_in_place(self) -> None:
+        """Put the object down where the arm stopped, before returning home.
+
+        Chosen over carrying the object home because carrying it would need an
+        "idle but holding" condition, and that weakens the invariant this
+        keeps: reaching IDLE means the gripper is empty. Dropping in place is
+        acceptable for the tabletop scenario this system is scoped to; it is
+        not a general policy, and a scenario where the arm can be over
+        something it must not drop onto needs its own decision.
+
+        ABORT stays immediate. What stops instantly is the arm, which is
+        already halted at this point; the release happens at the pose it
+        stopped in and adds no travel.
+
+        Deliberately not routed through the RELEASE state, whose
+        _release_gates_pass() encodes "a fresh, confident hand is ready to
+        receive". An abort release must never require or imply that, and
+        sharing the state would set a precedent for bypassing those gates.
+
+        Phase-0 has no gripper actuation anywhere -- RELEASE is a timer too --
+        so this is a flag change and a log line. Objective 5 owns the real
+        actuation and the sequencing it needs: the release must complete
+        before the homing motion starts.
+        """
+        self.get_logger().warning(
+            "ABORT while holding an object: releasing in place before "
+            "returning home"
+        )
+        self._holding_object = False
 
     def _start_search(self, state: HandoffState) -> None:
         if self._view_motion.moving:
@@ -887,6 +1025,13 @@ class HandoffController(Node):
         )
         self._view_motion.configure(profile)
         self._active_search_profile = profile
+        if self._search_input_mode is None:
+            self._search_input_mode = "proportional"
+        self._discrete_sweep = (
+            DiscreteViewSweep(profile, self._view_step_angle)
+            if self._search_input_mode == "discrete"
+            else None
+        )
         self._search_phase = SearchPhase.ACTIVE
         self._search_started_at = self.get_clock().now()
         self._search_stopped_at = None
