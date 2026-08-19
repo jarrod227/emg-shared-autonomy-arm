@@ -86,21 +86,6 @@ PREPARATION_TRIALS = 3
 GESTURE_TRIALS = 3
 GESTURES = ("NEXT_TARGET", "CONFIRM", "ABORT")
 
-# The reference level proportional control needs: the contraction that should
-# map to full deflection. Measured separately from the gesture trials because
-# the two want opposite statistics -- the gesture trials report their weakest
-# repetition, since the threshold must pass even that, while the reference
-# wants a typical one.
-#
-# Deliberately not maximum voluntary contraction. Fatigue drops MVC well
-# inside a session, and this project measured it directly: three consecutive
-# ABORT trials in one calibration ran 514, 378, 295, a 43% fall. A wearer
-# calibrated at a fresh maximum cannot reach full deflection ten minutes
-# later, and compensates by pushing harder, which fatigues them faster. So
-# the prompt asks for an effort that is comfortable to hold, and anything
-# above it saturates.
-REFERENCE_TRIALS = 3
-REFERENCE_SECONDS = 4.0
 GESTURE_PROMPTS = {
     "NEXT_TARGET": "lift your wrist upward and hold",
     "CONFIRM": "make a fist and hold",
@@ -190,24 +175,7 @@ def sustained_level(totals, windows=SUSTAIN_WINDOWS):
     ))
 
 
-def reference_level(reference_trials):
-    """The comfortable-effort level that should map to full deflection.
-
-    Median across trials, and the choice matters in both directions. The
-    minimum would put typical effort above full deflection, so the wearer
-    would sit saturated and lose the top of the range. The maximum would put
-    full deflection out of reach as soon as they tired. The median is the
-    level they actually produced when asked for a comfortable one.
-    """
-    if not reference_trials:
-        raise CalibrationError("reference capture cannot be empty")
-    return float(np.median([
-        sustained_level(trial) for trial in reference_trials
-    ]))
-
-
-def summarize(rest_totals, preparation_trials, gesture_totals,
-              reference_trials=None):
+def summarize(rest_totals, preparation_trials, gesture_totals):
     """Turn measured windows into a threshold and a verdict.
 
     Pure arithmetic on already-collected numbers, so the decision rule is
@@ -218,15 +186,6 @@ def summarize(rest_totals, preparation_trials, gesture_totals,
     trials (the worst case that must be suppressed) and each gesture the
     quietest (the weakest repetition that must still get through).
 
-    `reference_trials` is optional. It is measured and recorded but nothing
-    is sent to the board with it yet, and no verdict depends on it: the
-    firmware normalizes activation itself and has no field to receive a
-    reference in. Whether it needs one is the open question this measurement
-    exists to answer -- if the reference turns out to track the threshold
-    across donnings, the firmware can derive it and the protocol never
-    changes. One donning cannot tell, and assuming a proportionality here is
-    the same mistake the rest-scaled threshold made before an electrode
-    re-gel falsified it.
     """
     if len(rest_totals) == 0 or not preparation_trials:
         raise CalibrationError("rest and preparation captures cannot be empty")
@@ -275,26 +234,6 @@ def summarize(rest_totals, preparation_trials, gesture_totals,
         "baseline_shift": FROZEN_BASELINE_SHIFT,
         "sustain_windows": SUSTAIN_WINDOWS,
     }
-    if reference_trials:
-        reference = reference_level(reference_trials)
-        summary["reference_level"] = round(reference, 1)
-        summary["reference_trials"] = [
-            round(sustained_level(trial), 1) for trial in reference_trials
-        ]
-        # Recorded so several donnings can be compared without re-deriving it.
-        # If this ratio is stable the firmware can compute the reference from
-        # the threshold it already has; if it is not, the reference has to be
-        # sent down and the SET_ACTIVATION payload has to grow.
-        if threshold > 0:
-            summary["reference_over_threshold"] = round(
-                reference / threshold, 2
-            )
-        if reference <= threshold:
-            summary["reference_warning"] = (
-                f"reference level ({reference:.0f}) is not above T_session "
-                f"({threshold}); proportional control would have no usable "
-                f"range, so the reference capture asked for too little effort"
-            )
     # The firmware judges on max(K x baseline, floor). If the relative rule
     # already sits above the calibrated floor, the calibration is inert and
     # says nothing about what the board will actually do - worth stating
@@ -451,14 +390,7 @@ def run_capture(connection):
                 GESTURE_SECONDS,
             ))
         gestures[name] = trials
-    reference = []
-    for trial in range(1, REFERENCE_TRIALS + 1):
-        reference.append(capture.prompt(
-            f"REFERENCE {trial}/{REFERENCE_TRIALS} - lift your wrist upward "
-            f"at an effort you could hold for a minute, NOT your hardest",
-            REFERENCE_SECONDS,
-        ))
-    return rest, preparation, gestures, reference
+    return rest, preparation, gestures
 
 
 def print_summary(summary):
@@ -474,18 +406,9 @@ def print_summary(summary):
     print(f"  separation ratio        {summary['separation_ratio']}")
     print(f"  T_session               {summary['threshold_floor']}")
     print(f"  K (fixed)               {summary['factor']}")
-    if "reference_level" in summary:
-        print(f"  reference level         {summary['reference_level']} "
-              f"(trials {summary['reference_trials']})")
-        if "reference_over_threshold" in summary:
-            print(f"  reference / T_session   "
-                  f"{summary['reference_over_threshold']} "
-                  f"(recorded only; nothing is sent to the board with it)")
     print("=" * 58)
     if "inert_floor_warning" in summary:
         print(f"  WARNING: {summary['inert_floor_warning']}")
-    if "reference_warning" in summary:
-        print(f"  WARNING: {summary['reference_warning']}")
     print(f"  {verdict_message(summary)}")
 
 
@@ -542,12 +465,8 @@ def main(argv=None):
                     baseline_shift=FROZEN_BASELINE_SHIFT, threshold_floor=110,
                 )
                 started = datetime.datetime.now().astimezone()
-                rest, preparation, gestures, reference = run_capture(
-                    connection
-                )
-                summary = summarize(
-                    rest, preparation, gestures, reference
-                )
+                rest, preparation, gestures = run_capture(connection)
+                summary = summarize(rest, preparation, gestures)
                 summary["started"] = started.isoformat()
                 summary["port"] = arguments.port
                 # Keep the windows the verdict was computed from. The first
@@ -567,10 +486,6 @@ def main(argv=None):
                         ]
                         for name, trials in gestures.items()
                     },
-                    "reference": [
-                        [int(value) for value in trial]
-                        for trial in reference
-                    ],
                 }
                 print_summary(summary)
 

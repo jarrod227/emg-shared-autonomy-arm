@@ -18,7 +18,6 @@ from emg_calibrate import (
     SUSTAIN_WINDOWS,
     CalibrationError,
     confirm_applied,
-    reference_level,
     summarize,
     sustained_level,
     total_mav_windows,
@@ -64,9 +63,9 @@ CLEAN = donning(35, 79, {"NEXT_TARGET": 400, "CONFIRM": 736, "ABORT": 318})
 THIN = donning(6, 73, {"NEXT_TARGET": 173, "CONFIRM": 197, "ABORT": 145})
 
 
-def run(measured, reference=None):
+def run(measured):
     return summarize(measured["rest"], measured["preparation"],
-                     measured["gestures"], reference)
+                     measured["gestures"])
 
 
 def test_the_clean_donning_passes_and_places_the_threshold_between_the_bands():
@@ -287,59 +286,3 @@ def test_confirmation_requires_the_board_to_report_what_was_sent():
         confirm_applied(state(threshold_floor=110), summary)
     with pytest.raises(CalibrationError, match="expected"):
         confirm_applied(state(factor=FROZEN_FACTOR + 1), summary)
-
-
-def test_the_reference_is_the_median_trial_not_the_weakest_or_the_strongest():
-    # Both ends are wrong in a way that costs range. The minimum puts an
-    # ordinary effort above full deflection, so the wearer sits saturated and
-    # loses the top of the scale; the maximum puts full deflection out of
-    # reach the moment they tire, which this hardware does measurably within
-    # a single session.
-    trials = [constant(300), constant(500), constant(400)]
-
-    assert reference_level(trials) == pytest.approx(400.0)
-
-
-def test_the_reference_is_recorded_with_its_ratio_to_the_threshold():
-    # Recorded, not acted on: the firmware normalizes activation itself and
-    # has no field to receive a reference in. Whether it needs one depends on
-    # whether this ratio is stable across donnings, which one donning cannot
-    # say.
-    summary = run(CLEAN, [constant(500), constant(520), constant(480)])
-
-    assert summary["reference_level"] == pytest.approx(500.0)
-    assert summary["reference_trials"] == [500.0, 520.0, 480.0]
-    assert summary["reference_over_threshold"] == pytest.approx(
-        500.0 / summary["threshold_floor"], abs=0.01
-    )
-
-
-def test_a_calibration_without_a_reference_still_summarizes():
-    # Every stored calibration so far predates this capture, and the verdict
-    # has never depended on it.
-    summary = run(CLEAN)
-
-    assert "reference_level" not in summary
-    assert "reference_over_threshold" not in summary
-    assert summary["verdict"] == "pass"
-    assert summary["threshold_floor"] == run(CLEAN, [constant(500)])[
-        "threshold_floor"
-    ]
-
-
-def test_a_reference_below_the_threshold_is_reported_as_unusable():
-    # Proportional control maps the span above the threshold. A reference
-    # inside the dead band leaves no span at all, and the cause is a
-    # too-gentle reference capture rather than anything about the donning.
-    summary = run(CLEAN, [constant(50)])
-
-    assert "reference_warning" in summary
-    assert "no usable range" in summary["reference_warning"]
-    # The verdict is about separating preparation from gestures and must not
-    # move because the reference prompt was misjudged.
-    assert summary["verdict"] == "pass"
-
-
-def test_an_empty_reference_capture_is_an_error_not_a_zero():
-    with pytest.raises(CalibrationError, match="reference capture"):
-        reference_level([])
