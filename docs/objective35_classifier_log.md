@@ -805,7 +805,162 @@ an absence of signal. Zero events in the hazardous direction, and fewer
 total candidate events than the original floor=110 check, which is the
 expected direction for a higher, better-measured floor.
 
+## Choosing a direction gesture, and finding it cannot carry an amplitude (2026-08-18)
+
+Continuous view control needs `LEFT` and `RIGHT`, and the four trained intents
+have no spare gesture: `ABORT` is globally reserved, `CONFIRM` means lock and
+approach. Three candidates were recorded alongside the existing four in one
+donning, two sessions, three repetitions each: radial deviation, ulnar
+deviation, and supination. Pronation was dropped before recording -- the
+forearm rests palm-down, which is already full pronation, so the class would
+have had no range.
+
+### The comparison that decided it
+
+Seven classes together reached 95.2% trial and 85.0% window accuracy, but that
+figure decides nothing. `ABORT` is the safety class and was already the
+weakest of the four, so what matters is what each candidate costs it. The
+baseline has to be a four-class model trained on *this* dataset, not the 96%
+from the 2026-08-14 sessions -- that was a different donning with five
+sessions, and comparing across it would attribute donning differences to the
+candidates.
+
+| model | window | trial | `ABORT` window | vs base | candidate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| four-class baseline | 94.3% | 100.0% | 86.1% | | |
+| + radial | 93.9% | 100.0% | 86.1% | +0.0pp | 92.4% |
+| + supination | 87.5% | 100.0% | 86.1% | +0.0pp | 71.7% |
+| + ulnar | 91.0% | 100.0% | 85.8% | -0.3pp | 80.2% |
+| + radial + ulnar | 90.8% | 100.0% | 84.9% | -1.2pp | |
+| all seven | 85.0% | 95.2% | 84.6% | -1.4pp | |
+
+The anatomical prediction made before recording was wrong on the ordering. It
+expected forearm rotation to sit farthest from `ABORT` in feature space, warned
+that radial deviation would collide with `NEXT_TARGET`, and called ulnar
+deviation the dangerous one because flexor carpi ulnaris is a flexor like the
+one `ABORT` uses. Radial deviation turned out best, ulnar deviation did not
+touch `ABORT` at all, and only the supination prediction held -- it is the
+weakest, plausibly because the supinator is deep and biceps sits above the
+electrode band. The prediction was recorded as reasoning rather than
+measurement, and measuring was the point.
+
+Both directions as a pair beat one direction plus a reused `NEXT_TARGET`, for
+a reason no accuracy column shows: the pair frees `NEXT_TARGET` entirely, so
+one gesture stops carrying two meanings. Their cross-confusion -- the failure
+that matters most, since it means moving the wrong way -- was zero within the
+donning, in both directions, at both window and trial level.
+
+### Re-donning, which is where the real result is
+
+Leave-one-session-out inside one donning measures repeatability, not transfer;
+the electrodes never moved. A second donning, recorded the same evening with
+the same protocol, allows training on one and testing on the other.
+
+| fold | model | window | trial | `ABORT` | radial | ulnar |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| A trains, B tests | four-class | 99.0% | 100.0% | 96.2% | | |
+| A trains, B tests | + both | 89.8% | 94.4% | 95.6% | 77.0% | 86.3% |
+| B trains, A tests | four-class | 94.3% | 100.0% | 84.9% | | |
+| B trains, A tests | + both | 88.0% | 97.2% | 83.5% | 92.7% | 79.9% |
+
+`ABORT` survives the re-donning, losing 0.6 and 1.4 points. The directions
+never confuse each other at trial level in either fold, but the within-donning
+"literally zero" does degrade: one fold called 26 of 344 ulnar windows radial.
+The gate's five-window agreement and the majority vote absorbed all of it,
+which is what the trial-level zero is made of -- so the claim is "zero at trial
+level", not "zero".
+
+The cross-donning confusion also produced what the anatomical prediction had
+expected and the within-donning result had denied: 19% of `NEXT_TARGET` windows
+were called radial, and 23% of radial windows were called `REST`. Radial
+deviation and wrist extension are not as separable across donnings as within
+one.
+
+### The finding that overturned the choice
+
+Classification accuracy was the wrong acceptance criterion, and picking a
+winner on it repeated the mistake this project already has a lesson about.
+The event gate does not act on windows, it acts on a level *sustained* across
+five consecutive windows, and it never sees anything the activation threshold
+has rewritten to `REST`. Measured that way:
+
+| donning | `T_session` | preparation | `NEXT_TARGET` | radial | ulnar |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A | 123 | 59 | 145 | **84** | 116 |
+| B | 116 | 64 | 171 | **93** | 180 |
+
+**Radial deviation does not sustain above the activation threshold in either
+donning.** It has peaks above it -- which is why every window above 116
+classified correctly, 100% in every band -- but it cannot hold five
+consecutive windows there, so the gate never fires. Ulnar deviation is -7 in
+one donning and +64 in the other.
+
+Lowering the threshold does not rescue it, and the reason is not the risk the
+existing warning names. Two thresholds, a lower one for the continuous channel
+and the existing one for events, is a defensible design: the two paths have
+genuinely different failure modes, since a marginal crossing produces one full
+discrete command but only a near-zero angle on the continuous path, and the
+controller's 0.05 activation deadband is a second independent gate that
+marginal crossings cannot pass. The event path would keep its threshold, so
+the preparatory-movement defect stays closed.
+
+What defeats it is dynamic range. Placing a threshold at the geometric mean of
+preparation and the gesture, as the calibration already does:
+
+| donning | gesture | preparation | level | `T_view` | span | degrees per count |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| A | `NEXT_TARGET` | 59 | 145 | 92 | 53 | 1.7 |
+| A | radial | 59 | 84 | 70 | **14** | **6.6** |
+| A | ulnar | 59 | 116 | 83 | 33 | 2.7 |
+| B | `NEXT_TARGET` | 64 | 171 | 105 | 66 | 1.4 |
+| B | radial | 64 | 93 | 77 | **16** | **5.7** |
+| B | ulnar | 64 | 180 | 107 | 73 | 1.2 |
+
+Radial deviation leaves 14 to 16 counts to encode a 90 degree range, about six
+degrees per count, against a hold-to-hold coefficient of variation measured at
+36% and a hop-to-hop change of 6%. Its separation from preparation is 1.42 and
+1.45, where the calibration's own acceptance criterion fails anything below
+2.5 on the grounds that such a threshold "would sit within noise of real
+gestures".
+
+### What this leaves
+
+Discrete stepping needs classification and nothing else -- no amplitude, no
+reference, no second threshold. Radial and ulnar deviation classify well
+enough for it, and `DiscreteViewSweep` with a per-session mode parameter was
+already built. Proportional control on these gestures is blocked on the
+wearer's dynamic range, not on any missing software.
+
+Three donnings also gave reference-to-threshold ratios of 2.38, 3.34 and 2.47.
+That 40% spread is the evidence that a firmware cannot derive a reference level
+from the threshold it already holds, whenever a reference is needed again.
+
+Unresolved, and worth stating rather than leaving to be rediscovered: whether
+radial deviation is intrinsically this weak on a forearm band, or was simply
+performed gently. Both donnings were recorded in one evening by one wearer who
+had already completed several sessions, and no capture asked for a deliberately
+forceful deviation. That measurement costs minutes and was not taken.
+
 ## Lessons
+
+- **An accuracy figure is not an acceptance criterion.** Radial deviation won
+  the candidate comparison on classification and cannot fire the event gate at
+  all, because the gate acts on a level sustained across five windows and the
+  activation threshold rewrites everything below it to `REST`. The winner was
+  declared before checking the physical requirement the class has to meet.
+- **Within-donning repeatability hides the confusions that matter.** The two
+  directions had literally zero cross-confusion until the electrodes were
+  removed and re-applied, and the radial/`NEXT_TARGET` collision that the
+  anatomical prediction expected appeared only across donnings.
+- **A capture that asks for an abstract quantity fails; one that names a
+  gesture works.** The comfortable-effort reference returned two of three
+  trials inside the preparation band on both donnings and with two different
+  wordings, because the wearer could not tell what was being asked and did
+  nothing. Every gesture prompt in the same tool worked first time.
+- **Check whether a shared parameter can serve both configurations it is
+  applied to.** One `view_step_angle` was fine for the unloaded search band
+  and wider than the whole loaded one, which silently removed the
+  straight-ahead angle from the loaded sweep.
 
 - **Held-out is a property of the split, not of the file name.** Five
   recordings from one donning are one session with four folds of self-flattery.
