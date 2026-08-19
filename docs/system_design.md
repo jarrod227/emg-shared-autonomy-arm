@@ -706,7 +706,12 @@ the tabletop setting and is not a general policy. The release does not reuse
 the handover `RELEASE` path, whose gates require a fresh, confident hand ready
 to receive; an abort implies no such thing. `ABORT` remains immediate, because
 what stops instantly is the arm, and the release happens at the pose it already
-stopped in. `ABORT` is not accepted in `IDLE` or during `RETURN_HOME`.
+stopped in. `ABORT` is not accepted in `IDLE` or during `RETURN_HOME`, because in both
+the activity it would cancel is not running: in `RETURN_HOME` the arm is
+already doing what `ABORT` asks for. Halting in place instead would park the
+arm in an arbitrary pose rather than the defined safe one, and the wearer can
+see the arm travelling home, so the refusal is not silent to them. `ABORT` is
+a supervisory command, not a safety-rated emergency stop.
 
 `HANDOFF_READY -> RELEASE` additionally requires a fresh, confident,
 N-frame-stable hand point inside the configured 3D delivery volume plus the
