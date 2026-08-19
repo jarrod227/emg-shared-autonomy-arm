@@ -41,7 +41,8 @@ SEARCH_PARAMS = {
     "search_timeout_sec": 2.0,
     "view_stable_command_count": 1,
     "view_target_update_min_rad": 0.0,
-    "view_step_angle": 0.2,
+    "target_search_step_angle": 0.2,
+    "handoff_search_step_angle": 0.1,
     "target_search_relative_limit": 0.6,
     "target_search_min_angle": -1.0,
     "target_search_max_angle": 1.0,
@@ -850,6 +851,27 @@ def test_discrete_search_ignores_proportional_commands(make_graph):
 
     assert g.controller._search_input_mode == "discrete"
     assert g.controller._last_requested_view_target == target
+
+
+def test_each_search_profile_steps_with_its_own_angle(make_graph):
+    # One shared step size cannot serve both bands. The loaded band is
+    # deliberately less than half the unloaded one, so a step sized for target
+    # search exceeded the whole handoff band and left it bouncing between the
+    # two edges -- with the straight-ahead angle, where a hand waiting to
+    # receive is most likely to be, unreachable.
+    g = make_search_graph(
+        make_graph, proportional=False,
+        publish_target=True, publish_hand=False,
+    )
+    g.confirm_to_ready()
+    assert g.controller._holding_object
+
+    g.send_intent(AssistiveIntent.NEXT_TARGET)
+    assert g.wait_for_state(HandoffState.HANDOFF_SEARCH)
+
+    # handoff_search_step_angle is 0.1 in SEARCH_PARAMS, not the 0.2 that
+    # target search uses.
+    assert g.controller._last_requested_view_target == pytest.approx(0.1)
 
 
 def test_a_discrete_session_never_opens_a_proportional_episode(make_graph):

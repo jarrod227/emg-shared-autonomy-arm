@@ -142,7 +142,20 @@ class HandoffController(Node):
         self.declare_parameter("view_activation_smoothing_alpha", 0.4)
         self.declare_parameter("view_stable_command_count", 2)
         self.declare_parameter("view_target_update_min_rad", 0.02)
-        self.declare_parameter("view_step_angle", math.radians(10.0))
+        # Step size is per profile, like relative_limit and nominal_speed. One
+        # shared value cannot serve both: a step wider than a profile's whole
+        # band degenerates to bouncing between the two edges, and the loaded
+        # band is deliberately less than half the unloaded one. A single 45
+        # degree step gave target search -45/0/+45 but gave handoff search
+        # only -20/+20, so the straight-ahead angle -- where a hand waiting to
+        # receive is most likely to be -- became unreachable.
+        #
+        # Defaulting each step to its own relative_limit is not arbitrary: a
+        # step that divides the band exactly is what makes the stop set finite
+        # and symmetric, here {-limit, 0, +limit}. Both defaults also stay
+        # under the camera's 70 degree horizontal field of view (measured, see
+        # docs/objective42_evaluation.md), so consecutive stops overlap and
+        # the sweep has no blind gap between them.
         # Which input drives a search episode is a fact about this session's
         # EMG configuration, not something to decide message by message: only
         # one of the two direction mechanisms is real evidence at a time.
@@ -157,6 +170,7 @@ class HandoffController(Node):
         self.declare_parameter("target_search_min_angle", -math.pi / 3.0)
         self.declare_parameter("target_search_max_angle", math.pi / 3.0)
         self.declare_parameter("target_search_nominal_speed", 0.25)
+        self.declare_parameter("target_search_step_angle", math.pi / 4.0)
         self.declare_parameter("target_search_acceleration", 0.5)
         self.declare_parameter("target_search_deceleration", 0.75)
 
@@ -165,6 +179,7 @@ class HandoffController(Node):
         self.declare_parameter("handoff_search_min_angle", -math.pi / 3.0)
         self.declare_parameter("handoff_search_max_angle", math.pi / 3.0)
         self.declare_parameter("handoff_search_nominal_speed", 0.12)
+        self.declare_parameter("handoff_search_step_angle", math.pi / 9.0)
         self.declare_parameter("handoff_search_acceleration", 0.3)
         self.declare_parameter("handoff_search_deceleration", 0.5)
 
@@ -226,7 +241,6 @@ class HandoffController(Node):
         self._view_target_update_min_rad = self._nonnegative_finite_param(
             "view_target_update_min_rad"
         )
-        self._view_step_angle = self._positive_finite_param("view_step_angle")
         self._proportional_search_available = bool(
             self.get_parameter("proportional_search_available").value
         )
@@ -1080,6 +1094,11 @@ class HandoffController(Node):
             if state is HandoffState.TARGET_SEARCH
             else self._handoff_search_profile
         )
+        step_angle = self._positive_finite_param(
+            "target_search_step_angle"
+            if state is HandoffState.TARGET_SEARCH
+            else "handoff_search_step_angle"
+        )
         self._view_motion.configure(profile)
         self._active_search_profile = profile
         # Derived from the session, not from whichever message opened the
@@ -1092,7 +1111,7 @@ class HandoffController(Node):
             else "discrete"
         )
         self._discrete_sweep = (
-            DiscreteViewSweep(profile, self._view_step_angle)
+            DiscreteViewSweep(profile, step_angle)
             if self._search_input_mode == "discrete"
             else None
         )
