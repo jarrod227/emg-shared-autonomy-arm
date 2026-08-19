@@ -401,7 +401,7 @@ Host-side, in `tools/`. Neither needs the ARM toolchain.
 
 | Script | Purpose |
 | --- | --- |
-| `emg_probe.py` | Fixed-window capture that prints a text summary: sample rate, value distribution, and a per-segment breakdown showing whether contractions register. Terminates on its own. |
+| `emg_probe.py` | **Obsolete, do not use.** Bring-up tool from before the binary protocol: it opens the port at 115200 and parses text with a regex. Against the v1 stream it reports plausible nonsense — 33 channels at 4.3 Hz, most of them "pinned, no signal" — from a board that is streaming perfectly. Use `emg_scope.py` for a live check or `emg_record.py` + `emg_analyze.py` to capture and judge. |
 | `emg_scope.py` | Live scrolling plot. Close the window to stop; a text summary is printed on exit so a run leaves evidence even if nobody was watching. |
 | `emg_protocol.py` | Decoder for the v1 wire format, with per-type sequence tracking and resynchronization. |
 | `emg_record.py` | Records the stream to a raw byte log plus a JSON sidecar, or replays an existing log. |
@@ -433,6 +433,6 @@ Both need `/dev/ttyACM0` access, so the user must be in `dialout` and have
 logged in again since being added.
 
 ```bash
-python3 firmware/tools/emg_probe.py 10
+python3 firmware/tools/emg_scope.py
 python3 firmware/tools/emg_scope.py --channels 3 --rate 2000
 ```

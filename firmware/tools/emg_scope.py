@@ -173,7 +173,11 @@ def main():
 
     print("\n" + "=" * 58)
     for index, stream in enumerate(state["channels"]):
-        data = list(stream.samples)
+        # float(), because the samples are numpy int64 and CPython 3.12's
+        # statistics.pstdev reaches for .bit_length() on the values it is
+        # given. The summary is the whole point of the tool for anyone who
+        # was not watching the screen, and it was crashing on exit instead.
+        data = [float(value) for value in stream.samples]
         spread = statistics.pstdev(data) if len(data) > 1 else 0.0
         contact = "attached" if stream.attached else "NO CONTACT"
         rails = stream.rail_hits()
