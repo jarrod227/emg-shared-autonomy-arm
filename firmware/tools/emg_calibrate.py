@@ -31,6 +31,17 @@ donning that cannot separate the two bands does not get a cleverer
 threshold, it gets re-placed electrodes - today's 2.0 fails where
 yesterday's 4.0 passes outright.
 
+The tiers are provisional as of 2026-08-19. They were fitted against a
+five-window sustained level, and the measurement has since been corrected to
+the seventeen-window run the gate actually requires, which lowers every ratio:
+the two donnings recorded on 2026-08-18 move from 4.36 and 3.30 to 3.16 and
+2.38, so one of them now "fails" a tier it was never calibrated for while its
+gestures fire with 46-78 windows of margin. Re-deriving the tiers needs more
+donnings than exist. Until then the verdict stays fail-closed on the old
+numbers and `gate_reachability` is reported beside it, so a marginal or
+failing result can be inspected for what the gate would actually do rather
+than only what the ratio says.
+
     emg_calibrate.py                      # guided capture, then send
     emg_calibrate.py --dry-run            # capture and report, send nothing
     emg_calibrate.py --send-file PATH     # re-send a stored calibration
@@ -95,6 +106,13 @@ GESTURE_PROMPTS = {
 # Three tiers rather than one threshold: "recalibrate" and "re-place the
 # electrodes" are different instructions and conflating them wastes the
 # wearer's time on whichever one is wrong.
+#
+# These no longer decide the verdict; see gate_reachability below. They were
+# fitted against a five-window sustained level, and once the measurement was
+# corrected to the run the gate actually requires, the same recordings that
+# fire every gesture cleanly score 2.38 and 3.16 -- one of them "failing" a
+# tier it was never calibrated for. They stay as a reported placement-quality
+# figure, which is what the wording above was always about.
 SEPARATION_PASS = 3.0
 SEPARATION_MARGINAL = 2.5
 
@@ -114,10 +132,33 @@ SEPARATION_MARGINAL = 2.5
 # row on hardware that was working.
 #
 # The sustained-level rule also states the right thing about preparation: a
-# movement too short to occupy the gate's stable run cannot fire an event at
-# any threshold, so it does not need suppressing and should not drag the
+# movement too short to occupy the gate's run cannot fire an event at any
+# threshold, so it does not need suppressing and should not drag the
 # threshold down.
-SUSTAIN_WINDOWS = VALIDATED_GATE.stable_windows
+#
+# The run is holdoff + stable, not stable alone. The comment above always
+# said "the number of consecutive windows the event gate requires before it
+# will emit anything" and the code used five, but the gate discards
+# onset_holdoff windows first: the first non-REST decision arms the hold-off,
+# eleven more are consumed by it, and only then does the stable run begin. A
+# level held for five windows and a level held for seventeen are different
+# numbers, and fitting a threshold to the first places it about twice too
+# high. Measured 2026-08-18: thresholds of 123 and 116 were shipped where the
+# corrected rule gives 68 and 69, and at the shipped values even the four
+# trained gestures fired in only 0-4 of 6 recorded trials.
+#
+# ABORT is its own number. abort_stable_windows is 1, so it needs
+# holdoff + 1 = 13, and it is often the weakest gesture -- the one that sets
+# the threshold. Measuring it at 17 understates it: on donning A it moved the
+# weakest gesture from ABORT at 99 to CONFIRM at 120, and the threshold from
+# 61 to 68.
+SUSTAIN_WINDOWS = (
+    VALIDATED_GATE.onset_holdoff_windows + VALIDATED_GATE.stable_windows
+)
+ABORT_SUSTAIN_WINDOWS = (
+    VALIDATED_GATE.onset_holdoff_windows + VALIDATED_GATE.abort_stable_windows
+)
+GESTURE_SUSTAIN_WINDOWS = {"ABORT": ABORT_SUSTAIN_WINDOWS}
 
 
 class CalibrationError(Exception):
@@ -175,6 +216,62 @@ def sustained_level(totals, windows=SUSTAIN_WINDOWS):
     ))
 
 
+def gesture_sustain_windows(name):
+    """How long this gesture must hold above the threshold to fire an event."""
+    return GESTURE_SUSTAIN_WINDOWS.get(name, SUSTAIN_WINDOWS)
+
+
+def longest_run_above(totals, threshold):
+    """The longest unbroken stretch of windows at or above a threshold.
+
+    This is what the gate sees. A window below the threshold is rewritten to
+    REST, which clears the hold-off and the stable run both, so a gesture that
+    dips even once starts the count again from zero.
+    """
+    best = run = 0
+    for value in totals:
+        run = run + 1 if value >= threshold else 0
+        best = max(best, run)
+    return best
+
+
+def gate_reachability(preparation_trials, gesture_totals, threshold):
+    """Check the threshold against what it has to achieve, on both sides.
+
+    The separation ratio is a proxy. What the threshold must actually do is
+    two directly observable things, in the same windows already captured:
+    preparation must not hold the gate's run above it, and every gesture must.
+    The two disagree in practice -- a donning scoring 2.38 fired every gesture
+    with 46-78 windows of margin while its preparation reached 2 -- so the
+    verdict follows the measurement and the ratio is reported beside it.
+    """
+    preparation_runs = [
+        longest_run_above(trial, threshold) for trial in preparation_trials
+    ]
+    gestures = {}
+    for name, trials in sorted(gesture_totals.items()):
+        needed = gesture_sustain_windows(name)
+        runs = [longest_run_above(trial, threshold) for trial in trials]
+        gestures[name] = {
+            "runs": runs,
+            "windows_needed": needed,
+            "trials_firing": sum(1 for run in runs if run >= needed),
+            "trials": len(runs),
+        }
+    return {
+        "preparation_runs": preparation_runs,
+        "preparation_windows_needed": SUSTAIN_WINDOWS,
+        "preparation_can_fire": max(preparation_runs) >= SUSTAIN_WINDOWS,
+        "gestures": gestures,
+        "all_gestures_fire": all(
+            item["trials_firing"] == item["trials"] for item in gestures.values()
+        ),
+        "any_gesture_dead": any(
+            item["trials_firing"] == 0 for item in gestures.values()
+        ),
+    }
+
+
 def summarize(rest_totals, preparation_trials, gesture_totals):
     """Turn measured windows into a threshold and a verdict.
 
@@ -203,7 +300,10 @@ def summarize(rest_totals, preparation_trials, gesture_totals):
     for name, trials in gesture_totals.items():
         if not trials:
             raise CalibrationError(f"gesture {name} has no trials")
-        plateaus[name] = min(sustained_level(trial) for trial in trials)
+        windows = gesture_sustain_windows(name)
+        plateaus[name] = min(
+            sustained_level(trial, windows) for trial in trials
+        )
     weakest_name = min(plateaus, key=plateaus.get)
     weakest = plateaus[weakest_name]
 
@@ -212,12 +312,27 @@ def summarize(rest_totals, preparation_trials, gesture_totals):
     separation = weakest / preparation_upper
     threshold = int(round(math.sqrt(preparation_upper * weakest)))
 
+    # The ratio, not the reachability below, decides. Reachability against a
+    # threshold derived from the same windows is vacuous: the threshold is the
+    # geometric mean of preparation and the weakest gesture, so it always sits
+    # between them, and "sustained_level < T" already means no run of that
+    # length clears T. Both sides pass by construction. It is informative only
+    # when the threshold comes from somewhere else -- re-verifying a stored
+    # calibration, or the 2026-08-18 finding, where a threshold fitted to a
+    # five-window level was checked against the seventeen the gate needs.
+    #
+    # What the ratio measures and reachability cannot is margin: three
+    # preparation trials are a small sample, and the question is whether a
+    # fourth, louder one would cross.
     if separation >= SEPARATION_PASS:
         verdict = "pass"
     elif separation >= SEPARATION_MARGINAL:
         verdict = "marginal"
     else:
         verdict = "fail"
+    reachability = gate_reachability(
+        preparation_trials, gesture_totals, threshold
+    )
 
     summary = {
         "rest_baseline": round(rest_baseline, 1),
@@ -228,6 +343,7 @@ def summarize(rest_totals, preparation_trials, gesture_totals):
             name: round(value, 1) for name, value in sorted(plateaus.items())
         },
         "separation_ratio": round(separation, 2),
+        "gate_reachability": reachability,
         "verdict": verdict,
         "threshold_floor": threshold,
         "factor": FROZEN_FACTOR,
@@ -406,6 +522,15 @@ def print_summary(summary):
     print(f"  separation ratio        {summary['separation_ratio']}")
     print(f"  T_session               {summary['threshold_floor']}")
     print(f"  K (fixed)               {summary['factor']}")
+    reach = summary["gate_reachability"]
+    print(f"  gate needs a run of     {reach['preparation_windows_needed']} "
+          f"windows above T_session")
+    print(f"  preparation reached     {reach['preparation_runs']} "
+          f"-> {'CAN FIRE' if reach['preparation_can_fire'] else 'cannot fire'}")
+    for name, item in reach["gestures"].items():
+        print(f"  {name:<23} {item['runs']} "
+              f"(needs {item['windows_needed']}) -> "
+              f"{item['trials_firing']}/{item['trials']} fire")
     print("=" * 58)
     if "inert_floor_warning" in summary:
         print(f"  WARNING: {summary['inert_floor_warning']}")

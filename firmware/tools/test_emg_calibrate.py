@@ -16,13 +16,18 @@ from emg_calibrate import (
     SEPARATION_MARGINAL,
     SEPARATION_PASS,
     SUSTAIN_WINDOWS,
+    ABORT_SUSTAIN_WINDOWS,
     CalibrationError,
     confirm_applied,
+    gate_reachability,
+    gesture_sustain_windows,
+    longest_run_above,
     summarize,
     sustained_level,
     total_mav_windows,
     verdict_message,
 )
+from emg_event_gate_replay import VALIDATED_GATE
 from emg_features_ref import WINDOW
 from emg_protocol import (
     SET_RESULT_ACCEPTED,
@@ -286,3 +291,67 @@ def test_confirmation_requires_the_board_to_report_what_was_sent():
         confirm_applied(state(threshold_floor=110), summary)
     with pytest.raises(CalibrationError, match="expected"):
         confirm_applied(state(factor=FROZEN_FACTOR + 1), summary)
+
+
+def test_the_sustain_run_is_the_one_the_gate_actually_needs():
+    # The comment always said "the number of consecutive windows the event
+    # gate requires before it will emit anything" and the code used
+    # stable_windows alone. The gate discards onset_holdoff windows first, so
+    # a threshold fitted to a five-window hold sits about twice too high: 123
+    # and 116 were shipped where the corrected rule gives 68 and 69, and at
+    # the shipped values even the four trained gestures fired in 0-4 of 6.
+    assert SUSTAIN_WINDOWS == (
+        VALIDATED_GATE.onset_holdoff_windows + VALIDATED_GATE.stable_windows
+    )
+
+
+def test_abort_needs_a_shorter_run_than_the_ordinary_gestures():
+    # abort_stable_windows is 1, so ABORT clears the gate in holdoff + 1.
+    # Measuring it at the ordinary run understates it, and it is often the
+    # weakest gesture -- the one that sets the threshold.
+    assert ABORT_SUSTAIN_WINDOWS < SUSTAIN_WINDOWS
+    assert ABORT_SUSTAIN_WINDOWS == (
+        VALIDATED_GATE.onset_holdoff_windows
+        + VALIDATED_GATE.abort_stable_windows
+    )
+    assert gesture_sustain_windows("ABORT") == ABORT_SUSTAIN_WINDOWS
+    assert gesture_sustain_windows("CONFIRM") == SUSTAIN_WINDOWS
+
+
+def test_a_gesture_that_only_holds_briefly_is_measured_lower_than_before():
+    # A trial that spikes for six windows and then fades used to be credited
+    # with the spike, because five windows was all the measure asked for.
+    trial = np.concatenate([
+        np.full(6, 400, dtype=np.int64),
+        np.full(60, 90, dtype=np.int64),
+    ])
+    assert sustained_level(trial, 5) == 400
+    assert sustained_level(trial, SUSTAIN_WINDOWS) == 90
+
+
+def test_reachability_reports_what_the_gate_would_do_at_a_given_threshold():
+    # Reported, not decisive: against a threshold derived from these same
+    # windows both sides pass by construction. It is informative when the
+    # threshold comes from elsewhere, which is how the 2026-08-18 defect was
+    # found -- a threshold fitted to five windows, checked against seventeen.
+    prep = [np.full(40, 60, dtype=np.int64)]
+    gestures = {"ABORT": [np.full(40, 300, dtype=np.int64)],
+                "CONFIRM": [np.full(40, 300, dtype=np.int64)]}
+
+    workable = gate_reachability(prep, gestures, 100)
+    assert workable["preparation_can_fire"] is False
+    assert workable["all_gestures_fire"] is True
+
+    # The shipped-threshold case: too high for anything to hold.
+    too_high = gate_reachability(prep, gestures, 320)
+    assert too_high["any_gesture_dead"] is True
+    assert too_high["gestures"]["ABORT"]["windows_needed"] == (
+        ABORT_SUSTAIN_WINDOWS
+    )
+
+
+def test_longest_run_restarts_after_a_single_dip():
+    # One window below the threshold is rewritten to REST, which clears the
+    # hold-off and the stable run together.
+    dips = np.array([200] * 10 + [50] + [200] * 8, dtype=np.int64)
+    assert longest_run_above(dips, 100) == 10
