@@ -297,6 +297,59 @@ entry. Promote it on first use.
   `datasets/emg_calibration/calibration_20260815_155306.json`, is consistent
   with the paper's no-feedback figure and is not yet written up in a log.
 
+### `hwang2017robustness`
+
+- Type: research paper
+- Primary source: [PLOS ONE article](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0186318)
+- DOI: [10.1371/journal.pone.0186318](https://doi.org/10.1371/journal.pone.0186318)
+- Metadata: Hwang, Hahne, Muller, *PLOS ONE*, 2017. Confirmed against Crossref.
+- Verified claim: in real-time regression-based (proportional) myoelectric
+  control with 16 forearm channels -- two circles, 35 mm spacing, at about a
+  third of the elbow-to-wrist distance -- donning/doffing caused a significant
+  performance decrease across all metrics, while arm position change caused no
+  significant loss online. The paper concludes that arm position change is "of
+  lesser critical concern in practical control situations, but mechanical or
+  algorithmic solutions are needed to resolve the negative impact of
+  donning/doffing".
+- Claim boundary: 16 channels against this project's three, and able-bodied
+  subjects on a cursor task rather than a robot. It establishes which of the
+  two confounds dominates for proportional control; it does not say what a
+  three-channel band can achieve, and its arm-position finding concerns limb
+  posture during use, not the starting posture a gesture is performed from.
+- Use: Objective 3.5 -- the reason this project's cross-donning degradation is
+  treated as the expected hard problem rather than a collection error, and the
+  reason re-donning is the variable worth controlling.
+
+### `olsson2021mrl`
+
+- Type: research paper
+- Primary source: [PubMed Central full text](https://pmc.ncbi.nlm.nih.gov/articles/PMC7885418/)
+- DOI: [10.1186/s12984-021-00832-4](https://doi.org/10.1186/s12984-021-00832-4)
+- Metadata: Olsson, Malesevic, Bjorkman, Antfolk, *Journal of NeuroEngineering
+  and Rehabilitation*, 2021. Confirmed against Crossref.
+- Verified claim: eight circularly arranged dry surface electrodes on the
+  forearm, at about a third of the elbow-to-wrist distance, drove simultaneous
+  and proportional control learned from **categorical movement labels only**,
+  with no continuous ground truth. Movements were encoded ternary (rest plus
+  eight compound wrist/digit movements as targets such as [-1, 0] or [1, 1])
+  and a shared-encoder, multi-branch network regressed sEMG envelopes onto
+  continuous kinematics. Evaluated online with 20 able-bodied subjects on a
+  Fitts-law cursor task, on day 1 and again on day 7 without recalibration,
+  with no significant deterioration; re-donning was guided by photographs.
+  Reported inference cost is 5.5 MFLOPS and a 59.5 kB memory footprint.
+- Claim boundary: eight channels against this project's three, and the reported
+  week-long stability is attributed partly to the electrodes' large pickup
+  area, so it does not transfer to a three-channel band unexamined. The
+  59.5 kB footprint does not fit an STM32F103C8T6 at all: 20 kB RAM total and
+  about 20 kB of flash left after the current firmware. The paper does not
+  claim its architecture is necessary for the categorical-label result.
+- Use: Objective 3.5 -- the source for training a proportional output from the
+  discrete gesture labels this project already records, which would remove the
+  need for a measured reference level and the downlink to carry it. The
+  network itself is not portable here; whether a linear regressor onto the same
+  ternary encoding reproduces the useful part is this project's own question,
+  not something this paper answers.
+
 ## Candidate queue
 
 These sources are deliberately not in `references.bib` and must not yet be
@@ -306,6 +359,9 @@ used as factual support.
 | --- | --- | --- |
 | [Rolling Shutter Camera Synchronization with Sub-millisecond Accuracy](https://arxiv.org/abs/1902.11084) | May support the distinction between timestamp pairing and exposure synchronization for ordinary USB cameras. | Verify final venue and metadata; read the method/limitations against this project's stop-and-look use. |
 | [Multi-View Picking: Next-best-view Reaching for Improved Grasping in Clutter](https://arxiv.org/abs/1809.08564) | May establish active viewpoint selection as prior work for Objective 5 refinement/search. | Verify final publication record and identify the exact baseline claim needed. |
+| [Olsson et al. 2021 companion question: does a *linear* regressor onto a ternary encoding work?](https://doi.org/10.1186/s12984-021-00832-4) | The categorical-labels-to-proportional-output result is the transferable part; the network is not. A ridge regression onto the same encoding would cost less than the current 4-class LDA. | Not a literature question -- this needs measuring on this project's own recordings before any claim. Listed here so it is not mistaken for something the paper established. |
+| [Smith, Kuiken, Hargrove — Linear regression simultaneous myoelectric control](https://doi.org/10.1109/TBME.2015.2469741) | Regression rather than classification for simultaneous proportional control. | **Intramuscular** EMG, so channel count and signal quality are not comparable; read before assuming any of it transfers to a surface band. |
+| [Shafieian & Nougarou — Two-stage regression structure, EMBC 2023](https://doi.org/10.1109/EMBC40787.2023.10340870) | Detects the DoF first, then selects a per-direction regression model — structurally close to "which direction, then how far". | Conference paper; read the full text for channel count and whether the two-stage split buys anything at three channels. |
 | Hand-eye calibration primary source | Needed before formal claims about `base -> end_effector -> stereo_reference` calibration. | Select and read an appropriate primary method/comparison rather than citing an OpenCV API alone. |
 | [ISO 13482 — Personal care robots](https://www.iso.org/standard/53820.html) | The **nearest-scoped** standard for an assistive device, and therefore the one to read first — not the industrial pair below. | Confirm current edition and scope. Read which hazard classes actually apply to a fixed-delivery-zone handoff before any design text leans on it. |
 | [ISO/TS 15066 — Collaborative robots](https://www.iso.org/standard/62996.html) | Sometimes cited for power/force limiting in human-robot contact. | Scoped to **industrial** robots; confirm whether anything in it legitimately transfers to a service/assistive context, or whether citing it would overclaim. |
