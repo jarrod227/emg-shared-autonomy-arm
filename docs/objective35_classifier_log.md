@@ -1034,6 +1034,29 @@ None of this is the wearer accommodating a defect. The 0.85 s stable run was
 measured, and exists to reject exactly the brief unintended movement that a
 fast flick is indistinguishable from.
 
+### The acceptance run
+
+Live through the whole chain, deliberate technique, about 100 s:
+
+| | events | published |
+| --- | ---: | ---: |
+| `NEXT_TARGET` | 10 | 5 |
+| `CONFIRM` | 5 | 2 |
+| `ABORT` | 3 | 3 |
+
+Every `NEXT_TARGET` paired -- ten events forming five pairs with gaps of 2.65
+to 5.10 s, all inside the 5.5 s window. The single unpaired `CONFIRM` was
+orphaned by a deliberate 14.95 s pause. Margins ran 72-230 for `NEXT_TARGET`,
+28-82 for `CONFIRM` and 56-74 for `ABORT`, all healthy against the historical
+medians of 113, 39 and 40.
+
+This is the first run of the evening in which the chain worked end to end, and
+the contrast with its start is the whole finding: the same board, the same
+model, the same wearer, going from 4640 consecutive `REST` windows and no
+event at all to 100% pairing -- via two code fixes and one change in how the
+gesture is performed. The wearer's own summary was "fast does not work, slow
+is very accurate", which is what the window-by-window replay had predicted.
+
 ## Lessons
 
 - **A comment stating the correct rule is not an implementation of it.** The
