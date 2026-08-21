@@ -372,6 +372,35 @@ measurably beats that. The part can carry either — a 12-feature, 16-hidden,
 4-class int8 MLP is 256 weights — so the constraint is not the silicon, it is
 that a model with no baseline to beat cannot be judged.
 
+## Performing the gestures
+
+Measured 2026-08-20, after two hours spent diagnosing a system that was
+working correctly and being driven too fast. Ten quick wrist-down attempts
+produced two events; five slow ones produced five.
+
+**Move only the wrist.** Involving the fingers brings in extensor activity,
+which is the signature the model learned for wrist *extension* -- during fast
+`ABORT` attempts it split the vote 110 to 49 and emitted a spurious
+`NEXT_TARGET` in the middle of a wrist-down.
+
+**Hold for about 1.5 seconds.** The gate needs 17 consecutive windows above
+the activation threshold for `NEXT_TARGET`/`CONFIRM` and 13 for `ABORT`, which
+is 0.85 s and 0.65 s of *surviving* signal, not of intent. Half the failed
+attempts were classified perfectly, had peak MAV of 218-387, and lasted eight
+to twelve windows. A brief flick is meant to be rejected: the stable run was
+measured specifically to reject the unintended preparatory movement that a
+flick is indistinguishable from.
+
+**Relax completely between gestures, for about two seconds.** The activation
+stage's threshold is `max(K x baseline, floor)` and the baseline is an EMA
+over windows classified `REST`. Gestures in quick succession never let it
+fall, so it climbed from 30 to 37 and took the threshold from 90 to 111 --
+rushing raises the bar under the wearer and invites rushing further.
+
+`NEXT_TARGET` and `CONFIRM` additionally need **two events within 5.5 s** to
+publish, so they take two deliberate contractions with a full relaxation
+between them. `ABORT` publishes on one.
+
 ## Tests
 
 Neither suite needs the ARM toolchain or the board.

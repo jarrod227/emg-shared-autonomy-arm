@@ -941,8 +941,116 @@ performed gently. Both donnings were recorded in one evening by one wearer who
 had already completed several sessions, and no capture asked for a deliberately
 forceful deviation. That measurement costs minutes and was not taken.
 
+## A night of zero events, and the three things behind it (2026-08-20)
+
+The bridge ran cleanly against a freshly calibrated board and emitted nothing.
+Diagnostics said the link was perfect: 19370 packets accepted, none lost or
+malformed, handshake confirmed with the calibrated floor applied, and 4640
+consecutive windows classified `REST` with `mcu_events` empty. Three separate
+faults were behind it, and two of them had been latent for weeks.
+
+### The calibration measured a hold the gate never asked for
+
+`sustained_level` used `VALIDATED_GATE.stable_windows`, five hops. Its own
+comment said that was "the number of consecutive windows the event gate
+requires before it will emit anything", and it is not: the gate discards
+`onset_holdoff` first. The first non-`REST` decision arms the hold-off, eleven
+more are consumed by it, and only then does the stable run begin, so an
+ordinary gesture needs seventeen and `ABORT` needs thirteen. The intent was
+documented correctly and the code did not implement it.
+
+A level held for five windows and one held for seventeen are different
+numbers. Fitting a threshold to the first places it about twice too high: 123
+and 116 were shipped where the corrected rule gives 68 and 69. Replaying the
+recorded sessions at the shipped values fires even the four trained gestures
+in only 0-4 of 6 trials.
+
+`ABORT` needed its own number for a reason that is easy to miss: it is
+frequently the *weakest* gesture, so it is the one that sets the threshold.
+Measuring it at seventeen understated it and moved the weakest gesture from
+`ABORT` at 99 to `CONFIRM` at 120, and the threshold from 61 to 68.
+
+A two-sided reachability verdict was written to replace the separation ratio
+and reverted the same hour, because it is vacuous. The threshold is the
+geometric mean of preparation and the weakest gesture, so it always lies
+between them, and "sustained level below T" already means no run of that
+length clears T -- both sides pass by construction. The existing tests caught
+it: the re-gelled donning that must fail started passing. The ratio measures
+the thing reachability cannot, which is margin against a preparation trial
+louder than the three that happened to be captured.
+
+### The mains notch was aimed at the wrong country
+
+`DEFAULT_MAINS_HZ` was 50, and this hardware has always run in North America.
+A notch on the wrong frequency does not fail loudly. It leaves the interferer
+in the amplitude features, and how much that costs depends on how good an
+antenna the day's electrode placement happens to be -- which is why it
+survived two months.
+
+The donning that exposed it coupled mains strongly into channel 1: resting MAV
+47 where the signal is about 10, lifting the total resting level to 70 and
+`max(K x baseline, floor)` to 210 while every gesture in that session's own
+calibration measured 129-154. Ten seconds of rest recorded on the spot put the
+strongest in-band peak at 60.0 Hz on all three channels *both before and after
+the shipped filter*: the notch was passing it through untouched. Re-filtering
+the same recording at 60 Hz gave channel 1 MAV 10, total 32, threshold 98.
+
+The deployed classifier does not need retraining for this. Holding the model
+fixed and changing only the filter under it gives 98.3% window and 100% trial
+at 50 Hz against 98.1% and 100% at 60, with identical per-class recall. That
+is a different question from "would a model retrained on 60 Hz features work",
+which was measured first and answers nothing about the model actually flashed.
+
+### The rest was how the gesture was performed
+
+With both fixed, events fired -- and still felt unreliable: ten deliberate
+`ABORT` attempts produced two events, one of which was a spurious
+`NEXT_TARGET`. Event logs cannot explain that, because they show what came out
+and not what each window voted. Replaying a thirty-second recording through
+filter, features, classifier, activation and gate showed two causes at once:
+
+| | fast attempts | slow, wrist only, held 1.5 s |
+| --- | ---: | ---: |
+| events from the attempts | 2 | 5 of 5 |
+| consecutive surviving windows | 8-23, half below 13 | 24-58, all above |
+| `ABORT` votes vs `NEXT_TARGET` | 110 : 49 | 180 : 14 |
+| baseline / threshold | 37 / 111 | 30 / 90 |
+
+Half the fast attempts were classified perfectly and had ample amplitude --
+peaks of 218-387 -- and were simply too brief, lasting eight to twelve windows
+against the thirteen `ABORT` needs. The other half had their votes split by
+`NEXT_TARGET`, which is also where the spurious event came from: a five-window
+run voted entirely `NEXT_TARGET` in the middle of a wrist-down attempt.
+Involving the fingers brings in extensor activity, which is the signature the
+model learned for wrist extension.
+
+The third row is a feedback loop worth naming. Performing the gestures in
+quick succession never lets the muscle return to rest, so the activation
+stage's EMA baseline climbs -- 30 to 37 here -- and `K x baseline` raises the
+threshold under the wearer, from 90 to 111. Rushing makes the system harder to
+drive, which invites rushing further.
+
+None of this is the wearer accommodating a defect. The 0.85 s stable run was
+measured, and exists to reject exactly the brief unintended movement that a
+fast flick is indistinguishable from.
+
 ## Lessons
 
+- **A comment stating the correct rule is not an implementation of it.** The
+  calibration said it measured "the number of consecutive windows the event
+  gate requires before it will emit anything" and measured a third of that,
+  for weeks, with tests passing throughout.
+- **Ask what the deployed artifact does, not what a rebuilt one would do.**
+  Retraining on the new filter answered a question nobody was asking; the
+  model actually flashed had to be held fixed and fed the new features.
+- **A wrong constant that only degrades performance will outlive one that
+  breaks something.** The mains notch was aimed at 50 Hz on 60 Hz supply for
+  two months and surfaced only when a donning coupled enough of it to matter.
+- **Event logs cannot diagnose a gate.** They record what was emitted. Which
+  stage stopped a gesture -- amplitude, duration, classification, or
+  re-arming -- needs the raw recording replayed window by window.
+- **Write down how to perform the gesture.** Two of the night's hours went to
+  a system that was working correctly and being driven too fast.
 - **An accuracy figure is not an acceptance criterion.** Radial deviation won
   the candidate comparison on classification and cannot fire the event gate at
   all, because the gate acts on a level sustained across five windows and the
