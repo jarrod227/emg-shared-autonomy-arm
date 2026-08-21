@@ -56,6 +56,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${EMG_SHARED_DIR}/emg_gate.c
     ${EMG_SHARED_DIR}/emg_activation.c
     ${EMG_SHARED_DIR}/emg_rx.c
+    ${EMG_SHARED_DIR}/emg_view.c
 )
 
 # Add include paths

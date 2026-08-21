@@ -29,6 +29,7 @@
 #include <stdbool.h>
 
 #include "emg_activation.h"
+#include "emg_view.h"
 #include "emg_classifier.h"
 #include "emg_features.h"
 #include "emg_filter.h"
@@ -147,7 +148,8 @@ static void emg_dsp_discontinuity(void);
 static void emg_process_half(uint32_t index, bool attached);
 static void emg_send_intent(emg_command_t command,
                             const emg_classification_t *result,
-                            bool window_valid, uint32_t new_saturations);
+                            bool window_valid, uint32_t new_saturations,
+                            emg_command_t decision, int32_t total_mav);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -333,9 +335,14 @@ static void emg_dsp_discontinuity(void)
   emg_frames_since_invalid = 0u;
 }
 
+/* `command` is the event gate's output and `decision` the post-activation
+ * per-hop one. They are different readings and both are needed: the discrete
+ * half of the packet carries the event, the proportional half carries what
+ * the muscle is doing right now. */
 static void emg_send_intent(emg_command_t command,
                             const emg_classification_t *result,
-                            bool window_valid, uint32_t new_saturations)
+                            bool window_valid, uint32_t new_saturations,
+                            emg_command_t decision, int32_t total_mav)
 {
   uint8_t *buffer = emg_tx_buffer[emg_tx_slot];
   int64_t best = result->scores[0];
@@ -367,8 +374,20 @@ static void emg_send_intent(emg_command_t command,
     intent.signal_quality = (uint8_t)(255u - new_saturations);
   }
   /* Proportional view control is not implemented. */
-  intent.direction = 0;
-  intent.activation = 0u;
+  /* The proportional half of the same decision. Derived from the
+   * post-activation decision, not the classifier output: a window too quiet
+   * to be an intent is also too quiet to steer with. The threshold is
+   * recomputed rather than stored so it can never disagree with what the
+   * activation stage just applied. */
+  {
+    const int32_t baseline = emg_activation_baseline(&emg_activation);
+    const int32_t relative = (int32_t)emg_activation.factor * baseline;
+    const int32_t threshold = relative > emg_activation.threshold_floor
+                                  ? relative
+                                  : emg_activation.threshold_floor;
+    intent.direction = emg_view_direction(decision);
+    intent.activation = emg_view_activation(total_mav, threshold);
+  }
 
   const size_t length = emg_encode_intent(
       buffer, EMG_TX_BUFFER_SIZE, emg_intent_sequence,
@@ -444,7 +463,8 @@ static void emg_process_half(uint32_t index, bool attached)
        * command carries the gate's event, so anything other than REST means
        * an event fired on this hop. */
       (void)emg_gate_push(&emg_gate, decision, window_valid, &event);
-      emg_send_intent(event, &result, window_valid, new_saturations);
+      emg_send_intent(event, &result, window_valid, new_saturations,
+                      decision, total_mav);
     }
   }
 }
