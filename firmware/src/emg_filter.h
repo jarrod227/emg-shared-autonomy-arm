@@ -64,7 +64,18 @@ typedef struct {
 } emg_filter_t;
 
 /* 4th-order Butterworth band-pass, 20-450 Hz at 2000 Hz, followed by notches
- * on the 50 Hz mains fundamental and its third harmonic.
+ * on the 60 Hz mains fundamental and its third harmonic.
+ *
+ * 60 Hz because that is what this hardware's supply actually is. It ran at 50
+ * for two months without failing loudly -- a notch on the wrong frequency
+ * leaves the interferer in the amplitude features, and how much that costs
+ * depends on how well the day's electrode placement couples it. On 2026-08-20
+ * it cost a whole live session: resting channel 1 sat at MAV 47 against a
+ * signal of about 10, the total resting level reached 70, and the firmware's
+ * max(K x baseline, floor) threshold went to 210 -- above every gesture in
+ * that session's own calibration, which measured 129-154. The board emitted
+ * no event at all. The same recording re-filtered at 60 Hz gives channel 1
+ * MAV 10, total 32, threshold 98.
  *
  * The notches are not optional polish. Mains hum lands inside the pass band,
  * so the band-pass cannot touch it, and on a real session it was 96.6% of one
@@ -78,7 +89,7 @@ typedef struct {
  * test fails if this table and scipy disagree. */
 #define EMG_FILTER_DEFAULT_SECTIONS 4
 extern const emg_biquad_coeffs_t
-    emg_filter_20_450_notch50_at_2000[EMG_FILTER_DEFAULT_SECTIONS];
+    emg_filter_20_450_notch60_at_2000[EMG_FILTER_DEFAULT_SECTIONS];
 
 /* Copies the sections in and clears the state. Returns false for a null
  * pointer, a zero count, or more sections than EMG_FILTER_MAX_SECTIONS. */

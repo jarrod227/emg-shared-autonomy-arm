@@ -257,7 +257,7 @@ host before flashing.
 | Piece | State |
 | --- | --- |
 | Packet framing + CRC (`src/emg_packet.c`) | done, host-tested |
-| 20–450 Hz band-pass + 50/150 Hz notches (`src/emg_filter.c`) | done, Q29 golden-vector checked against scipy; live on hardware |
+| 20–450 Hz band-pass + 60/180 Hz notches (`src/emg_filter.c`) | done, Q29 golden-vector checked against scipy; live on hardware. Was 50/150 until 2026-08-20; the supply is 60 Hz and the mismatch silently inflated resting amplitude |
 | Feature extraction (`src/emg_features.c`) | done, 200 ms window / 50 ms hop and MAV/RMS/ZC/WL golden-vector checked for exact equality; live on hardware |
 | ADC1 scan + DMA1 channel 1 acquisition | done and live-verified on IN0/IN1/IN4 |
 | TIM3 2 kHz trigger | done; measured stream rate 2000.1 Hz |

@@ -76,7 +76,7 @@ static void test_band_pass_rejects_dc(void)
 {
     emg_filter_t filter;
 
-    CHECK(emg_filter_init(&filter, emg_filter_20_450_notch50_at_2000,
+    CHECK(emg_filter_init(&filter, emg_filter_20_450_notch60_at_2000,
                           EMG_FILTER_DEFAULT_SECTIONS));
     int32_t last = 0;
     for (int index = 0; index < 3000; index++) {
@@ -92,7 +92,7 @@ static void test_band_pass_is_stable_after_an_impulse(void)
     emg_filter_t filter;
     int32_t peak = 0;
 
-    CHECK(emg_filter_init(&filter, emg_filter_20_450_notch50_at_2000,
+    CHECK(emg_filter_init(&filter, emg_filter_20_450_notch60_at_2000,
                           EMG_FILTER_DEFAULT_SECTIONS));
     (void)emg_filter_step(&filter, 2047);
     for (int index = 0; index < 20000; index++) {
@@ -112,9 +112,9 @@ static void test_reset_clears_history(void)
     emg_filter_t first;
     emg_filter_t second;
 
-    CHECK(emg_filter_init(&first, emg_filter_20_450_notch50_at_2000,
+    CHECK(emg_filter_init(&first, emg_filter_20_450_notch60_at_2000,
                           EMG_FILTER_DEFAULT_SECTIONS));
-    CHECK(emg_filter_init(&second, emg_filter_20_450_notch50_at_2000,
+    CHECK(emg_filter_init(&second, emg_filter_20_450_notch60_at_2000,
                           EMG_FILTER_DEFAULT_SECTIONS));
     for (int index = 0; index < 100; index++) {
         (void)emg_filter_step(&first, golden_input(index));
@@ -136,9 +136,9 @@ static void test_block_matches_step(void)
     for (int index = 0; index < 64; index++) {
         input[index] = golden_input(index);
     }
-    CHECK(emg_filter_init(&blockwise, emg_filter_20_450_notch50_at_2000,
+    CHECK(emg_filter_init(&blockwise, emg_filter_20_450_notch60_at_2000,
                           EMG_FILTER_DEFAULT_SECTIONS));
-    CHECK(emg_filter_init(&stepwise, emg_filter_20_450_notch50_at_2000,
+    CHECK(emg_filter_init(&stepwise, emg_filter_20_450_notch60_at_2000,
                           EMG_FILTER_DEFAULT_SECTIONS));
     emg_filter_block(&blockwise, input, output, 64);
     for (int index = 0; index < 64; index++) {
@@ -156,7 +156,7 @@ static int emit_golden(const char *path)
         printf("  FAIL could not open %s\n", path);
         return 1;
     }
-    if (!emg_filter_init(&filter, emg_filter_20_450_notch50_at_2000,
+    if (!emg_filter_init(&filter, emg_filter_20_450_notch60_at_2000,
                          EMG_FILTER_DEFAULT_SECTIONS)) {
         fclose(file);
         return 1;

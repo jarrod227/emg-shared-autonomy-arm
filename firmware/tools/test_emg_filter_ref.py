@@ -117,7 +117,7 @@ def test_the_c_coefficient_table_matches_scipy():
     """
     source = FILTER_SOURCE.read_text()
     match = re.search(
-        r"emg_filter_20_450_notch50_at_2000\[[^\]]*\]\s*=\s*\{(.*?)\n\};",
+        r"emg_filter_20_450_notch60_at_2000\[[^\]]*\]\s*=\s*\{(.*?)\n\};",
         source, re.S,
     )
     assert match, "coefficient table not found in emg_filter.c"
@@ -207,12 +207,18 @@ def test_a_reset_filter_does_not_continue_the_previous_signal():
     assert np.array_equal(first, restarted)
 
 
-def test_the_mains_notches_reject_50_and_150_hz():
+def test_the_mains_notches_reject_60_and_180_hz():
     """The reason the notches exist, asserted after quantization.
 
     A narrow notch is the most quantization-sensitive filter shape here, so
     rejection is checked on the fixed-point cascade rather than on the float
     design it came from.
+
+    60 and 180, not 50 and 150. The notch frequency is not cosmetic and its
+    failure is silent: aimed at 50 while the supply ran at 60, it left mains
+    in the amplitude features, and on 2026-08-20 that lifted one channel's
+    resting MAV from about 10 to 47 and stopped the board emitting any event
+    at all for a whole session.
     """
     sections = default_sections()
     steps = np.arange(8000) / 2000.0
@@ -221,12 +227,15 @@ def test_the_mains_notches_reject_50_and_150_hz():
         wave = np.round(1000 * np.sin(2 * np.pi * frequency * steps))
         return np.abs(filter_fixed(sections, wave.astype(np.int16))[4000:]).max()
 
-    assert amplitude(50.0) < 20        # mains fundamental, gone
-    assert amplitude(150.0) < 20       # third harmonic, gone
+    assert amplitude(60.0) < 20        # mains fundamental, gone
+    assert amplitude(180.0) < 20       # third harmonic, gone
+    # The frequency it used to be aimed at must now pass, which is the whole
+    # point of the change.
+    assert amplitude(50.0) > 900
     # And the notches must be narrow enough to leave the neighbourhood alone.
-    assert amplitude(80.0) > 900
-    assert amplitude(120.0) > 800
-    assert amplitude(200.0) > 800
+    assert amplitude(90.0) > 900
+    assert amplitude(140.0) > 800
+    assert amplitude(240.0) > 800
 
 
 def test_every_quantized_pole_stays_inside_the_unit_circle():

@@ -293,7 +293,7 @@ static void emg_dsp_init(void)
 
   for (uint32_t channel = 0u; channel < EMG_CHANNELS; channel++) {
     if (!emg_filter_init(&emg_filters[channel],
-                         emg_filter_20_450_notch50_at_2000,
+                         emg_filter_20_450_notch60_at_2000,
                          EMG_FILTER_DEFAULT_SECTIONS)) {
       Error_Handler();
     }

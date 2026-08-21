@@ -35,7 +35,23 @@ DEFAULT_RATE_HZ = 2000.0
 # 96.6% mains and a 1.5x rest-to-contraction contrast to 7.3% and 6.4x. The
 # second harmonic was measured too and contributed almost nothing, so it is
 # left out and the cascade stays at four sections.
-DEFAULT_MAINS_HZ = 50.0
+#
+# 60 Hz, not 50: this hardware runs in North America and always has. The 50 Hz
+# default was never measured against the supply, and it cost a live session on
+# 2026-08-20 -- a donning that coupled mains more strongly into channel 1 left
+# its resting MAV at 47 where the signal is about 10, which lifted the total
+# resting level to 70 and the firmware's max(K x baseline, floor) threshold to
+# 210. Every gesture in that session's own calibration measured 129-154, so
+# nothing could clear it: 4640 consecutive windows classified REST and the
+# board emitted no event at all. Re-filtering the same recording with the
+# notch at 60 Hz drops channel 1 to 10, the total to 32, and the threshold to
+# 98 -- below every gesture.
+#
+# The defect was latent for two months because earlier donnings coupled less
+# of it. Notching the wrong frequency does not fail loudly; it just leaves an
+# interferer in the amplitude features, and how much it hurts depends on how
+# good an antenna that day's electrode placement happened to be.
+DEFAULT_MAINS_HZ = 60.0
 DEFAULT_NOTCH_HARMONICS = (1, 3)
 DEFAULT_NOTCH_Q = 30.0
 
@@ -150,7 +166,7 @@ def filter_fixed(sections, samples, coeff_bits=COEFF_BITS,
     return FixedFilter(sections, coeff_bits, state_bits).process(samples)
 
 
-def format_c_initializer(sections, name="emg_filter_20_450_notch50_at_2000"):
+def format_c_initializer(sections, name="emg_filter_20_450_notch60_at_2000"):
     lines = [
         f"const emg_biquad_coeffs_t {name}[{len(sections)}] = {{",
     ]
