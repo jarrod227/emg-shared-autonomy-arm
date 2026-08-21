@@ -1057,8 +1057,102 @@ event at all to 100% pairing -- via two code fixes and one change in how the
 gesture is performed. The wearer's own summary was "fast does not work, slow
 is very accurate", which is what the window-by-window replay had predicted.
 
+## Closing the loop, and what it was worth (2026-08-20)
+
+Every proportional measurement before this one was open loop, and every one of
+them was discouraging: the level a wearer held wandered 16-31% of its own mean,
+which is the same order as the entire usable band above the threshold. Zhu et
+al. put no-feedback EMG-force error at 25-30 %MVC and about 10% with feedback,
+so the question was never whether the open-loop signal was steady -- it plainly
+is not -- but whether a wearer watching the arm can close that gap. Nothing
+could answer it until the firmware emitted the proportional half, which it now
+does.
+
+### The gain was wrong twice, for the same kind of reason
+
+The reference constant scales activation between the threshold and what the
+wearer can produce. The first value was picked against `sustained_level`, the
+level held across seventeen windows -- a run minimum, and far below what any
+single window reaches. `activation` is computed per window, so the board sat at
+full deflection through most of an ordinary hold: median 1.00 on two of three.
+
+Measured properly, the 90th percentile of instantaneous total MAV during held
+gestures was 216 for wrist extension against a threshold of 68, a ratio of 3.2,
+where the sustained ceiling gave 2.7 and the peak gave 5.0. At 3/1 the wearer
+reached both ends of the band -- 0 to -0.76 rad against a limit of 0.785 --
+without living at either.
+
+Radial deviation gives 1.8 on the same donning. One constant cannot serve both
+directions, which is the second independent reason this has to become a
+measured downlink field rather than a compile-time number.
+
+### The first closed-loop run blamed the wrong thing
+
+With the gain fixed the arm still felt uncontrollable, and the wearer's
+description -- nothing, then the number falls, then with much more effort it
+rises -- did not match the mapping. Recording both topics rather than
+reasoning about it showed the arm running at 0.223 rad/s against a
+`nominal_speed` of 0.25: it was saturated, tracking a command it could never
+catch, with a mean error of 11 degrees and a peak of 40. The apparent
+inversions were the axis travelling toward whichever absolute target the
+current effort implied, which is above or below where it happened to be.
+
+`nominal_speed` was chosen for Objective 4.3 as a safety limit for a real arm
+moving beside a person. In simulation it only made the loop feel dead. At
+1.0 rad/s the wearer could hold an angle -- and the recording says how well.
+
+### What smoothing bought, and why it was available at all
+
+| | alpha 0.4 | alpha 0.15 |
+| --- | ---: | ---: |
+| longest hold within 3 degrees | 5.1 s | **14.8 s** |
+| longest hold within 6 degrees | 5.3 s | 16.0 s |
+| longest hold within 11 degrees | 6.9 s | 22.9 s |
+| angle standard deviation while commanding | 12 deg | **6 deg** |
+| direction reversals in the angle | 1.3 /s | 0.9 /s |
+| peak arm speed against a 1.0 limit | 0.84 | 0.60 |
+
+The last row is the mechanism. At 0.4 the axis was still chasing a command
+moving faster than it could follow; at 0.15 it is not, and the wearer's
+subjective "roughly stable but hard to be precise" became a fifteen-second
+hold inside three degrees.
+
+This is worth setting against the earlier conclusion that smoothing buys
+nothing. Open loop that was correct and measured: the residual during a hold
+was slow drift, 4-6% hop to hop against 16-31% over the hold, and a low-pass
+passes slow drift through by definition. Closing the loop changes the signal --
+the wearer's own corrections are fast, and those a low-pass can remove. The
+same measurement supports opposite conclusions in the two regimes, which is
+the point.
+
+`view_activation_smoothing_alpha` has existed since Objective 4.3, along with
+the deadband, the direction hysteresis and the watchdog. Nothing new was built
+for this; what was missing was the firmware end and a measurement to set the
+constant by.
+
+### Where it leaves proportional control
+
+Usable, on one direction, in simulation: the full band reachable, three
+degrees held for fifteen seconds. The open-loop pessimism was real and was
+compensated by the loop, which is what the literature said would happen and
+is now measured here rather than cited.
+
+What is not answered: the second direction is not a class the deployed model
+has, the reference is a compile-time guess that measurably cannot serve both
+directions, and `nominal_speed` was raised to 1.0 rad/s for a simulated axis --
+whether a real arm beside a person may move that fast is an Objective 5
+question and the answer may well be no, which would put the tracking error
+back.
+
 ## Lessons
 
+- **The same measurement can support opposite conclusions in two regimes.**
+  Smoothing bought nothing open loop, where the residual was slow drift, and
+  tripled the hold time closed loop, where the wearer's own corrections supply
+  a fast component to remove.
+- **Scale a per-window quantity by a per-window ceiling.** The reference was
+  first taken from a seventeen-window run minimum, and the board saturated
+  through most of every hold.
 - **A comment stating the correct rule is not an implementation of it.** The
   calibration said it measured "the number of consecutive windows the event
   gate requires before it will emit anything" and measured a third of that,

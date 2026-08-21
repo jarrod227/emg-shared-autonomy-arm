@@ -139,7 +139,20 @@ class HandoffController(Node):
         self.declare_parameter("view_confidence_min", 0.6)
         self.declare_parameter("view_signal_quality_min", 0.5)
         self.declare_parameter("view_activation_deadband", 0.05)
-        self.declare_parameter("view_activation_smoothing_alpha", 0.4)
+        # 0.15, not the 0.4 this shipped with, measured 2026-08-20 on the
+        # first closed-loop run: a wearer holding an angle went from staying
+        # within 3 degrees for 5.1 s to 14.8 s, the angle's standard deviation
+        # halved from 12 to 6 degrees, and direction reversals fell from 1.3
+        # to 0.9 per second. Peak arm speed dropped from 0.84 to 0.60 rad/s
+        # against a 1.0 limit, which is the mechanism: at 0.4 the axis was
+        # chasing a command that moved faster than it could follow.
+        #
+        # The high-frequency content this removes is mostly the wearer's own
+        # corrections, not muscle noise. Open loop the residual was slow
+        # drift -- 4-6% hop to hop against 16-31% over a hold -- and smoothing
+        # bought nothing. Closing the loop adds a fast component that a
+        # low-pass can actually take out.
+        self.declare_parameter("view_activation_smoothing_alpha", 0.15)
         self.declare_parameter("view_stable_command_count", 2)
         self.declare_parameter("view_target_update_min_rad", 0.02)
         # Step size is per profile, like relative_limit and nominal_speed. One
