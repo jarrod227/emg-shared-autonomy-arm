@@ -15,13 +15,30 @@
  * The reference level is the open problem. Activation is a fraction of the
  * span between the threshold and whatever the wearer can actually produce for
  * the driving gesture, and that ceiling has to be measured per donning and per
- * direction -- measured 2026-08-20, one donning's gesture maxima ran 118 to
- * 193 against a threshold of 68, and reference/threshold across three donnings
- * ran 2.38, 3.34 and 2.47. A 40% spread is not something a compile-time
- * constant can stand in for, so the constant below is interim and exists to
- * make a controllability experiment possible before the protocol grows a field
- * to carry a measured one. It sets the gain, not whether the signal is steady
- * enough to steer with, and it is the latter the experiment is for.
+ * direction.
+ *
+ * It must be an *instantaneous* ceiling, because that is what activation is
+ * computed from. The first version of this constant was picked against
+ * sustained_level -- the level held across seventeen windows, which is the
+ * minimum of a run and therefore far lower -- and the board saturated at full
+ * deflection through most of an ordinary hold. Measured 2026-08-20 on one
+ * donning at threshold 68: the 90th percentile of instantaneous total MAV
+ * during held gestures was 216 for wrist extension and 205 for ulnar
+ * deviation, ratios of 3.2 and 3.0, against a sustained ceiling of 184 and
+ * 193 and a peak of 338 and 341. The 90th percentile is the right statistic:
+ * the median saturates half the time, and the peak puts full deflection out
+ * of reach and is set by a single window.
+ *
+ * Radial deviation gives 1.8 on the same donning, which is the measurement
+ * saying plainly that one constant cannot serve both directions -- it would
+ * sit against the floor for one of them. That, plus reference/threshold
+ * running 2.38, 3.34 and 2.47 across three donnings, is why this is interim.
+ * It exists so a controllability experiment can happen before the protocol
+ * grows a field to carry a measured reference. It sets the gain, not whether
+ * the signal is steady enough to steer with, and it is the latter that is
+ * unknown: every proportional measurement so far has been open loop, and the
+ * held activation wandered 34% to 42% of its own mean with nothing to correct
+ * against.
  */
 
 #ifndef EMG_VIEW_H
@@ -32,8 +49,8 @@
 #include <stdint.h>
 
 /* Interim, see above. reference = threshold * NUM / DEN. */
-#define EMG_VIEW_REFERENCE_NUM 5
-#define EMG_VIEW_REFERENCE_DEN 2
+#define EMG_VIEW_REFERENCE_NUM 3
+#define EMG_VIEW_REFERENCE_DEN 1
 
 /* -1, 0 or +1, per the INTENT payload. Only the gestures assigned to the two
  * view directions produce a non-zero value; every other decision, REST

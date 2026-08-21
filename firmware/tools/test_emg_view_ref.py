@@ -56,14 +56,16 @@ def test_the_midpoint_of_the_span_is_about_half_deflection():
     assert view_activation(middle, threshold) == pytest.approx(32767, abs=400)
 
 
-def test_a_tiny_threshold_saturates_rather_than_misbehaving():
-    # reference = floor(5t/2) is always above t for t >= 1, so the span can
-    # never collapse with the current constants and this is simply a wearer
-    # far above their ceiling. The span <= 0 guard in the C is therefore
-    # unreachable today and deliberately kept: the constants are interim and
-    # a ratio of 1 or less would divide by zero.
-    assert view_activation(5, 1) == 65535
-    assert view_activation(2, 1) == 65535
+@pytest.mark.parametrize("threshold", [1, 2, 3, 7, 64, 1000])
+def test_the_span_never_collapses_for_any_positive_threshold(threshold):
+    # reference = floor(t * NUM / DEN) stays above t for every positive t as
+    # long as the ratio exceeds one, so the span <= 0 guard in the C is
+    # unreachable today. It is kept deliberately: the constants are interim,
+    # and a ratio of one or less would divide by zero rather than fail closed.
+    reference = threshold * REFERENCE_NUM // REFERENCE_DEN
+    assert reference > threshold
+    assert view_activation(reference, threshold) == 65535
+    assert view_activation(threshold, threshold) == 0
 
 
 def test_multiplication_happens_before_division():

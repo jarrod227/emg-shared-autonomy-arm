@@ -7,8 +7,8 @@ it is flashed. Integer arithmetic throughout, in the same order as the C,
 because the truncation is part of the answer.
 """
 
-REFERENCE_NUM = 5
-REFERENCE_DEN = 2
+REFERENCE_NUM = 3
+REFERENCE_DEN = 1
 
 # Same values as emg_packet.h.
 REST = "REST"
