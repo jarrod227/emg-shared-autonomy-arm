@@ -293,8 +293,17 @@ After per-session rest and comfortable-contraction calibration:
 
 ```text
 activation = clip((envelope - rest) / (comfortable - rest), 0, 1)
-target_angle = safe_center +/- configured_limit * activation
+rate       = +/- nominal_speed * activation, until the band edge
 ```
+
+The second line was `target_angle = safe_center +/- configured_limit *
+activation` until the first closed-loop session with a wearer. An effort level
+naming an absolute angle means a gentle push can name an angle nearer the
+centre than the axis has already reached, and the arm then retreats while the
+wearer is pushing it outward -- 8 of 44 pushes in one 90 s session moved
+against their own gesture. Commanding a rate costs the property that one
+effort always names one angle and buys back the property that a push in a
+direction moves in that direction, at a speed the push chooses.
 
 The five accepted sessions train and evaluate only the discrete four-class
 branch. They do not contain `LEFT`/`RIGHT` labels and cannot validate the
@@ -307,9 +316,29 @@ as 10/20/30 degrees are unnecessary. `HOLD` initially means the activation is
 inside the deadband or no fresh direction command exists, not another mandatory
 contraction class.
 
-Activation changes target angle, not speed. The controller uses a fixed low
-nominal speed plus acceleration/deceleration limits. Deadband, smoothing,
-saturation, stable-window gating, and a stale-command watchdog suppress noise.
+Activation therefore chooses speed: full effort is the profile's nominal
+speed, 0.25 rad/s by default, which crosses the 90 degree band in about six
+seconds. The bound is what makes this safe to accept, not the mapping. A rate
+names no angle, so the motion model carries the bound instead: a rate command
+is served as "travel to the edge of the band, no faster than this", and the
+existing deceleration planner brings the axis to rest exactly on the edge. The
+reachable set is the band whatever sequence arrives, which is the same
+guarantee the absolute map gave by construction.
+
+An intermediate version stepped the axis a bounded distance per command
+instead, and is worth recording because it looks equivalent and is not.
+Routing a 20 Hz stream through a point-to-point planner made every command
+preempt the last, leaving the axis permanently in its deceleration phase:
+measured on the shipped defaults, full effort produced 0.059 rad/s against the
+0.25 rad/s nominal, activation 0.7 and 1.0 were indistinguishable, and below
+half effort nothing moved at all. `test_view_search.py` now pins the whole
+curve against those defaults.
+
+Deadband, smoothing, saturation, stable-window gating, and a stale-command
+watchdog still suppress noise. The watchdog is 0.25 s rather than the original
+0.75 s: a dropped absolute target stopped the axis early, whereas a dropped
+rate command leaves it travelling, and 0.75 s at nominal speed is 11 degrees
+of motion nobody asked for.
 A newer valid command preempts the old search target after a smooth halt;
 `ABORT` bypasses smoothing and always has priority.
 
@@ -751,8 +780,9 @@ for repeatable learning experiments and LeRobot for real-arm validation. See
   N-frame target stability, lock, and last-seen time. The controller owns the
   state-machine response to stale/invalid inputs.
 - Accept proportional view commands only in `TARGET_SEARCH` or
-  `HANDOFF_SEARCH`. Map activation to one bounded target angle, not speed; use
-  fixed low speed, acceleration limits, preemption, and a stale-command hold.
+  `HANDOFF_SEARCH`. Clamp every commanded step into the bounded band rather
+  than trusting the sender; use fixed low speed, acceleration limits,
+  preemption, and a stale-command hold.
 - Require `holding_object=true` and stricter loaded limits before
   `HANDOFF_SEARCH`. Two search goals must never execute concurrently.
 - Give `ABORT` global priority over smoothing, search, and nominal transitions.

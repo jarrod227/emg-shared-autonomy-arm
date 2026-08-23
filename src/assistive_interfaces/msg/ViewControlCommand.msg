@@ -1,8 +1,16 @@
 # Volatile, source-independent command for one bounded active-view axis.
 #
 # This is not general teleoperation. The handoff controller accepts it only in
-# TARGET_SEARCH or HANDOFF_SEARCH. Activation selects a target angle around a
-# configured safe center; it never selects robot speed.
+# TARGET_SEARCH or HANDOFF_SEARCH. Activation selects a rate -- this used to
+# promise the opposite, that an effort level named an absolute angle, and that
+# promise was withdrawn because on a real wearer it made the arm retreat while
+# they were pushing it outward.
+#
+# What still holds, and what actually makes the command safe to accept, is the
+# bound: the reachable set is a band around a configured safe center, whatever
+# sequence of commands arrives. Since a rate names no angle, the consumer is
+# the only place that bound can live -- enforce it rather than trusting the
+# sender, and stop the axis if commands stop arriving.
 #
 # QoS contract: KEEP_LAST(1) + VOLATILE. Publishers must not retain or replay
 # old commands.

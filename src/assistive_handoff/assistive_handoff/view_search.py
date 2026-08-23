@@ -62,18 +62,44 @@ class SearchProfile:
             if values[name] <= 0.0:
                 raise ValueError(f"{name} must be > 0, got {values[name]}")
 
-    def target_for(self, direction: int, activation: float) -> float:
-        """Map -1/+1 and normalized activation to a safe angle."""
+    def bounds(self) -> tuple[float, float]:
+        """The reachable band: centre +/- relative_limit, inside the hard stops."""
+        return (
+            max(self.min_angle, self.center_angle - self.relative_limit),
+            min(self.max_angle, self.center_angle + self.relative_limit),
+        )
+
+    def speed_for(self, direction: int, activation: float) -> float:
+        """Map -1/+1 and normalized activation to a signed angular rate.
+
+        This replaced an absolute map, ``center + relative_limit *
+        activation``, which was measured to do the opposite of what the
+        gesture says. Parked at 33 degrees, a 70% ulnar contraction asked for
+        25 -- the angle 70% corresponds to -- so the arm retreated while the
+        wearer was pushing it outward. Over one 90 s session, 8 of 44 pushes
+        moved against their own gesture.
+
+        A rate has the property the absolute map lacked: a light push is slow
+        motion in the direction asked for, a hard push is fast motion in the
+        same direction, and no push is no motion. Nothing the wearer can do
+        makes the arm travel backwards.
+
+        It costs the property that one effort level always names one angle.
+        The same session showed that property to be the source of the
+        confusion rather than a feature.
+
+        The safety argument survives the change, but it moves: it was that the
+        reachable set is exactly the band regardless of command history, which
+        absolute mapping got by construction. Here the motion model gets it
+        instead, by never accepting a goal outside the band -- see
+        ``SimulatedViewMotion.request_velocity``.
+        """
 
         if direction not in (-1, 1):
             raise ValueError(f"direction must be -1 or 1, got {direction}")
         activation = _finite(activation, "activation")
         activation = min(1.0, max(0.0, activation))
-        target = (
-            self.center_angle
-            + float(direction) * self.relative_limit * activation
-        )
-        return min(self.max_angle, max(self.min_angle, target))
+        return float(direction) * self.nominal_speed * activation
 
 
 class DiscreteViewSweep:
@@ -87,10 +113,10 @@ class DiscreteViewSweep:
 
     Decisions worth stating, because each one is arguable:
 
-    - The band is ``center +/- relative_limit`` clipped to the absolute
-      bounds, which is exactly the set ``SearchProfile.target_for`` can reach.
-      Both input modes then sweep the same space, so switching between them
-      cannot expose an angle the other mode considers unsafe.
+    - The band is ``SearchProfile.bounds()``, exactly the set the proportional
+      path steps inside. Both input modes then sweep the same space, so
+      switching between them cannot expose an angle the other mode considers
+      unsafe.
     - Overshooting the band clamps to the edge instead of reversing early, so
       the edge is actually reachable when the band is not a whole number of
       steps. Reversal happens on the *next* event, once the edge is where the
@@ -116,12 +142,10 @@ class DiscreteViewSweep:
         if step_angle <= 0.0:
             raise ValueError(f"step_angle must be > 0, got {step_angle}")
         self._step_angle = step_angle
-        self._lower = max(
-            profile.min_angle, profile.center_angle - profile.relative_limit
-        )
-        self._upper = min(
-            profile.max_angle, profile.center_angle + profile.relative_limit
-        )
+        # From the profile, not recomputed. This band and the one the
+        # proportional path steps inside have to be the same set, and two
+        # copies of the same two lines is how they stop being.
+        self._lower, self._upper = profile.bounds()
         self._direction = 1
 
     @property
@@ -161,6 +185,17 @@ class SimulatedViewMotion:
     A replacement target remains pending while the old motion decelerates to
     zero. It becomes active only after the stop, so two simulated goals can
     never execute concurrently.
+
+    Two ways to drive it, because the two input modes want different things:
+
+    - ``request_target`` for the discrete sweep, which really is point to
+      point: one gesture, one destination, decelerate to rest on arrival.
+    - ``request_velocity`` for proportional search, which is a rate arriving
+      at 20 Hz. Routing that through ``request_target`` was measured to make
+      the axis crawl -- every command preempted the last one, so the axis
+      spent its whole life in the deceleration phase and full effort produced
+      0.059 rad/s against a 0.25 rad/s nominal, with activation 0.7 and 1.0
+      indistinguishable. See ``request_velocity`` for how that is avoided.
     """
 
     def __init__(
@@ -180,6 +215,10 @@ class SimulatedViewMotion:
         self._velocity = 0.0
         self._active_target: float | None = None
         self._pending_target: float | None = None
+        # Ceiling for the goal currently in flight. Point-to-point goals run
+        # at the profile's nominal speed; a rate command lowers it, which is
+        # the only thing that distinguishes the two modes.
+        self._speed_limit = profile.nominal_speed
 
     @property
     def position(self) -> float:
@@ -221,6 +260,7 @@ class SimulatedViewMotion:
                 "current angle is outside the new absolute angle bounds"
             )
         self._profile = profile
+        self._speed_limit = profile.nominal_speed
 
     def request_target(self, target: float) -> float:
         """Request a bounded target, serializing any in-flight replacement."""
@@ -230,6 +270,7 @@ class SimulatedViewMotion:
             self._profile.max_angle,
             max(self._profile.min_angle, target),
         )
+        self._speed_limit = self._profile.nominal_speed
         if abs(self._velocity) <= _EPSILON:
             self._velocity = 0.0
             self._active_target = target
@@ -241,11 +282,57 @@ class SimulatedViewMotion:
             self._pending_target = target
         return target
 
+    def request_velocity(self, velocity: float) -> float:
+        """Command a signed angular rate; returns the rate actually adopted.
+
+        Implemented as "head for the edge of the band, but no faster than
+        this", so the trapezoid planner that already exists does the work and
+        the axis decelerates to a stop exactly on the edge rather than being
+        clamped against it. The reachable set is therefore still exactly the
+        band, which is the property that makes an externally sourced command
+        safe to accept at all.
+
+        The rule that matters for feel is that a command in the direction
+        already being travelled updates only the speed ceiling and leaves the
+        goal alone. It is the same goal at a new rate, not a second goal, so
+        it must not trip the serialized-preemption stop -- doing so is what
+        made a 20 Hz stream crawl. A reversal is a different goal and does
+        take the stop-first path, which is what a reversal should do anyway.
+        """
+
+        velocity = _finite(velocity, "velocity")
+        speed = min(abs(velocity), self._profile.nominal_speed)
+        if speed <= _EPSILON:
+            self.request_hold()
+            return 0.0
+
+        direction = 1.0 if velocity > 0.0 else -1.0
+        lower, upper = self._profile.bounds()
+        edge = upper if direction > 0.0 else lower
+        # Outside the band, this permits only the direction that returns to
+        # it: configure() can move the band under an axis that is parked.
+        if (direction > 0.0 and self._position >= edge - _EPSILON) or (
+            direction < 0.0 and self._position <= edge + _EPSILON
+        ):
+            self.request_hold()
+            return 0.0
+
+        in_flight = (
+            self._active_target
+            if self._active_target is not None
+            else self._pending_target
+        )
+        if in_flight is None or abs(in_flight - edge) > _EPSILON:
+            self.request_target(edge)
+        self._speed_limit = speed
+        return direction * speed
+
     def request_hold(self) -> None:
         """Smoothly decelerate and remain at the resulting angle."""
 
         self._active_target = None
         self._pending_target = None
+        self._speed_limit = self._profile.nominal_speed
 
     def emergency_stop(self) -> None:
         """Cancel immediately; used only for global ABORT/fault handling."""
@@ -253,6 +340,7 @@ class SimulatedViewMotion:
         self._velocity = 0.0
         self._active_target = None
         self._pending_target = None
+        self._speed_limit = self._profile.nominal_speed
 
     def step(self, dt_sec: float) -> None:
         """Advance the deterministic motion model by dt_sec."""
@@ -317,8 +405,17 @@ class SimulatedViewMotion:
                 desired_velocity = 0.0
                 rate = self._profile.deceleration
             else:
-                desired_velocity = direction * self._profile.nominal_speed
-                rate = self._profile.acceleration
+                desired_velocity = direction * min(
+                    self._profile.nominal_speed, self._speed_limit
+                )
+                # Slowing down is deceleration even when it is not a stop:
+                # easing off a proportional command should feel like braking,
+                # not like a slow drift down to the new rate.
+                rate = (
+                    self._profile.acceleration
+                    if abs(desired_velocity) > abs(old_velocity)
+                    else self._profile.deceleration
+                )
             new_velocity = self._move_toward(
                 old_velocity,
                 desired_velocity,

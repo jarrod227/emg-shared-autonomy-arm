@@ -41,7 +41,6 @@ SEARCH_PARAMS = {
     "view_watchdog_sec": 0.15,
     "search_timeout_sec": 2.0,
     "view_stable_command_count": 1,
-    "view_target_update_min_rad": 0.0,
     "target_search_step_angle": 0.2,
     "handoff_search_step_angle": 0.1,
     "target_search_relative_limit": 0.6,
@@ -994,7 +993,10 @@ def test_target_search_watchdog_holds_and_new_command_resumes(make_graph):
     g.send_view(ViewControlCommand.RIGHT)
     assert g.wait_for_state(HandoffState.TARGET_SEARCH)
     assert spin_until(g.nodes, lambda: g.controller._view_motion.velocity > 0.0)
-    requested_target = g.controller._last_requested_view_target
+    assert g.controller._last_requested_view_speed > 0.0
+    # A rate command aims at the far edge of the band, so "stopped short of
+    # the edge" is exactly what the watchdog having acted looks like.
+    band_upper = g.controller._active_search_profile.bounds()[1]
 
     assert spin_until(
         g.nodes,
@@ -1002,7 +1004,14 @@ def test_target_search_watchdog_holds_and_new_command_resumes(make_graph):
         timeout=1.0,
     )
     assert g.state is HandoffState.TARGET_SEARCH
-    assert g.controller._view_motion.position < requested_target
+    stopped_at = g.controller._view_motion.position
+    assert stopped_at < band_upper
+    # And it stays stopped: a stale command must not resume on its own.
+    g.settle(0.3)
+    assert not g.controller._view_motion.moving
+    assert g.controller._view_motion.position == pytest.approx(
+        stopped_at, abs=1e-9
+    )
 
     g.send_view(ViewControlCommand.LEFT)
     assert spin_until(

@@ -133,7 +133,15 @@ class HandoffController(Node):
         # by SearchProfile at pi/4 (45 degrees).
         self.declare_parameter("view_command_max_age_sec", 0.5)
         self.declare_parameter("view_command_future_tolerance_sec", 0.05)
-        self.declare_parameter("view_watchdog_sec", 0.75)
+        # 0.25 s, not the 0.75 this shipped with. Under absolute mapping a
+        # dropped command meant the axis stopped early, so a slow watchdog was
+        # harmless. A rate command keeps travelling until something stops it,
+        # and 0.75 s at the 0.25 rad/s nominal is 0.19 rad -- 11 degrees of
+        # motion the wearer did not ask for. At 20 Hz, 0.25 s is five missed
+        # commands, which is a link that has actually failed rather than one
+        # that hiccuped, and it caps the unasked-for travel at about 3.5
+        # degrees.
+        self.declare_parameter("view_watchdog_sec", 0.25)
         self.declare_parameter("search_timeout_sec", 20.0)
         self.declare_parameter("view_update_period_sec", 0.02)
         self.declare_parameter("view_confidence_min", 0.6)
@@ -154,7 +162,6 @@ class HandoffController(Node):
         # low-pass can actually take out.
         self.declare_parameter("view_activation_smoothing_alpha", 0.15)
         self.declare_parameter("view_stable_command_count", 2)
-        self.declare_parameter("view_target_update_min_rad", 0.02)
         # Step size is per profile, like relative_limit and nominal_speed. One
         # shared value cannot serve both: a step wider than a profile's whole
         # band degenerates to bouncing between the two edges, and the loaded
@@ -251,9 +258,6 @@ class HandoffController(Node):
         self._view_stable_command_count = self._positive_integer_param(
             "view_stable_command_count"
         )
-        self._view_target_update_min_rad = self._nonnegative_finite_param(
-            "view_target_update_min_rad"
-        )
         self._proportional_search_available = bool(
             self.get_parameter("proportional_search_available").value
         )
@@ -287,6 +291,7 @@ class HandoffController(Node):
         self._view_candidate_count = 0
         self._view_smoothed_activation = 0.0
         self._last_requested_view_target: float | None = None
+        self._last_requested_view_speed: float | None = None
         self._search_input_mode: str | None = None
         self._discrete_sweep: DiscreteViewSweep | None = None
         self._last_discrete_sequence: int | None = None
@@ -546,17 +551,21 @@ class HandoffController(Node):
 
         if self._view_candidate_count < self._view_stable_command_count:
             return
-        target = self._active_search_profile.target_for(
-            direction, self._view_smoothed_activation
-        )
-        if (
-            self._last_requested_view_target is not None
-            and abs(target - self._last_requested_view_target)
-            < self._view_target_update_min_rad
-        ):
-            return
-        self._last_requested_view_target = self._view_motion.request_target(
-            target
+        # A rate, not an angle. Mapping effort to an absolute angle made a
+        # gentle push in the direction the wearer wanted retreat instead,
+        # because the angle that effort names can be nearer the centre than
+        # the axis already is: 8 of 44 pushes in one session moved against
+        # their own gesture.
+        #
+        # There is deliberately no minimum-change filter here. One guarded the
+        # absolute path, where every update preempted an in-flight goal and so
+        # had a real cost; a same-direction rate update costs nothing, and the
+        # filter was measured to eat every command below half effort. The
+        # deadband above and the smoothing already handle jitter.
+        self._last_requested_view_speed = self._view_motion.request_velocity(
+            self._active_search_profile.speed_for(
+                direction, self._view_smoothed_activation
+            )
         )
 
     def _reset_view_filter(self) -> None:
@@ -564,6 +573,7 @@ class HandoffController(Node):
         self._view_candidate_count = 0
         self._view_smoothed_activation = 0.0
         self._last_requested_view_target = None
+        self._last_requested_view_speed = None
 
     def _target_observation_is_usable(self, msg: PoseStamped) -> bool:
         _, status = self._observation_age_status(
