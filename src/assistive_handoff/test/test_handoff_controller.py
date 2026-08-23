@@ -7,6 +7,7 @@ gates, timeouts, ABORT paths, callback races, and fault latching. Timing
 parameters are shrunk via parameter_overrides so each test runs quickly.
 """
 
+import itertools
 import time
 
 import pytest
@@ -256,8 +257,31 @@ class Graph:
         )
 
 
+# Domains are handed out from 1 upward so no two tests in a run share one.
+_DOMAIN_IDS = itertools.count()
+
+
+@pytest.fixture(autouse=True)
+def isolated_ros_domain(monkeypatch):
+    """Give every test its own DDS domain.
+
+    Nodes are destroyed between tests, but destruction is not instantaneous:
+    a controller from the previous test can still be publishing /handoff_state
+    while the next test's helper is already subscribed to it, and that test
+    then observes transitions it never caused. It surfaced as a failure set
+    that changed from run to run -- `assert "release" not in g.states` catching
+    a release belonging to an earlier test. Distinct domains make that traffic
+    unroutable rather than merely unlikely to arrive in time.
+
+    Set before any rclpy.init(), since the middleware reads the domain when the
+    context is created; hence autouse, and hence make_graph depends on it.
+    """
+
+    monkeypatch.setenv("ROS_DOMAIN_ID", str(next(_DOMAIN_IDS) % 100 + 1))
+
+
 @pytest.fixture
-def make_graph():
+def make_graph(isolated_ros_domain):
     rclpy.init()
     graphs = []
 
