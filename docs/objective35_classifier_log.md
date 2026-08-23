@@ -1144,8 +1144,67 @@ whether a real arm beside a person may move that fast is an Objective 5
 question and the answer may well be no, which would put the tracking error
 back.
 
+## The charger, and a hypothesis that survived two rounds and still died (2026-08-23)
+
+Resting total MAV sat at 60-64 where a good donning gives 26-32, which puts
+`max(K x baseline, floor)` at 180-192 against gestures measuring 129-162 --
+the zero-event failure again. Two rounds of chasing electrode contact, skin
+prep and posture found nothing, and the wearer found it: unplugging the
+laptop charger halved the resting level immediately.
+
+| | battery | charger connected |
+| --- | ---: | ---: |
+| ch0 / ch1 / ch2 resting MAV | 3 / 5 / 22 | 18 / 18 / 24 |
+| total | 26 | 72 |
+| threshold `max(3 x baseline, 64)` | 78 | 216 |
+
+Worth recording that the advice given during those two rounds was wrong in a
+specific way: alcohol was about to be used to clean the skin, and this
+project's own log already says the opposite -- showering removes sebum and
+salts and the wear-detect lines read the resulting impedance as no contact.
+Degreasing would have made it worse.
+
+### Three explanations, two of them wrong
+
+The first guess was 120 Hz: full-wave rectification ripples at twice mains,
+and the filter notches 60 and 180 while deliberately omitting the second
+harmonic on the grounds that it "contributed almost nothing" -- a measurement
+whose supply state nobody wrote down. Measured: the charger adds 9.1x at
+60 Hz, 6.5x at 180, and only 3.0x at 120, and adding a 120 Hz notch moves the
+resting level from 72 to 71.
+
+The second guess was broadband noise, from coarse bands showing nothing added
+below 55 Hz and roughly 2-3x added everywhere above 65. Measured at 60 Hz
+spacing instead, the added energy is 8.4x on the harmonics and 1.9x in the
+gaps between them: **79-101% of it sits on a comb**. The coarse bands had
+averaged a comb into a smear -- 65-175 Hz contains two harmonics and 185-450
+contains four.
+
+That made a comb of notches look promising, and it is the third wrong answer.
+Notching 120 and then 240 as well leaves the resting level at 71. Energy share
+is not MAV share: the notches remove most of the added energy, which lives in
+a few narrow lines, while MAV is a time-domain mean of absolute values and is
+carried by the residual spread across the whole band. The biquad struct holds
+six sections and the 240 Hz version already fills it.
+
+### Where that leaves it
+
+Filtering is closed, with measurement behind the claim rather than reasoning.
+The rest is a use condition: record on battery. The effect is large enough that
+nothing else about the session matters if it is ignored -- threshold 78 against
+216, with the gestures unchanged in between.
+
 ## Lessons
 
+- **Energy share is not amplitude share.** Four fifths of the charger's
+  contribution sat on a harmonic comb and notching the comb changed the
+  resting MAV by one count, because MAV is a time-domain mean carried by what
+  is left between the lines.
+- **Coarse frequency bands can average a comb into a smear.** "Nothing below
+  55 Hz, 2-3x above 65" reads as broadband and was six harmonics.
+- **Check the project's own log before repeating standard practice.** Alcohol
+  skin prep was about to be recommended against a logged finding that
+  degreasing this hardware's electrodes causes loss of contact.
 - **The same measurement can support opposite conclusions in two regimes.**
   Smoothing bought nothing open loop, where the residual was slow drift, and
   tripled the hold time closed loop, where the wearer's own corrections supply

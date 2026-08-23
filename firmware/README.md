@@ -372,6 +372,29 @@ measurably beats that. The part can carry either — a 12-feature, 16-hidden,
 4-class int8 MLP is 256 weights — so the constraint is not the silicon, it is
 that a model with no baseline to beat cannot be judged.
 
+## Unplug the laptop before recording
+
+Measured 2026-08-23, and decisive: with the laptop on its own battery the
+resting total MAV is 26 and the activation threshold `max(3 x baseline, floor)`
+lands at 78. Plug the charger in, change nothing else, and rest goes to 72 and
+the threshold to 216 -- above every gesture, which measure 129-162 sustained.
+The board emits nothing at all, and it looks exactly like the electrodes or the
+calibration are at fault.
+
+It is not something the filter can be made to fix, and that was measured rather
+than assumed. 79-101% of the added energy sits on 60 Hz multiples, so a comb of
+notches is the obvious idea; adding 120 Hz and then 240 Hz moves the resting
+level from 72 to 71. Energy share is not MAV share -- the notches remove most
+of the added *energy*, which sits in a few narrow lines, while MAV is a
+time-domain average of absolute values and is carried by the residual spread
+across the band. The biquad struct also holds at most six sections, which the
+240 Hz version already fills.
+
+Treat it like the shower finding below: a real, reproducible environment
+variable a wearer has to know, not a defect to engineer around. It is worse
+than that one, because it is intermittent -- whether the charger happens to be
+connected decides whether the system works that day.
+
 ## Performing the gestures
 
 Measured 2026-08-20, after two hours spent diagnosing a system that was
