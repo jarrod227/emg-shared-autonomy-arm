@@ -29,46 +29,87 @@ class DeviceClockMapper:
     that already went out. Consumers judge freshness on the stamp, so a stream
     that steps backwards can retire a newer command in favour of an older one.
 
-    Monotonicity therefore outranks tightness. The first receipt anchors the
-    mapping and every later stamp is that anchor plus the MCU's own elapsed
-    time. Chasing a tighter offset was tried and removed: when two packets
-    arrive in one host read they share a receipt time, so tightening tracks
-    host buffering instead of the device and collapses the 50 ms source grid
-    the mapper exists to preserve. Freezing costs a constant bias equal to the
-    first packet's buffering delay, which is bounded by the caller's own
-    receipt-age check, and buys exact intervals.
+    Monotonicity therefore outranks tightness. One receipt anchors the mapping
+    and every later stamp is that anchor plus the MCU's own elapsed time.
+    Chasing a tighter offset *after* anchoring was tried and removed: when two
+    packets arrive in one host read they share a receipt time, so tightening
+    tracks host buffering instead of the device and collapses the 50 ms source
+    grid the mapper exists to preserve.
+
+    Which receipt anchors is not free, though, and taking the first one was a
+    real defect. The anchor's buffering delay becomes a permanent forward bias
+    on every stamp the process ever emits, and the caller's receipt-age check
+    bounds it at 0.25 s -- five times the 0.05 s of future stamp a downstream
+    consumer allows. Drawing a badly buffered first packet therefore made a
+    whole session silently unusable, with no recovery short of a restart. It
+    happened: 3913 consecutive view commands refused, the arm never moving,
+    while every diagnostic upstream read healthy.
+
+    So the anchor is now the *smallest* offset seen over a short warm-up, and
+    ``map`` returns ``None`` until the window closes. Taking a minimum is safe
+    here in a way that continuous tightening is not: nothing has been emitted
+    yet, so there is no earlier stamp to undercut. The cost is that the first
+    ``anchor_window`` packets produce no stamp, which at 20 Hz is well under a
+    second of startup.
 
     A jump larger than ``max_skew_ns`` means the anchor no longer describes
     reality (ROS time was set, or the MCU restarted); the mapper re-anchors
     and counts it so the caller can discard evidence that straddles the
-    discontinuity.
+    discontinuity. Re-anchoring re-runs the warm-up rather than trusting the
+    one packet that happened to reveal the jump -- a bad anchor is permanent,
+    and a discontinuity is exactly where evidence is already being thrown
+    away, so a second of silence there is the cheaper mistake.
     """
 
-    def __init__(self, *, max_skew_sec=1.0):
+    def __init__(self, *, max_skew_sec=1.0, anchor_window=20):
         if max_skew_sec <= 0.0:
             raise ValueError("max_skew_sec must be positive")
+        if int(anchor_window) < 1:
+            raise ValueError("anchor_window must be at least 1")
         self.max_skew_ns = round(float(max_skew_sec) * 1e9)
+        self.anchor_window = int(anchor_window)
         self.reanchors = 0
         self._offset_ns = None
         self._last_mapped_ns = None
+        self._candidates = []
 
     @property
     def initialized(self):
         return self._offset_ns is not None
 
+    @property
+    def warming_up(self):
+        """True while collecting candidates, so map() yields no stamp yet."""
+
+        return self._offset_ns is None
+
     def reset(self):
         self._offset_ns = None
         self._last_mapped_ns = None
+        self._candidates = []
 
     def map(self, device_timestamp_us, receipt_ros_ns):
+        """Return the ROS stamp for a device time, or None while warming up."""
+
         device_ns = int(device_timestamp_us) * 1000
         candidate = int(receipt_ros_ns) - device_ns
         if self._offset_ns is None:
-            self._offset_ns = candidate
+            self._candidates.append(candidate)
+            if len(self._candidates) < self.anchor_window:
+                return None
+            # The least-buffered receipt in the window. Nothing has gone out
+            # yet, so taking a minimum cannot undercut an emitted stamp.
+            self._offset_ns = min(self._candidates)
+            self._candidates = []
         elif abs(candidate - self._offset_ns) > self.max_skew_ns:
             self.reanchors += 1
-            self._offset_ns = candidate
+            self._offset_ns = None
             self._last_mapped_ns = None
+            self._candidates = [candidate]
+            if self.anchor_window > 1:
+                return None
+            self._offset_ns = candidate
+            self._candidates = []
 
         mapped = max(0, self._offset_ns + device_ns)
         if self._last_mapped_ns is not None:

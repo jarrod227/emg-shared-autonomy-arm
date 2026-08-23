@@ -15,6 +15,7 @@ import queue
 from assistive_interfaces.msg import AssistiveIntent, ViewControlCommand
 import pytest
 import rclpy
+from rclpy.parameter import Parameter
 
 from emg_intent_bridge.bridge_node import EmgIntentBridge
 from emg_intent_bridge.confirmation import (
@@ -116,7 +117,11 @@ def ros():
 @pytest.fixture
 def bridge():
     reader = FakeReader()
-    node = EmgIntentBridge(reader=reader)
+    node = EmgIntentBridge(reader=reader, parameter_overrides=[
+        # Anchor on the first packet: these tests feed a handful of
+        # packets with synthetic receipt times, not a warm-up's worth.
+        Parameter("clock_anchor_window", value=1),
+    ])
     # The board reports the power-on default state, which satisfies the
     # no-calibration-file handshake; these tests are about the intent path.
     reader.decoder.last_activation_state = activation_state()
@@ -244,7 +249,11 @@ def test_an_unconfirmed_handshake_publishes_hold_not_silence():
     # going silent would make a deliberately still source and a dead link look
     # identical to the watchdog.
     reader = FakeReader()
-    node = EmgIntentBridge(reader=reader)
+    node = EmgIntentBridge(reader=reader, parameter_overrides=[
+        # Anchor on the first packet: these tests feed a handful of
+        # packets with synthetic receipt times, not a warm-up's worth.
+        Parameter("clock_anchor_window", value=1),
+    ])
     views = view_sink(node)
     try:
         assert not node._handshake_confirmed
@@ -320,7 +329,11 @@ def test_stamps_advance_with_the_device_grid(bridge):
 
 def test_unconfirmed_handshake_holds_ordinary_commands_but_not_abort():
     reader = FakeReader()
-    node = EmgIntentBridge(reader=reader)
+    node = EmgIntentBridge(reader=reader, parameter_overrides=[
+        # Anchor on the first packet: these tests feed a handful of
+        # packets with synthetic receipt times, not a warm-up's worth.
+        Parameter("clock_anchor_window", value=1),
+    ])
     published = []
     node.create_subscription(
         AssistiveIntent, "/assistive_intent", published.append, 10
@@ -364,7 +377,6 @@ def test_unconfirmed_handshake_holds_ordinary_commands_but_not_abort():
 
 
 def test_calibration_file_drives_the_handshake_to_the_stored_values(tmp_path):
-    from rclpy.parameter import Parameter
 
     calibration = tmp_path / "calibration.json"
     calibration.write_text(json.dumps({
@@ -373,6 +385,7 @@ def test_calibration_file_drives_the_handshake_to_the_stored_values(tmp_path):
     }))
     reader = FakeReader()
     node = EmgIntentBridge(reader=reader, parameter_overrides=[
+        Parameter("clock_anchor_window", value=1),
         Parameter("calibration_file", value=str(calibration)),
     ])
     try:
@@ -405,7 +418,6 @@ def test_calibration_file_drives_the_handshake_to_the_stored_values(tmp_path):
 
 
 def test_a_failed_calibration_file_refuses_to_start(tmp_path):
-    from rclpy.parameter import Parameter
 
     calibration = tmp_path / "failed.json"
     calibration.write_text(json.dumps({
@@ -417,5 +429,6 @@ def test_a_failed_calibration_file_refuses_to_start(tmp_path):
     # like a calibrated system to everything downstream.
     with pytest.raises(ValueError, match="failed calibration"):
         EmgIntentBridge(reader=FakeReader(), parameter_overrides=[
+            Parameter("clock_anchor_window", value=1),
             Parameter("calibration_file", value=str(calibration)),
         ])

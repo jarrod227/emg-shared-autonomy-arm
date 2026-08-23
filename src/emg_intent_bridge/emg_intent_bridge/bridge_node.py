@@ -81,6 +81,11 @@ class EmgIntentBridge(Node):
         # "Send nothing" is deliberately not a state — an un-reset board
         # would silently keep a previous wearer's RAM configuration.
         self.declare_parameter("calibration_file", "")
+        # How many packets to weigh before freezing the device-clock anchor.
+        # 20 is one second at the MCU's 20 Hz feature hop -- long enough that
+        # a single badly buffered receipt cannot become a permanent forward
+        # bias on every stamp, short enough not to be felt at startup.
+        self.declare_parameter("clock_anchor_window", 20)
 
         self._port = str(self.get_parameter("port").value)
         self._max_receipt_age_sec = float(
@@ -130,7 +135,11 @@ class EmgIntentBridge(Node):
             confirmation_window_sec,
             abort_override_window_sec=confirm_abort_override_sec,
         )
-        self._clock_mapper = DeviceClockMapper()
+        self._clock_mapper = DeviceClockMapper(
+            anchor_window=int(
+                self.get_parameter("clock_anchor_window").value
+            )
+        )
         self._reader = reader or SerialIntentReader(
             self._port,
             baudrate=int(self.get_parameter("baudrate").value),
@@ -139,6 +148,14 @@ class EmgIntentBridge(Node):
         self._output_sequence = 0
         self._published_count = 0
         self._stale_count = 0
+        self._warmup_skipped = 0
+        self._last_anchor_bias_sec = None
+        self._future_biased_packets = 0
+        # 0.05 s is what the handoff controller allows; anything past it will
+        # be refused there, so it is the right place to start complaining.
+        # One second of it is a frozen anchor, not a scheduling hiccup.
+        self._future_bias_warn_sec = 0.05
+        self._future_bias_run = 20
         self._last_reanchors = 0
         self._last_queue_drops = 0
         self._last_event_margin = None
@@ -305,6 +322,19 @@ class EmgIntentBridge(Node):
                 received.intent.timestamp_us,
                 receipt_ros_ns,
             )
+            if source_ros_ns is None:
+                # Still choosing an anchor. Publishing here would mean
+                # stamping with an offset the mapper has already decided not
+                # to trust, which is the bias this warm-up exists to avoid.
+                self._warmup_skipped += 1
+                if self._clock_mapper.reanchors != self._last_reanchors:
+                    self._last_reanchors = self._clock_mapper.reanchors
+                    self._gate.invalidate()
+                    self.get_logger().warning(
+                        "device clock re-anchored: cleared pending "
+                        "confirmation and restarted the anchor warm-up"
+                    )
+                continue
             if self._clock_mapper.reanchors != self._last_reanchors:
                 # A clock discontinuity (ROS time set, or an MCU restart the
                 # sequence check missed) makes any pending pair unpaired
@@ -314,9 +344,27 @@ class EmgIntentBridge(Node):
                 self.get_logger().warning(
                     "device clock re-anchored: cleared pending confirmation"
                 )
-            self._last_source_age_sec = max(
-                0.0, (now_ros_ns - source_ros_ns) / 1e9
-            )
+            # Signed, and kept separately: last_source_age_sec is clamped at
+            # zero, so a stamp in the future reads as a perfectly fresh 0.0.
+            # That clamp is why a session where every command was refused for
+            # being 0.13 s in the future showed nothing but healthy numbers
+            # here. Negative bias means the anchor is running ahead of the
+            # host clock, and a consumer's future tolerance will refuse it.
+            signed_age_sec = (now_ros_ns - source_ros_ns) / 1e9
+            self._last_anchor_bias_sec = signed_age_sec
+            if signed_age_sec < -self._future_bias_warn_sec:
+                self._future_biased_packets += 1
+                if self._future_biased_packets == self._future_bias_run:
+                    self.get_logger().error(
+                        f"source stamps run {-signed_age_sec:.3f}s ahead of "
+                        "the host clock; a consumer that allows less future "
+                        "than that will refuse every command. The anchor is "
+                        "frozen for the life of this process -- restart the "
+                        "bridge to re-run the warm-up."
+                    )
+            else:
+                self._future_biased_packets = 0
+            self._last_source_age_sec = max(0.0, signed_age_sec)
             if self._last_source_age_sec > self._max_receipt_age_sec:
                 self._stale_count += 1
                 self._gate.invalidate()
@@ -474,6 +522,8 @@ class EmgIntentBridge(Node):
             "mcu_activation_state": self._reader.decoder.last_activation_state,
             "queue_drops": self._reader.queue_drops,
             "stale_packets": self._stale_count,
+            "clock_warmup_skipped": self._warmup_skipped,
+            "clock_anchor_bias_sec": self._last_anchor_bias_sec,
             "clock_reanchors": self._clock_mapper.reanchors,
             "published_intents": self._published_count,
             "last_event_margin": self._last_event_margin,
