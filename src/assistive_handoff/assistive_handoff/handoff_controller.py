@@ -287,6 +287,9 @@ class HandoffController(Node):
         self._last_view_source_time: Time | None = None
         self._last_view_sequence: int | None = None
         self._view_watchdog_holding = False
+        # 20 commands at the EMG bridge's 20 Hz is one second of refusals.
+        self._future_view_commands = 0
+        self._future_view_run_limit = 20
         self._view_candidate_direction: int | None = None
         self._view_candidate_count = 0
         self._view_smoothed_activation = 0.0
@@ -459,10 +462,27 @@ class HandoffController(Node):
 
         age = self._age_sec(msg.header.stamp)
         if age < -self._view_future_tolerance_sec:
-            self.get_logger().warning(
-                f"view command ignored: source stamp is {-age:.3f}s future"
-            )
+            # Escalate rather than repeat. A future stamp is normally one
+            # scheduling hiccup, but a publisher that freezes a clock offset
+            # emits it forever, and the old per-message warning turned that
+            # into 3913 identical lines with the arm never moving and every
+            # upstream diagnostic reading healthy. A run this long is a
+            # configuration mismatch, and the log should say so once.
+            self._future_view_commands += 1
+            if self._future_view_commands == self._future_view_run_limit:
+                self.get_logger().error(
+                    f"every view command is arriving {-age:.3f}s in the "
+                    f"future, past the {self._view_future_tolerance_sec}s "
+                    "tolerance, and none can be accepted. This is the "
+                    "publisher's clock offset, not jitter: restart it, or "
+                    "raise view_command_future_tolerance_sec past its bias."
+                )
+            elif self._future_view_commands < self._future_view_run_limit:
+                self.get_logger().warning(
+                    f"view command ignored: source stamp is {-age:.3f}s future"
+                )
             return None
+        self._future_view_commands = 0
         if age > self._view_command_max_age_sec:
             self.get_logger().warning(
                 f"view command ignored: source stamp is {age:.3f}s old"

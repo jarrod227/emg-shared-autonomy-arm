@@ -984,6 +984,40 @@ def test_target_search_requires_post_stop_target_and_confirm(make_graph):
     assert g.controller._holding_object
 
 
+def test_a_publisher_stuck_in_the_future_is_reported_once_not_per_command(
+    make_graph,
+):
+    """A frozen clock offset is a configuration fault, not jitter.
+
+    The EMG bridge anchors its device-clock offset on one receipt and keeps
+    it for the life of the process. Drawing a badly buffered receipt put every
+    stamp 0.13 s ahead of the host clock, past the 0.05 s tolerance here, and
+    the arm never moved for a whole session. The per-command warning produced
+    3913 identical lines and buried the one fact that mattered.
+    """
+
+    g = make_search_graph(make_graph, {})
+    g.settle(0.2)
+
+    for _ in range(g.controller._future_view_run_limit + 5):
+        g.send_view(ViewControlCommand.RIGHT, age_sec=-0.5)
+        g.settle(0.02)
+
+    assert g.state is HandoffState.IDLE, "a future stamp started a search"
+    assert not g.controller._view_motion.moving
+    # Counted past the escalation point, so the run is visible rather than
+    # each command being reported on its own.
+    assert (
+        g.controller._future_view_commands
+        > g.controller._future_view_run_limit
+    )
+
+    # One good command clears it, so a real hiccup does not latch.
+    g.send_view(ViewControlCommand.RIGHT)
+    assert g.wait_for_state(HandoffState.TARGET_SEARCH)
+    assert g.controller._future_view_commands == 0
+
+
 def test_target_search_watchdog_holds_and_new_command_resumes(make_graph):
     g = make_search_graph(
         make_graph,
