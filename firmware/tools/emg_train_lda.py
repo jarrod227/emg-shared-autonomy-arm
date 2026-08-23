@@ -40,6 +40,13 @@ DEFAULT_RIDGE = 1.0e-3
 DEFAULT_QUANTIZATION_BITS = 18
 LABELS = tuple(GESTURE_LABELS)
 PROTOCOL_COMMAND_LABELS = ("REST", "NEXT_TARGET", "CONFIRM", "ABORT")
+# Classes the firmware may hold that are not commands. They steer the
+# proportional view channel and are rewritten to REST before the event gate,
+# so they never reach the INTENT command field. Ordered after the protocol
+# commands so the emitted coefficient rows keep the order the firmware's own
+# enum gives them.
+DIRECTION_ONLY_LABELS = ("ULNAR",)
+FIRMWARE_LABELS = PROTOCOL_COMMAND_LABELS + DIRECTION_ONLY_LABELS
 FEATURE_NAMES = tuple(
     f"ch{channel}_{feature}"
     for channel in range(CHANNEL_COUNT)
@@ -241,9 +248,9 @@ def manifest_labels(manifest, path=None):
     # header is only emitted for exactly PROTOCOL_COMMAND_LABELS in exactly
     # that order. Sorting the protocol commands alphabetically instead would
     # silently stop the live model from being regenerable.
-    extra = sorted(set(actions) - set(PROTOCOL_COMMAND_LABELS))
+    extra = sorted(set(actions) - set(FIRMWARE_LABELS))
     return tuple(
-        [label for label in PROTOCOL_COMMAND_LABELS if label in actions] + extra
+        [label for label in FIRMWARE_LABELS if label in actions] + extra
     )
 
 
@@ -541,9 +548,15 @@ def theoretical_score_bound(model):
 
 def render_c_model_header(model, source_sessions=()):
     """Render deterministic C parameters; no floats or divisions at runtime."""
-    if tuple(model.labels) != PROTOCOL_COMMAND_LABELS:
+    # The four protocol commands, optionally followed by the direction-only
+    # classes, in exactly that order. Class order fixes the row order of the
+    # coefficient table and the firmware indexes it with its own enum, so a
+    # model ordered differently would silently mean different gestures.
+    labels = tuple(model.labels)
+    if labels != PROTOCOL_COMMAND_LABELS and labels != FIRMWARE_LABELS:
         raise ValueError(
-            "model class order must be REST, NEXT_TARGET, CONFIRM, ABORT"
+            f"model class order must be {list(PROTOCOL_COMMAND_LABELS)} "
+            f"or {list(FIRMWARE_LABELS)}, got {list(labels)}"
         )
     if tuple(model.feature_names) != FEATURE_NAMES:
         raise ValueError("model feature order does not match firmware features")
@@ -561,17 +574,24 @@ def render_c_model_header(model, source_sessions=()):
         f"#define EMG_CLASSIFIER_MODEL_FRACTION_BITS {model.fraction_bits}u",
         f"#define EMG_CLASSIFIER_MODEL_CLASS_COUNT {len(model.labels)}u",
         f"#define EMG_CLASSIFIER_MODEL_FEATURE_COUNT {len(model.feature_names)}u",
-        "#define EMG_CLASSIFIER_MODEL_CLASS_0_COMMAND 0u /* REST */",
-        "#define EMG_CLASSIFIER_MODEL_CLASS_1_COMMAND 1u /* NEXT_TARGET */",
-        "#define EMG_CLASSIFIER_MODEL_CLASS_2_COMMAND 2u /* CONFIRM */",
-        "#define EMG_CLASSIFIER_MODEL_CLASS_3_COMMAND 3u /* ABORT */",
+        # Generated from the label list, not written out. These four lines
+        # were literals, so a model with a fifth class declared CLASS_COUNT 5
+        # and defined four commands -- and the C still compiled, because the
+        # initializer list is length-inferred and the missing entry becomes
+        # zero, silently making the new class REST.
+        *[
+            f"#define EMG_CLASSIFIER_MODEL_CLASS_{index}_COMMAND "
+            f"{FIRMWARE_LABELS.index(label)}u /* {label} */"
+            for index, label in enumerate(model.labels)
+        ],
         "",
         "static const uint8_t emg_classifier_model_commands",
         "    [EMG_CLASSIFIER_MODEL_CLASS_COUNT] = {",
-        "    EMG_CLASSIFIER_MODEL_CLASS_0_COMMAND,",
-        "    EMG_CLASSIFIER_MODEL_CLASS_1_COMMAND,",
-        "    EMG_CLASSIFIER_MODEL_CLASS_2_COMMAND,",
-        "    EMG_CLASSIFIER_MODEL_CLASS_3_COMMAND",
+        *[
+            f"    EMG_CLASSIFIER_MODEL_CLASS_{index}_COMMAND"
+            + ("," if index + 1 < len(model.labels) else "")
+            for index in range(len(model.labels))
+        ],
         "};",
         "",
         "static const int32_t emg_classifier_model_weights",
@@ -808,7 +828,7 @@ def main(argv=None):
         sessions, skipped, labels = load_dataset(
             root, arguments.zero_crossing_threshold
         )
-        if tuple(labels) != PROTOCOL_COMMAND_LABELS:
+        if tuple(labels) not in (PROTOCOL_COMMAND_LABELS, FIRMWARE_LABELS):
             print(
                 f"Label set {list(labels)} is not the four protocol commands; "
                 "this model can be scored but not emitted as firmware."

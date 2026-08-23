@@ -14,6 +14,7 @@ from emg_runtime_compare import (
     load_runtime_recording,
     replay_host,
 )
+from emg_train_lda import FEATURE_NAMES, FIRMWARE_LABELS
 from test_emg_protocol import build
 
 
@@ -74,12 +75,21 @@ def test_absolute_grid_skips_local_400_when_capture_starts_at_offset_52():
 
 
 def test_loads_generated_deployment_header_not_a_refitted_model():
+    # Reads the header the firmware is actually built from, so a comparison
+    # run can never quietly refit a model and agree with itself. The class
+    # list is derived rather than written out: it grew from four to five when
+    # a direction-only class was added, and pinning the literal here would
+    # have meant editing this test every time the model is regenerated, which
+    # is exactly the reflex that lets a wrong model through.
     model = load_deployed_model()
 
-    assert model.labels == ("REST", "NEXT_TARGET", "CONFIRM", "ABORT")
+    assert model.labels == FIRMWARE_LABELS
     assert model.fraction_bits == 18
-    assert model.weights.shape == (4, 12)
-    assert model.intercept.tolist() == [2216928, -6175264, -3904388, -5619152]
+    assert model.weights.shape == (len(FIRMWARE_LABELS), len(FEATURE_NAMES))
+    assert len(model.intercept) == len(FIRMWARE_LABELS)
+    # The four protocol commands keep the leading rows, in protocol order:
+    # the firmware indexes this table with its own enum.
+    assert model.labels[:4] == ("REST", "NEXT_TARGET", "CONFIRM", "ABORT")
 
 
 def test_zero_signal_runtime_replays_on_exact_absolute_timestamps(tmp_path):

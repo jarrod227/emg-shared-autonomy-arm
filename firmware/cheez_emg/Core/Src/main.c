@@ -458,11 +458,20 @@ static void emg_process_half(uint32_t index, bool attached)
                                 + features[2].mean_absolute_value;
       const emg_command_t decision = emg_activation_apply(
           &emg_activation, result.command, window_valid, total_mav);
+      /* A direction-only class steers and nothing else. Rewriting it to REST
+       * here is what keeps it out of the INTENT command field, so no receiver
+       * has to learn a fifth command and the gesture cannot acquire a
+       * discrete meaning: while a search sweeps, a gesture is a direction.
+       * REST is also what lets the gate re-arm, which is right -- as far as
+       * the discrete path is concerned nothing happened. */
+      const emg_command_t gated = (decision == EMG_COMMAND_ULNAR)
+                                      ? EMG_COMMAND_REST
+                                      : decision;
       /* REST is reported too. A silent link is indistinguishable from a dead
        * one, so the absence of intent is stated rather than implied; the
        * command carries the gate's event, so anything other than REST means
        * an event fired on this hop. */
-      (void)emg_gate_push(&emg_gate, decision, window_valid, &event);
+      (void)emg_gate_push(&emg_gate, gated, window_valid, &event);
       emg_send_intent(event, &result, window_valid, new_saturations,
                       decision, total_mav);
     }

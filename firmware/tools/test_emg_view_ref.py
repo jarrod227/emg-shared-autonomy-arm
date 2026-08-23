@@ -17,17 +17,19 @@ from emg_view_ref import (
     CONFIRM,
     NEXT_TARGET,
     REST,
+    ULNAR,
     view_activation,
     view_direction,
 )
 
 
-def test_only_the_assigned_gesture_steers():
-    # Everything else, REST included, is HOLD downstream. A view channel that
-    # moved on CONFIRM or ABORT would steer during a command meant to stop or
-    # confirm, in the one state where unintended motion is hardest to notice.
+def test_the_two_directions_are_opposite_and_nothing_else_steers():
+    # A view channel that moved on CONFIRM or ABORT would steer during a
+    # command meant to confirm or stop, in the one state where unintended
+    # motion is hardest to notice.
     assert view_direction(NEXT_TARGET) == -1
-    for other in (REST, CONFIRM, ABORT, "ULNAR"):
+    assert view_direction(ULNAR) == 1
+    for other in (REST, CONFIRM, ABORT, "RADIAL", "SUPINATE"):
         assert view_direction(other) == 0
 
 

@@ -1,4 +1,10 @@
-"""Cross-check host-C Q18 classifier scores against the generated JSON."""
+"""Cross-check host-C Q18 classifier scores against the deployed model.
+
+Read from the generated header the firmware is built from, not from a JSON in
+a dataset directory. Those two drifted the moment the model was retrained with
+a fifth class: the fixture had five classes and the JSON four, and what the
+test had really been checking was that two unrelated models happened to agree.
+"""
 
 import json
 import pathlib
@@ -7,24 +13,23 @@ import struct
 import numpy as np
 import pytest
 
-from emg_train_lda import QuantizedLDAModel
+from emg_runtime_compare import load_deployed_model
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "firmware" / "test" / "classifier.bin"
-MODEL = ROOT / "datasets" / "emg" / "lda_model.json"
+MODEL = ROOT / "firmware" / "src" / "emg_classifier_model.h"
 
 
 def test_c_classifier_matches_python_q18_exactly():
     if not FIXTURE.exists():
         pytest.skip("run `make -C firmware/test check` to generate classifier.bin")
     if not MODEL.exists():
-        pytest.skip("local labelled dataset/model is not present")
+        pytest.skip("generated model header is not present")
 
     payload = FIXTURE.read_bytes()
     rows, feature_count, class_count = struct.unpack_from("<iii", payload, 0)
-    model_payload = json.loads(MODEL.read_text(encoding="utf-8"))
-    model = QuantizedLDAModel.from_dict(model_payload["quantized_model"])
+    model = load_deployed_model(MODEL)
     assert feature_count == len(model.feature_names)
     assert class_count == len(model.labels)
 

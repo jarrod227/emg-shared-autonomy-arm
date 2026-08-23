@@ -62,7 +62,14 @@ typedef enum {
     EMG_COMMAND_REST = 0,
     EMG_COMMAND_NEXT_TARGET = 1,
     EMG_COMMAND_CONFIRM = 2,
-    EMG_COMMAND_ABORT = 3
+    EMG_COMMAND_ABORT = 3,
+    /* Classifier class only, never an event. It steers the proportional view
+     * channel and is rewritten to REST before the gate sees it, so it cannot
+     * reach the INTENT `command` field and no receiver has to learn a fifth
+     * command. Giving it one would give it a discrete meaning the design
+     * deliberately does not want: while a search sweeps, a gesture is a
+     * direction and nothing else. */
+    EMG_COMMAND_ULNAR = 4
 } emg_command_t;
 
 typedef struct {

@@ -39,6 +39,7 @@ from emg_protocol import (
 from emg_train_lda import (
     CHANNEL_COUNT,
     FEATURE_NAMES,
+    FIRMWARE_LABELS,
     LABELS,
     QuantizedLDAModel,
     ZERO_CROSSING_THRESHOLD,
@@ -168,7 +169,7 @@ def load_deployed_model(path=DEFAULT_MODEL_HEADER):
     class_count = _define_integer(text, "EMG_CLASSIFIER_MODEL_CLASS_COUNT")
     feature_count = _define_integer(text, "EMG_CLASSIFIER_MODEL_FEATURE_COUNT")
     fraction_bits = _define_integer(text, "EMG_CLASSIFIER_MODEL_FRACTION_BITS")
-    if class_count != len(LABELS) or feature_count != len(FEATURE_NAMES):
+    if class_count != len(FIRMWARE_LABELS) or feature_count != len(FEATURE_NAMES):
         raise ValueError(
             "deployed model geometry disagrees with the host feature contract"
         )
@@ -181,9 +182,10 @@ def load_deployed_model(path=DEFAULT_MODEL_HEADER):
         labels = tuple(COMMAND_NAMES[command] for command in command_ids)
     except KeyError as error:
         raise ValueError(f"deployed model has unknown command {error.args[0]}") from error
-    if labels != LABELS:
+    if labels != FIRMWARE_LABELS:
         raise ValueError(
-            f"deployed model command order {labels} disagrees with host {LABELS}"
+            f"deployed model class order {labels} disagrees with host "
+            f"{FIRMWARE_LABELS}"
         )
 
     weights = _initializer_integers(text, "emg_classifier_model_weights")

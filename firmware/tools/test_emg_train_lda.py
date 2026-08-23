@@ -17,6 +17,7 @@ from emg_train_lda import (
     extract_feature_windows,
     fit_lda,
     quantize_lda,
+    FIRMWARE_LABELS,
     PROTOCOL_COMMAND_LABELS,
     load_dataset,
     manifest_labels,
@@ -114,14 +115,24 @@ def test_protocol_commands_keep_their_frozen_class_order():
     assert manifest_labels(manifest) == PROTOCOL_COMMAND_LABELS
 
 
-def test_candidate_labels_sort_after_the_protocol_commands():
+def test_candidate_labels_sort_after_the_firmware_classes():
     # Any deterministic position works for exploratory labels; what must not
-    # move is where the four protocol commands sit.
+    # move is where the classes the firmware holds sit, because class order
+    # fixes the row order of the emitted coefficient table and the firmware
+    # indexes it with its own enum.
     manifest = balanced_manifest(labels=CANDIDATE_LABELS)
     ordered = manifest_labels(manifest)
 
-    assert ordered[:len(PROTOCOL_COMMAND_LABELS)] == PROTOCOL_COMMAND_LABELS
-    assert ordered[len(PROTOCOL_COMMAND_LABELS):] == ("PRONATE", "RADIAL", "ULNAR")
+    assert ordered[:len(FIRMWARE_LABELS)] == FIRMWARE_LABELS
+    assert ordered[len(FIRMWARE_LABELS):] == ("PRONATE", "RADIAL")
+
+
+def test_a_direction_only_class_may_be_emitted_as_firmware():
+    # ULNAR steers the proportional channel and is rewritten to REST before
+    # the gate, so it is a class the firmware holds without being a command.
+    # The emitter has to accept it and must still reject anything else.
+    assert FIRMWARE_LABELS == PROTOCOL_COMMAND_LABELS + ("ULNAR",)
+    assert "ULNAR" not in PROTOCOL_COMMAND_LABELS
 
 
 def test_a_manifest_without_a_recorded_label_set_is_rejected():

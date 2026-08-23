@@ -5,6 +5,8 @@ int8_t emg_view_direction(emg_command_t decision)
     switch (decision) {
     case EMG_COMMAND_NEXT_TARGET:
         return -1;
+    case EMG_COMMAND_ULNAR:
+        return 1;
     default:
         return 0;
     }

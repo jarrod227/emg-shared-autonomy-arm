@@ -9,6 +9,7 @@
 #ifndef EMG_CLASSIFIER_H
 #define EMG_CLASSIFIER_H
 
+#include "emg_classifier_model.h"
 #include "emg_features.h"
 #include "emg_packet.h"
 
@@ -18,7 +19,16 @@
 #define EMG_CLASSIFIER_CHANNEL_COUNT 3u
 #define EMG_CLASSIFIER_FEATURES_PER_CHANNEL 4u
 #define EMG_CLASSIFIER_FEATURE_COUNT 12u
-#define EMG_CLASSIFIER_CLASS_COUNT 4u
+/* Taken from the generated model rather than repeated. These were two
+ * independent 4s that had to agree and nothing made them: a regenerated model
+ * with a different class count would have been indexed with the old one,
+ * reading past the coefficient rows or ignoring the last class, and the
+ * compiler would have said nothing. */
+#define EMG_CLASSIFIER_CLASS_COUNT EMG_CLASSIFIER_MODEL_CLASS_COUNT
+
+_Static_assert(EMG_CLASSIFIER_MODEL_FEATURE_COUNT
+                   == EMG_CLASSIFIER_FEATURE_COUNT,
+               "model feature count disagrees with the classifier");
 
 typedef struct {
     int64_t scores[EMG_CLASSIFIER_CLASS_COUNT];

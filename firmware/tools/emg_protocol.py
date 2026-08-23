@@ -41,7 +41,13 @@ SET_RESULT_REJECTED = 2
 SET_MODE_DEFAULTS = 0
 SET_MODE_APPLY = 1
 
-COMMAND_NAMES = {0: "REST", 1: "NEXT_TARGET", 2: "CONFIRM", 3: "ABORT"}
+# 4 is a classifier class, not a command: it steers the proportional view
+# channel and the firmware rewrites it to REST before the event gate, so it
+# never appears in an INTENT command field. It is named here because the
+# generated model header lists it among the model's classes.
+COMMAND_NAMES = {0: "REST", 1: "NEXT_TARGET", 2: "CONFIRM", 3: "ABORT",
+                 4: "ULNAR"}
+EVENT_COMMAND_NAMES = {k: v for k, v in COMMAND_NAMES.items() if k != 4}
 
 _SEQUENCE_MODULO = 1 << 16
 _TIMESTAMP_MODULO = 1 << 32

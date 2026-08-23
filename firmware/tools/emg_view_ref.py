@@ -16,10 +16,11 @@ NEXT_TARGET = "NEXT_TARGET"
 CONFIRM = "CONFIRM"
 ABORT = "ABORT"
 
-# Only the gestures assigned to a view direction map to anything. The second
-# direction is unassigned: the deployed model has four classes and the gesture
-# chosen for the other direction is not one of them.
-DIRECTIONS = {NEXT_TARGET: -1}
+# Only the gestures assigned to a view direction map to anything. Everything
+# else, REST included, is 0 and reads downstream as HOLD.
+ULNAR = "ULNAR"
+
+DIRECTIONS = {NEXT_TARGET: -1, ULNAR: 1}
 
 
 def view_direction(decision):
