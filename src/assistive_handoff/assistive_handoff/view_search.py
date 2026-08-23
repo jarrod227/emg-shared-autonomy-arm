@@ -91,8 +91,9 @@ class SearchProfile:
         The safety argument survives the change, but it moves: it was that the
         reachable set is exactly the band regardless of command history, which
         absolute mapping got by construction. Here the motion model gets it
-        instead, by never accepting a goal outside the band -- see
-        ``SimulatedViewMotion.request_velocity``.
+        instead -- and it takes both halves, since goals inside the band are
+        not sufficient on their own. See ``request_velocity`` for the goals
+        and ``_clamp_into_band`` for the paths that have no goal at all.
         """
 
         if direction not in (-1, 1):
@@ -288,9 +289,9 @@ class SimulatedViewMotion:
         Implemented as "head for the edge of the band, but no faster than
         this", so the trapezoid planner that already exists does the work and
         the axis decelerates to a stop exactly on the edge rather than being
-        clamped against it. The reachable set is therefore still exactly the
-        band, which is the property that makes an externally sourced command
-        safe to accept at all.
+        clamped against it. That keeps the axis inside the band while it has
+        a goal; a reversal or a release takes the goal away, and
+        ``_clamp_into_band`` is what bounds it then.
 
         The rule that matters for feel is that a command in the direction
         already being travelled updates only the speed ceiling and leaves the
@@ -349,17 +350,41 @@ class SimulatedViewMotion:
         if dt_sec <= 0.0:
             raise ValueError(f"dt_sec must be > 0, got {dt_sec}")
 
+        start_position = self._position
         if self._active_target is None:
             self._step_stopping(dt_sec)
         else:
             self._step_toward_target(dt_sec)
+        self._clamp_into_band(start_position)
 
-        if self._position <= self._profile.min_angle:
-            self._position = self._profile.min_angle
+    def _clamp_into_band(self, start_position: float) -> None:
+        """Keep the band a hard bound, not merely where the goals are.
+
+        The planner already stops on the edge when it has a goal there, so
+        this only matters on the path that has no goal: a reversal or a hold
+        drops the active target and hands the axis to the deceleration
+        integrator, which used to be bounded by nothing but the absolute
+        stops. A wearer flicking direction at full speed near the edge
+        therefore coasted past it -- measured at +0.098 degrees, and the
+        stopping distance at nominal speed allows 2.39.
+
+        Small, but the claim being made about this axis is that its reachable
+        set is exactly the band whatever sequence of commands arrives, and
+        that claim was false as written until this existed.
+        """
+
+        lower, upper = self._profile.bounds()
+        # An axis parked outside the band -- configure() can move the band out
+        # from under it -- must not be yanked back in. It may only be stopped
+        # from travelling further out.
+        lower = max(min(lower, start_position), self._profile.min_angle)
+        upper = min(max(upper, start_position), self._profile.max_angle)
+        if self._position <= lower:
+            self._position = lower
             if self._velocity < 0.0:
                 self._velocity = 0.0
-        elif self._position >= self._profile.max_angle:
-            self._position = self._profile.max_angle
+        elif self._position >= upper:
+            self._position = upper
             if self._velocity > 0.0:
                 self._velocity = 0.0
 

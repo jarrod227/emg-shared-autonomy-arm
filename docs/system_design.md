@@ -321,9 +321,17 @@ speed, 0.25 rad/s by default, which crosses the 90 degree band in about six
 seconds. The bound is what makes this safe to accept, not the mapping. A rate
 names no angle, so the motion model carries the bound instead: a rate command
 is served as "travel to the edge of the band, no faster than this", and the
-existing deceleration planner brings the axis to rest exactly on the edge. The
-reachable set is the band whatever sequence arrives, which is the same
-guarantee the absolute map gave by construction.
+existing deceleration planner brings the axis to rest exactly on the edge.
+
+Goals inside the band turned out not to be sufficient on their own. A
+reversal or a release withdraws the goal and hands the axis to the
+deceleration integrator, which the absolute stops bounded but the band did
+not, so a wearer flicking direction at speed near the edge coasted past it --
+0.098 degrees measured, 0.218 in reproduction, and up to the stopping
+distance in principle. The axis is now clamped into the band on every
+integration step, not only when it has somewhere to go. The reachable set is
+the band whatever sequence arrives, which is the same guarantee the absolute
+map gave by construction.
 
 An intermediate version stepped the axis a bounded distance per command
 instead, and is worth recording because it looks equivalent and is not.

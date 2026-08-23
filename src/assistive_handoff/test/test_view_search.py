@@ -192,6 +192,78 @@ def test_a_rate_command_stops_on_the_band_edge_without_crossing_it():
     assert motion.velocity == pytest.approx(0.0)
 
 
+def shipped_search_profile():
+    """The controller's declared defaults, not the fast ones tests prefer.
+
+    The band excursion below depends on how far the deceleration ramp
+    reaches, so it only appears at the real acceleration limits.
+    """
+
+    return SearchProfile(
+        center_angle=0.0,
+        relative_limit=math.pi / 4.0,
+        min_angle=-math.pi / 3.0,
+        max_angle=math.pi / 3.0,
+        nominal_speed=0.25,
+        acceleration=0.5,
+        deceleration=0.75,
+    )
+
+
+def drive_to_the_edge(interrupt, interrupt_at_deg=42.7, seconds=40.0):
+    """Full effort toward the upper edge, interrupted once on the way.
+
+    Returns the furthest angle reached, in degrees.
+    """
+
+    profile = shipped_search_profile()
+    motion = SimulatedViewMotion(profile, initial_angle=0.0)
+    elapsed, next_command, done, worst = 0.0, 0.0, False, -90.0
+    while elapsed < seconds:
+        if elapsed >= next_command - 1e-9:
+            if math.degrees(motion.position) >= interrupt_at_deg and not done:
+                interrupt(motion, profile)
+                done = True
+            else:
+                motion.request_velocity(profile.speed_for(1, 1.0))
+            next_command += 0.05  # 20 Hz, the EMG bridge's rate
+        motion.step(0.02)
+        elapsed += 0.02
+        worst = max(worst, math.degrees(motion.position))
+    assert done, "never got close enough to the edge to interrupt"
+    return worst
+
+
+def test_reversing_near_the_edge_at_speed_stays_inside_the_band():
+    """The band must bound the axis, not merely bound where the goals are.
+
+    Found in a wearer session, not in a test. The direction classifier
+    flickered at high effort -- 3.26 reversals per second above 0.6
+    activation -- and each flicker dropped the active target and handed the
+    axis to the deceleration integrator, which the absolute stops bounded but
+    the band did not. The recorded run left the band by 0.098 degrees; this
+    reproduction, which flicks at exactly full speed, reaches 0.218.
+
+    Small either way, and that is the point: the claim being made about this
+    axis is that its reachable set is exactly the band whatever sequence of
+    commands arrives, and a claim like that is not a matter of degree.
+    """
+
+    def flick_the_other_way(motion, profile):
+        motion.request_velocity(profile.speed_for(-1, 1.0))
+
+    assert drive_to_the_edge(flick_the_other_way) <= 45.0 + 1e-9
+
+
+def test_releasing_near_the_edge_at_speed_stays_inside_the_band():
+    # The same hole, reached through request_hold rather than a reversal:
+    # both drop the active target and leave the axis coasting.
+    def let_go(motion, profile):
+        motion.request_hold()
+
+    assert drive_to_the_edge(let_go) <= 45.0 + 1e-9
+
+
 def test_a_rate_command_outside_the_band_may_only_come_back():
     # configure() can move the band under an axis that is already parked.
     profile = make_profile(relative_limit=0.6, nominal_speed=0.4,
