@@ -14,6 +14,7 @@ import pytest
 from emg_activation_ref import FROZEN_BASELINE_SHIFT, FROZEN_FACTOR
 from emg_calibrate import (
     CAPTURED_GESTURES,
+    diagnose_failure,
     GESTURES,
     REFERENCE_GESTURES,
     SEPARATION_MARGINAL,
@@ -496,3 +497,57 @@ def test_an_ordinary_donning_is_not_flagged_for_rest_contamination():
                                 "ABORT": 170})
 
     assert "rest_contamination_warning" not in run(measured)
+
+
+def test_a_high_resting_level_points_at_the_electrodes():
+    # 2026-08-23, electrode motion: rest quadrupled while the gestures did
+    # not move, and K x baseline would have governed the threshold outright.
+    measured = donning(80, 48, {"NEXT_TARGET": 153, "CONFIRM": 114,
+                                "ABORT": 191})
+
+    hint = diagnose_failure(run(measured))
+
+    assert "re-place the electrodes" in hint
+    assert "resting level is high" in hint
+
+
+def test_one_weak_gesture_points_at_that_muscle_not_the_electrodes():
+    """The failure that used to print the opposite of the right advice.
+
+    2026-08-23, after an evening of trials: rest identical to the passing
+    capture at 15, CONFIRM and ULNAR *higher* than before, and only wrist
+    extension down 36%. Re-placing electrodes on that reading is how a
+    working donning gets thrown away.
+    """
+    measured = donning(15, 47, {"NEXT_TARGET": 112, "CONFIRM": 180,
+                                "ABORT": 141})
+
+    summary = run(measured)
+    hint = diagnose_failure(summary)
+
+    assert summary["verdict"] == "fail"
+    assert "NEXT_TARGET" in hint
+    assert "fatigued" in hint
+    assert "re-place" not in hint.replace("re-placing working electrodes", "")
+
+
+def test_bands_close_with_nothing_else_odd_points_at_preparation():
+    # Rest normal, all three gestures within a quarter of each other: the
+    # only thing left holding the bands together is preparation.
+    measured = donning(15, 70, {"NEXT_TARGET": 160, "CONFIRM": 155,
+                                "ABORT": 150})
+
+    hint = diagnose_failure(run(measured))
+
+    assert "preparation" in hint
+    assert "smaller movements" in hint
+
+
+def test_the_verdict_line_carries_the_diagnosis():
+    measured = donning(15, 47, {"NEXT_TARGET": 112, "CONFIRM": 180,
+                                "ABORT": 141})
+
+    message = verdict_message(run(measured))
+
+    assert message.startswith("FAIL")
+    assert "NEXT_TARGET" in message

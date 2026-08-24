@@ -431,6 +431,10 @@ def summarize(rest_totals, preparation_trials, gesture_totals):
         "gate_reachability": reachability,
         "verdict": verdict,
         "threshold_floor": threshold,
+        "weakest_over_strongest": (
+            round(weakest / max(plateaus.values()), 2)
+            if max(plateaus.values()) > 0 else None
+        ),
         "factor": FROZEN_FACTOR,
         "baseline_shift": FROZEN_BASELINE_SHIFT,
         "sustain_windows": SUSTAIN_WINDOWS,
@@ -500,6 +504,53 @@ def summarize(rest_totals, preparation_trials, gesture_totals):
     return summary
 
 
+# One gesture far below its peers is a statement about that muscle or that
+# electrode; all of them close together is a statement about the donning.
+# Provisional, like the separation tiers, and for the same reason -- it is cut
+# from three captures. 2026-08-23: two donnings that failed for unrelated
+# reasons both had a weakest/strongest of 0.93, and the fatigued one 0.62.
+WEAK_GESTURE_FRACTION = 0.75
+
+
+def diagnose_failure(summary):
+    """Why the bands are close, when they are. None when they are not.
+
+    The separation ratio says a donning failed; it does not say what to do,
+    and the two remedies are opposite. On 2026-08-23 one failure was electrode
+    motion -- rest quadrupled, gestures unchanged -- and another was fatigue in
+    one muscle after an evening of trials, with rest identical to the passing
+    capture. Both printed "Check electrode contact and gel". Re-placing good
+    electrodes is how a working donning gets thrown away, and the numbers to
+    tell the cases apart were already side by side in the output.
+    """
+    plateaus = summary["gesture_plateaus"]
+    weakest = summary["weakest_gesture_plateau"]
+    strongest = max(plateaus.values()) if plateaus else 0.0
+
+    if "inert_floor_warning" in summary:
+        # The noise floor is high enough to govern the threshold on its own.
+        # Whatever the gestures do, the electrodes are what to fix.
+        return (
+            "the resting level is high enough that K x baseline, not this "
+            "calibration, would set the threshold. That is a contact or "
+            "interference problem: re-place the electrodes, and check that "
+            "nothing mains-powered is connected."
+        )
+    if strongest > 0.0 and weakest / strongest < WEAK_GESTURE_FRACTION:
+        return (
+            f"the resting level is normal and the other gestures are not "
+            f"weak, so this is specific to {summary['weakest_gesture']} "
+            f"({weakest:.0f} against {strongest:.0f}). Either that muscle is "
+            "fatigued -- rest it rather than re-placing working electrodes -- "
+            "or the electrode over it is the one that moved."
+        )
+    return (
+        "the resting level is normal and no single gesture stands out, so "
+        "the bands are close from the preparation side. Repeat it with "
+        "smaller movements before concluding anything about the electrodes."
+    )
+
+
 def verdict_message(summary):
     separation = summary["separation_ratio"]
     if summary["verdict"] == "pass":
@@ -507,13 +558,15 @@ def verdict_message(summary):
     if summary["verdict"] == "marginal":
         return (
             f"MARGINAL: separation {separation} is between "
-            f"{SEPARATION_MARGINAL} and {SEPARATION_PASS}. Repeat the "
-            f"calibration; if it stays here, re-place the electrodes."
+            f"{SEPARATION_MARGINAL} and {SEPARATION_PASS}. A threshold fitted "
+            f"here sits close to noise. Repeat the calibration; "
+            f"{diagnose_failure(summary)}"
         )
     return (
-        f"FAIL: separation {separation} is below {SEPARATION_MARGINAL}. "
-        f"Check electrode contact and gel, then calibrate again. A threshold "
-        f"fitted to this donning would sit within noise of real gestures."
+        f"FAIL: separation {separation} is below {SEPARATION_MARGINAL}. A "
+        f"threshold fitted to this donning would sit within noise of real "
+        f"gestures. Looking at where the bands actually are: "
+        f"{diagnose_failure(summary)}"
     )
 
 
