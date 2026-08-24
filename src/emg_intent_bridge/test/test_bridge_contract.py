@@ -43,9 +43,11 @@ CONTROLLER_VIEW_MIN_SIGNAL_QUALITY = 0.5
 
 def activation_state(*, source=ACTIVATION_SOURCE_DEFAULTS, factor=3,
                      baseline_shift=4, threshold_floor=110,
-                     last_result=SET_RESULT_NONE, applied_sequence=0):
+                     last_result=SET_RESULT_NONE, applied_sequence=0,
+                     reference_left=0, reference_right=0):
     return ActivationState(source, factor, baseline_shift, last_result,
-                           threshold_floor, applied_sequence)
+                           threshold_floor, applied_sequence,
+                           reference_left, reference_right)
 
 
 class _FakeStats:
@@ -432,3 +434,75 @@ def test_a_failed_calibration_file_refuses_to_start(tmp_path):
             Parameter("clock_anchor_window", value=1),
             Parameter("calibration_file", value=str(calibration)),
         ])
+
+
+def test_measured_references_reach_the_board_and_are_confirmed(tmp_path):
+    """The references are the gain of the proportional channel.
+
+    A board that accepted the threshold but not them would steer at the
+    wrong scale while every log line said the handshake was confirmed, which
+    is the failure mode this whole change exists to remove.
+    """
+    calibration = tmp_path / "calibration.json"
+    calibration.write_text(json.dumps({
+        "factor": 3, "baseline_shift": 4, "threshold_floor": 55,
+        "verdict": "pass",
+        "reference_levels": {"NEXT_TARGET": 230.6, "ULNAR": 302.8},
+    }))
+    reader = FakeReader()
+    node = EmgIntentBridge(reader=reader, parameter_overrides=[
+        Parameter("clock_anchor_window", value=1),
+        Parameter("calibration_file", value=str(calibration)),
+    ])
+    try:
+        assert node._handshake["reference_left"] == 231
+        assert node._handshake["reference_right"] == 303
+
+        # Right threshold, no references: not this calibration.
+        reader.decoder.last_activation_state = activation_state(
+            source=ACTIVATION_SOURCE_HOST, threshold_floor=55,
+            last_result=SET_RESULT_ACCEPTED,
+        )
+        node._drive_handshake()
+        assert not node._handshake_confirmed
+
+        # One of the two applied is still not this calibration.
+        reader.decoder.last_activation_state = activation_state(
+            source=ACTIVATION_SOURCE_HOST, threshold_floor=55,
+            last_result=SET_RESULT_ACCEPTED, reference_left=231,
+        )
+        node._drive_handshake()
+        assert not node._handshake_confirmed
+
+        reader.decoder.last_activation_state = activation_state(
+            source=ACTIVATION_SOURCE_HOST, threshold_floor=55,
+            last_result=SET_RESULT_ACCEPTED, reference_left=231,
+            reference_right=303,
+        )
+        node._drive_handshake()
+        assert node._handshake_confirmed
+    finally:
+        node.destroy_node()
+
+
+def test_a_calibration_recorded_before_references_existed_still_starts(
+    tmp_path,
+):
+    # Zero means "use the firmware fallback", so older files stay usable at
+    # the gain they were collected with rather than refusing to load.
+    calibration = tmp_path / "calibration.json"
+    calibration.write_text(json.dumps({
+        "factor": 3, "baseline_shift": 4, "threshold_floor": 158,
+        "verdict": "pass",
+    }))
+    reader = FakeReader()
+    node = EmgIntentBridge(reader=reader, parameter_overrides=[
+        Parameter("clock_anchor_window", value=1),
+        Parameter("calibration_file", value=str(calibration)),
+    ])
+    try:
+        assert node._handshake["reference_left"] == 0
+        assert node._handshake["reference_right"] == 0
+        assert "fallback" in node._handshake["description"]
+    finally:
+        node.destroy_node()

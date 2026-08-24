@@ -142,6 +142,10 @@ class ActivationState:
     last_result: int     # SET_RESULT_*
     threshold_floor: int
     applied_sequence: int
+    # Zero means the board has none for that direction and is using its
+    # compile-time fallback. Reported so a host can confirm what it sent.
+    reference_left: int = 0
+    reference_right: int = 0
 
     @property
     def from_host(self):
@@ -149,14 +153,14 @@ class ActivationState:
 
 
 def decode_activation_state(payload):
-    if len(payload) != 12:
+    if len(payload) != 20:
         raise ValueError(
-            f"ACTIVATION_STATE payload must be 12 bytes, got {len(payload)}"
+            f"ACTIVATION_STATE payload must be 20 bytes, got {len(payload)}"
         )
-    source, factor, shift, result, floor, applied, _ = struct.unpack(
-        "<BBBBiHH", payload
-    )
-    return ActivationState(source, factor, shift, result, floor, applied)
+    (source, factor, shift, result, floor, applied, _,
+     left, right) = struct.unpack("<BBBBiHHii", payload)
+    return ActivationState(source, factor, shift, result, floor, applied,
+                           left, right)
 
 
 def encode_packet(packet_type, sequence, timestamp_us, payload=b""):
@@ -172,7 +176,8 @@ def encode_packet(packet_type, sequence, timestamp_us, payload=b""):
 
 
 def encode_set_activation(sequence, *, mode, factor, baseline_shift,
-                          threshold_floor):
+                          threshold_floor, reference_left=0,
+                          reference_right=0):
     """Build the host-to-device calibration packet.
 
     Range checking here mirrors what the firmware will accept, so a host
@@ -187,8 +192,20 @@ def encode_set_activation(sequence, *, mode, factor, baseline_shift,
         raise ValueError("baseline_shift must be in 1..8")
     if not 1 <= threshold_floor < 3 * 32767:
         raise ValueError("threshold_floor must be in 1..3*32767-1")
-    payload = struct.pack("<BBBBi", mode, factor, baseline_shift, 0,
-                          threshold_floor)
+    for name, value in (("reference_left", reference_left),
+                        ("reference_right", reference_right)):
+        # Zero is legal and means "no measurement, use the fallback". A
+        # positive value at or below the threshold is not: the span
+        # activation maps is the one above the threshold, so it would be
+        # empty, and silently sending an unusable reference is worse than
+        # refusing it here.
+        if value != 0 and not threshold_floor < value < 3 * 32767:
+            raise ValueError(
+                f"{name} must be 0 or in {threshold_floor + 1}..3*32767-1, "
+                f"got {value}"
+            )
+    payload = struct.pack("<BBBBiii", mode, factor, baseline_shift, 0,
+                          threshold_floor, reference_left, reference_right)
     return encode_packet(TYPE_SET_ACTIVATION, sequence, 0, payload)
 
 

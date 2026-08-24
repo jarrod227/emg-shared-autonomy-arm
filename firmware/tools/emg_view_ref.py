@@ -28,13 +28,32 @@ def view_direction(decision):
     return DIRECTIONS.get(decision, 0)
 
 
-def view_activation(total_mav, threshold):
+def view_reference(direction, threshold, reference_left, reference_right):
+    """The calibrated ceiling for one direction, or the fallback.
+
+    Zero for direction 0: activation is a fraction of the span for the
+    gesture being commanded, so with no gesture there is nothing to take a
+    fraction of.
+    """
+    direction = int(direction)
+    if direction == 0:
+        return 0
+    measured = int(reference_left if direction < 0 else reference_right)
+    if measured > 0:
+        return measured
+    threshold = int(threshold)
+    if threshold <= 0:
+        return 0
+    return threshold * REFERENCE_NUM // REFERENCE_DEN
+
+
+def view_activation(total_mav, threshold, reference):
     """0..65535 mapping to 0.0..1.0, zero at or below the threshold."""
     total_mav = int(total_mav)
     threshold = int(threshold)
+    reference = int(reference)
     if threshold <= 0 or total_mav <= threshold:
         return 0
-    reference = threshold * REFERENCE_NUM // REFERENCE_DEN
     span = reference - threshold
     if span <= 0:
         return 0
@@ -44,6 +63,6 @@ def view_activation(total_mav, threshold):
     return (above * 65535) // span
 
 
-def activation_fraction(total_mav, threshold):
+def activation_fraction(total_mav, threshold, reference):
     """The same value as a float, for readability in analysis scripts."""
-    return view_activation(total_mav, threshold) / 65535.0
+    return view_activation(total_mav, threshold, reference) / 65535.0

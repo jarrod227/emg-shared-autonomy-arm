@@ -25,8 +25,8 @@
 
 #define EMG_INFO_PAYLOAD_SIZE 8u
 #define EMG_INTENT_PAYLOAD_SIZE 8u
-#define EMG_ACTIVATION_STATE_PAYLOAD_SIZE 12u
-#define EMG_SET_ACTIVATION_PAYLOAD_SIZE 8u
+#define EMG_ACTIVATION_STATE_PAYLOAD_SIZE 20u
+#define EMG_SET_ACTIVATION_PAYLOAD_SIZE 16u
 
 /* RAW payloads open with a wear bitmask and one reserved byte, so the samples
  * that follow stay 2-byte aligned. */
@@ -98,6 +98,13 @@ typedef struct {
     uint8_t last_result;    /* emg_set_result_t */
     int32_t threshold_floor;
     uint16_t applied_sequence; /* sequence of the last accepted SET */
+    /* Full-deflection levels for the two steering gestures, in the same
+     * units as threshold_floor. Reported, not just accepted, because the
+     * host confirms a calibration by watching this reflect what it sent;
+     * a field it cannot see back is a field it cannot verify was applied.
+     * Zero means none was supplied and the compile-time fallback is in use. */
+    int32_t reference_left;
+    int32_t reference_right;
 } emg_activation_state_t;
 
 /* One decoded host-to-device SET_ACTIVATION request. Range checking is the
@@ -108,6 +115,11 @@ typedef struct {
     uint8_t factor;
     uint8_t baseline_shift;
     int32_t threshold_floor;
+    /* Measured per donning; see emg_view.h for why they cannot be derived
+     * from threshold_floor. Zero for either one selects the compile-time
+     * fallback for that direction, which is what SET_MODE_DEFAULTS sends. */
+    int32_t reference_left;
+    int32_t reference_right;
     uint16_t sequence;      /* wire sequence, echoed in applied_sequence */
 } emg_set_activation_t;
 

@@ -195,6 +195,11 @@ class EmgIntentBridge(Node):
                 "factor": 3,
                 "baseline_shift": 4,
                 "threshold_floor": 110,
+                # Zero clears any measured reference, which is the point of
+                # restoring defaults: a previous wearer's ceiling left behind
+                # is worse than the firmware's own fallback.
+                "reference_left": 0,
+                "reference_right": 0,
                 "description": "no calibration file; restoring defaults",
             }
         path = pathlib.Path(calibration_file)
@@ -209,13 +214,23 @@ class EmgIntentBridge(Node):
                 f"{path} records a failed calibration; re-place the "
                 f"electrodes and calibrate again"
             )
+        # Absent for a calibration recorded before the reference was
+        # measured, and zero then means "use the firmware fallback" rather
+        # than being an error: older files stay usable, at the gain they
+        # were collected with.
+        references = summary.get("reference_levels", {})
+        left = int(round(references.get("NEXT_TARGET", 0)))
+        right = int(round(references.get("ULNAR", 0)))
         request = {
             "mode": SET_MODE_APPLY,
             "factor": int(summary["factor"]),
             "baseline_shift": int(summary["baseline_shift"]),
             "threshold_floor": int(summary["threshold_floor"]),
+            "reference_left": left,
+            "reference_right": right,
             "description": (
                 f"{path.name} (floor {summary['threshold_floor']}, "
+                f"references {left or 'fallback'}/{right or 'fallback'}, "
                 f"verdict {verdict})"
             ),
         }
@@ -226,6 +241,8 @@ class EmgIntentBridge(Node):
             factor=request["factor"],
             baseline_shift=request["baseline_shift"],
             threshold_floor=request["threshold_floor"],
+            reference_left=request["reference_left"],
+            reference_right=request["reference_right"],
         )
         return request
 
@@ -240,9 +257,16 @@ class EmgIntentBridge(Node):
         return (
             state.from_host
             and state.last_result == SET_RESULT_ACCEPTED
-            and (state.factor, state.baseline_shift, state.threshold_floor)
+            # The references are compared too. They are the gain of the
+            # proportional channel, so a board that accepted the threshold
+            # and not them would steer at the wrong scale while every log
+            # line said the handshake was confirmed.
+            and (state.factor, state.baseline_shift, state.threshold_floor,
+                 state.reference_left, state.reference_right)
             == (self._handshake["factor"], self._handshake["baseline_shift"],
-                self._handshake["threshold_floor"])
+                self._handshake["threshold_floor"],
+                self._handshake["reference_left"],
+                self._handshake["reference_right"])
         )
 
     def _drive_handshake(self):
@@ -254,6 +278,7 @@ class EmgIntentBridge(Node):
             self.get_logger().info(
                 f"activation handshake confirmed: K={state.factor} "
                 f"shift={state.baseline_shift} floor={state.threshold_floor} "
+                f"references={state.reference_left}/{state.reference_right} "
                 f"source={'host' if state.from_host else 'defaults'}"
             )
             return
@@ -270,6 +295,8 @@ class EmgIntentBridge(Node):
             factor=self._handshake["factor"],
             baseline_shift=self._handshake["baseline_shift"],
             threshold_floor=self._handshake["threshold_floor"],
+            reference_left=self._handshake["reference_left"],
+            reference_right=self._handshake["reference_right"],
         ))
         if sent:
             self._handshake_last_send_monotonic = now

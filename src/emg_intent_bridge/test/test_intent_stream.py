@@ -90,7 +90,7 @@ def test_activation_state_is_captured_without_entering_the_intent_stream():
     from emg_intent_bridge.protocol_loader import TYPE_ACTIVATION_STATE
 
     decoder = IntentStreamDecoder()
-    state_payload = struct.pack("<BBBBiHH", 1, 3, 4, 1, 158, 9, 0)
+    state_payload = struct.pack("<BBBBiHHii", 1, 3, 4, 1, 158, 9, 0, 231, 303)
     wire = (
         packet(TYPE_ACTIVATION_STATE, 0, 0, state_payload)
         + intent_packet(1, 400_000, CONFIRM)
@@ -108,4 +108,5 @@ def test_activation_state_is_captured_without_entering_the_intent_stream():
     assert (state.factor, state.baseline_shift) == (3, 4)
     assert state.threshold_floor == 158
     assert state.applied_sequence == 9
+    assert (state.reference_left, state.reference_right) == (231, 303)
     assert decoder.activation_state_count == 1

@@ -166,8 +166,16 @@ learn the outcome.
 | 4 | 4 | `threshold_floor` | `int32`, floor in effect |
 | 8 | 2 | `applied_sequence` | `sequence` of the last **accepted** SET; `0` before the first |
 | 10 | 2 | `reserved` | write `0` |
+| 12 | 4 | `reference_left` | `int32`, full-deflection level for the LEFT gesture; `0` = none, firmware fallback in use |
+| 16 | 4 | `reference_right` | `int32`, same for RIGHT |
 
-Payload length 12.
+Payload length 20.
+
+The references are reported, not merely accepted, because this is how a host
+confirms a calibration: a field it cannot read back is a field it cannot
+verify was applied. They are the gain of the proportional channel, so a board
+holding the right threshold and the wrong references would steer at the wrong
+scale with the handshake reporting success.
 
 This is a state report, not an acknowledgement. An ACK can be lost and
 leaves the sender guessing whether to repeat; a periodic state is idempotent
@@ -189,9 +197,22 @@ device-to-host direction.
 | 2 | 1 | `baseline_shift` | `1`–`8` |
 | 3 | 1 | `reserved` | write `0` |
 | 4 | 4 | `threshold_floor` | `int32`, `1` to `3*32767 - 1` |
+| 8 | 4 | `reference_left` | `int32`, `0` or `threshold_floor + 1` to `3*32767 - 1` |
+| 12 | 4 | `reference_right` | `int32`, same range |
 
-Payload length 8.
+Payload length 16.
 
+- The two references are the level that maps to full deflection for each
+  steering gesture, in the same units as `threshold_floor`. They cannot be
+  derived from it: measured 2026-08-23 in a single capture on a single
+  donning, wrist extension came to 4.19x the session threshold and ulnar
+  deviation to 5.51x. `0` means "not measured", and the firmware falls back
+  to its compile-time ratio for that direction only.
+- A non-zero reference at or below `threshold_floor` is rejected. The span
+  activation maps is the one above the threshold, so such a reference is an
+  empty span; producing no deflection silently is worse than refusing.
+  A rejected reference rejects the whole request, so a new threshold is never
+  left beside an old reference — a pair that was never measured together.
 - `mode = 0` exists so a host can *deliberately un-calibrate* the board — a
   stale calibration from a previous wearer or donning is worse than none.
   The bridge sends one of the two modes on every startup; "send nothing" is
@@ -243,9 +264,38 @@ validate a candidate packet.
 
 ## Amendment history
 
-Version 1 now has real INFO/RAW recordings. Any incompatible change to an
-existing packet layout or field meaning requires a version bump; adding code
-that emits the already-specified INTENT packet does not.
+Version 1 now has real INFO/RAW recordings. A change that could be *silently
+misinterpreted* -- an existing field changing meaning, or bytes at a fixed
+offset coming to mean something else -- requires a version bump. Adding code
+that emits the already-specified INTENT packet does not, and neither does
+appending fields to a packet whose length both ends check strictly: old and
+new cannot interoperate there, but they cannot misread each other either, and
+the length check reports the mismatch as loudly as a version check would.
+
+That distinction was drawn on 2026-08-23 while making exactly such a change,
+which is the wrong time to be deciding it, so the reasoning is recorded rather
+than left implied. The version byte is checked on *every* packet before its
+type is looked at, so a bump makes every existing recording unreadable --
+including the raw EMG datasets this project retrains models from, whose
+INFO/RAW/INTENT bytes the change did not touch. Paying that to describe an
+incompatibility that two length checks already report is the worse trade. The
+rule protects against silence, not against incompatibility.
+
+- **2026-08-23** — `ACTIVATION_STATE` grew to 20 bytes and `SET_ACTIVATION`
+  to 16, both by appending `reference_left` and `reference_right`. No version
+  bump, per the rule above: both ends reject a wrong payload length, so an old
+  host meeting a new board fails its handshake visibly rather than steering at
+  a scale it cannot see. `INFO`, `RAW` and `INTENT` are byte-identical, so
+  existing recordings replay unchanged.
+
+  The fields exist because activation's reference level cannot be derived from
+  the activation threshold, which is what the firmware did with a compile-time
+  ratio of 3. Measured in one capture on one donning: wrist extension 4.19x
+  the session threshold, ulnar deviation 5.51x. Under the constant, 58% of one
+  session's LEFT commands sat pinned at full deflection carrying no
+  proportional information — and because the constant is a multiple of the
+  threshold, *better* electrode contact lowered the threshold and made the
+  saturation worse.
 
 - **2026-08-15** — added `ACTIVATION_STATE` (`0x03`) and the first
   host-to-device packet, `SET_ACTIVATION` (`0x80`), for per-donning

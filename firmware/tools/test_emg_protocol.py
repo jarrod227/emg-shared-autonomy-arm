@@ -234,7 +234,7 @@ def test_raw_decoder_rejects_a_payload_too_short_for_its_header():
 
 def test_activation_state_decoder():
     state = decode_activation_state(
-        struct.pack("<BBBBiHH", 1, 3, 4, 1, 110, 0x0102, 0)
+        struct.pack("<BBBBiHHii", 1, 3, 4, 1, 110, 0x0102, 0, 231, 303)
     )
 
     assert state.from_host
@@ -242,8 +242,20 @@ def test_activation_state_decoder():
     assert state.last_result == SET_RESULT_ACCEPTED
     assert state.threshold_floor == 110
     assert state.applied_sequence == 0x0102
+    # Reported, not merely accepted: a host confirms a calibration by
+    # watching this reflect what it sent, so a field it cannot read back is
+    # a field it cannot verify was applied.
+    assert (state.reference_left, state.reference_right) == (231, 303)
     with pytest.raises(ValueError):
-        decode_activation_state(b"\x00" * 11)
+        decode_activation_state(b"\x00" * 19)
+
+
+def test_a_board_with_no_measured_reference_reports_zero():
+    state = decode_activation_state(
+        struct.pack("<BBBBiHHii", 1, 3, 4, 1, 110, 0x0102, 0, 0, 0)
+    )
+
+    assert (state.reference_left, state.reference_right) == (0, 0)
 
 
 def test_own_encoder_round_trips_through_own_parser():
@@ -258,10 +270,37 @@ def test_own_encoder_round_trips_through_own_parser():
     assert packets[0].sequence == 5
     # timestamp is 0 by contract: the host does not own the device clock.
     assert packets[0].timestamp_us == 0
-    mode, factor, shift, _reserved, floor = struct.unpack(
-        "<BBBBi", packets[0].payload
+    mode, factor, shift, _reserved, floor, left, right = struct.unpack(
+        "<BBBBiii", packets[0].payload
     )
     assert (mode, factor, shift, floor) == (1, 3, 4, 110)
+    # Omitted means "no measurement, use the fallback", not "zero span".
+    assert (left, right) == (0, 0)
+
+
+def test_measured_references_travel_on_the_wire():
+    parser = PacketParser()
+    wire = encode_set_activation(5, mode=SET_MODE_APPLY, factor=3,
+                                 baseline_shift=4, threshold_floor=55,
+                                 reference_left=231, reference_right=303)
+
+    payload = parser.feed(wire)[0].payload
+
+    assert struct.unpack("<BBBBiii", payload)[5:] == (231, 303)
+
+
+def test_a_reference_inside_the_threshold_is_refused_at_the_sender():
+    # The span activation maps is the one above the threshold, so a
+    # reference at or below it is an empty span. Sending it and letting the
+    # board silently produce no deflection is the worse failure.
+    with pytest.raises(ValueError, match="reference_left"):
+        encode_set_activation(5, mode=SET_MODE_APPLY, factor=3,
+                              baseline_shift=4, threshold_floor=55,
+                              reference_left=55, reference_right=303)
+    with pytest.raises(ValueError, match="reference_right"):
+        encode_set_activation(5, mode=SET_MODE_APPLY, factor=3,
+                              baseline_shift=4, threshold_floor=55,
+                              reference_left=231, reference_right=20)
 
 
 def test_set_encoder_rejects_what_the_firmware_would():
@@ -325,6 +364,7 @@ def test_decodes_the_fixture_produced_by_the_c_encoder():
     assert (state.factor, state.baseline_shift) == (3, 4)
     assert state.threshold_floor == 110
     assert state.applied_sequence == 0x0102
+    assert (state.reference_left, state.reference_right) == (231, 303)
 
     # The C-encoded SET_ACTIVATION must be byte-identical to this module's
     # own encoding of the same request: the Python sender and the firmware
@@ -332,7 +372,9 @@ def test_decodes_the_fixture_produced_by_the_c_encoder():
     # where a disagreement would surface.
     python_wire = encode_set_activation(5, mode=SET_MODE_APPLY, factor=3,
                                         baseline_shift=4,
-                                        threshold_floor=110)
+                                        threshold_floor=110,
+                                        reference_left=231,
+                                        reference_right=303)
     assert python_wire in fixture_bytes
     assert packets[7].sequence == 5
 

@@ -12,10 +12,25 @@
  * where the muscle was not working hard enough to mean anything, and that is
  * exactly the window a view command must not act on either.
  *
- * The reference level is the open problem. Activation is a fraction of the
- * span between the threshold and whatever the wearer can actually produce for
- * the driving gesture, and that ceiling has to be measured per donning and per
- * direction.
+ * The reference level was the open problem and is now a measured input.
+ * Activation is a fraction of the span between the threshold and whatever the
+ * wearer can actually produce for the driving gesture, and that ceiling is
+ * measured per donning and per direction by emg_calibrate.py and arrives over
+ * SET_ACTIVATION.
+ *
+ * It is per direction because one number provably cannot serve both. Measured
+ * 2026-08-23 in a single capture on a single donning: wrist extension came to
+ * 4.19x the session threshold and ulnar deviation to 5.51x. A constant cannot
+ * span that, and the constant that used to try was 3, below both -- which
+ * saturated 58% of one session's LEFT commands at full deflection, where they
+ * carry no proportional information at all.
+ *
+ * Activation is zero when direction is zero, and that is a definition rather
+ * than a fallback: activation means "this fraction of the span for the
+ * gesture being commanded", so with no gesture there is no span to take a
+ * fraction of. Publishing a number derived from whichever reference happened
+ * to be picked would make the units depend on an arbitrary choice, and a
+ * consumer already ignores activation when direction is HOLD.
  *
  * It must be an *instantaneous* ceiling, because that is what activation is
  * computed from. The first version of this constant was picked against
@@ -48,7 +63,9 @@
 
 #include <stdint.h>
 
-/* Interim, see above. reference = threshold * NUM / DEN. */
+/* Fallback for an uncalibrated board: reference = threshold * NUM / DEN.
+ * Known to be too low on every donning measured so far, so it is a way to
+ * keep steering roughly rather than a default worth shipping into. */
 #define EMG_VIEW_REFERENCE_NUM 3
 #define EMG_VIEW_REFERENCE_DEN 1
 
@@ -67,6 +84,15 @@ int8_t emg_view_direction(emg_command_t decision);
  * Saturates at the reference instead of extrapolating, so a wearer who pushes
  * past their calibrated ceiling gets full deflection rather than a wrapped
  * value. */
-uint16_t emg_view_activation(int32_t total_mav, int32_t threshold);
+/* The calibrated ceiling for one direction, or the compile-time fallback
+ * when that direction has none. Separated from emg_view_activation so the
+ * fallback rule has one home and can be tested without a whole packet. */
+int32_t emg_view_reference(int8_t direction, int32_t threshold,
+                           int32_t reference_left, int32_t reference_right);
+
+/* Zero when direction is 0, when the reference does not exceed the
+ * threshold (an empty span), or when the window is below the threshold. */
+uint16_t emg_view_activation(int32_t total_mav, int32_t threshold,
+                             int32_t reference);
 
 #endif /* EMG_VIEW_H */

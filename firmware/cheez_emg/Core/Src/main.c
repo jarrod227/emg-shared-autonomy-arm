@@ -105,6 +105,13 @@ static emg_feature_window_t emg_windows[EMG_CHANNELS];
 static uint32_t emg_saturations[EMG_CHANNELS];
 static emg_gate_t emg_gate;
 static emg_activation_t emg_activation;
+/* Full-deflection levels for the two steering gestures. Held here rather
+ * than inside emg_activation_t: that struct owns the threshold rule -- EMA
+ * baseline, factor, floor -- and these belong to the view channel, which is a
+ * different question about the same number. Zero means none was supplied and
+ * emg_view_reference falls back. */
+static int32_t emg_view_reference_left;
+static int32_t emg_view_reference_right;
 static uint16_t emg_intent_sequence;
 
 /* Host-to-device receive path. Not static: the USB CDC receive callback in
@@ -214,6 +221,8 @@ static void emg_send_activation_state(void)
   state.last_result = emg_activation_last_result;
   state.threshold_floor = emg_activation.threshold_floor;
   state.applied_sequence = emg_activation_applied_sequence;
+  state.reference_left = emg_view_reference_left;
+  state.reference_right = emg_view_reference_right;
   length = emg_encode_activation_state(
       buffer, EMG_TX_BUFFER_SIZE, emg_state_sequence,
       emg_frames_processed * EMG_FRAME_PERIOD_US, &state);
@@ -229,6 +238,16 @@ static void emg_send_activation_state(void)
  * sender never waits a full periodic-state interval to learn it. A rejected
  * request changes nothing: emg_activation_reconfigure validates before it
  * touches state, so there is no partial apply to undo. */
+/* Zero means "not measured, use the fallback". Anything positive has to sit
+ * above the threshold, because the span activation maps is the one above it
+ * and a reference inside it is an empty span. The host encoder refuses these
+ * too; the board checks anyway, because a board that trusts its host has no
+ * way to report the one thing it is uniquely positioned to notice. */
+static bool emg_view_reference_valid(int32_t reference, int32_t threshold)
+{
+  return reference == 0 || reference > threshold;
+}
+
 static void emg_apply_set_activation(const emg_set_activation_t *request)
 {
   bool accepted = false;
@@ -244,16 +263,28 @@ static void emg_apply_set_activation(const emg_set_activation_t *request)
     if (accepted)
     {
       emg_activation_source = (uint8_t)EMG_ACTIVATION_SOURCE_DEFAULTS;
+      emg_view_reference_left = 0;
+      emg_view_reference_right = 0;
     }
   }
   else if (request->mode == (uint8_t)EMG_SET_MODE_APPLY)
   {
-    accepted = emg_activation_reconfigure(&emg_activation, request->factor,
-                                          request->baseline_shift,
-                                          request->threshold_floor);
+    /* Checked before reconfiguring, so a bad reference rejects the whole
+     * request rather than leaving a new threshold beside an old reference --
+     * a pair that was never measured together and describes no donning. */
+    accepted =
+        emg_view_reference_valid(request->reference_left,
+                                 request->threshold_floor)
+        && emg_view_reference_valid(request->reference_right,
+                                    request->threshold_floor)
+        && emg_activation_reconfigure(&emg_activation, request->factor,
+                                      request->baseline_shift,
+                                      request->threshold_floor);
     if (accepted)
     {
       emg_activation_source = (uint8_t)EMG_ACTIVATION_SOURCE_HOST;
+      emg_view_reference_left = request->reference_left;
+      emg_view_reference_right = request->reference_right;
     }
   }
 
@@ -386,7 +417,11 @@ static void emg_send_intent(emg_command_t command,
                                   ? relative
                                   : emg_activation.threshold_floor;
     intent.direction = emg_view_direction(decision);
-    intent.activation = emg_view_activation(total_mav, threshold);
+    intent.activation = emg_view_activation(
+        total_mav, threshold,
+        emg_view_reference(intent.direction, threshold,
+                           emg_activation.reference_left,
+                           emg_activation.reference_right));
   }
 
   const size_t length = emg_encode_intent(

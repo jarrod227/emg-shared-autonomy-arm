@@ -154,7 +154,7 @@ static void test_activation_state_layout(void)
 {
     uint8_t out[EMG_MAX_PACKET];
     const emg_activation_state_t state = {
-        1u, 3u, 4u, 1u, 110, 0x0102u,
+        1u, 3u, 4u, 1u, 110, 0x0102u, 231, 303,
     };
 
     CHECK(emg_encode_activation_state(out, sizeof(out), 11u, 7000u, &state)
@@ -168,6 +168,10 @@ static void test_activation_state_layout(void)
     CHECK(read_u32(&out[16]) == 110u);       /* threshold_floor */
     CHECK(read_u16(&out[20]) == 0x0102u);    /* applied_sequence */
     CHECK(out[22] == 0u && out[23] == 0u);   /* reserved */
+    /* Reported, not merely accepted: the host confirms a calibration by
+     * watching this reflect what it sent. */
+    CHECK(read_u32(&out[24]) == 231u);       /* reference_left */
+    CHECK(read_u32(&out[28]) == 303u);       /* reference_right */
     CHECK(emg_encode_activation_state(out, sizeof(out), 0u, 0u, NULL) == 0u);
 }
 
@@ -227,13 +231,16 @@ static int emit_fixture(const char *path)
         /* The two 2026-08-15 additions, so the Python side can check its
          * decoder against these bytes and its own SET encoder against the
          * exact bytes this one produced. */
-        const emg_activation_state_t state = {1u, 3u, 4u, 1u, 110, 0x0102u};
+        const emg_activation_state_t state = {1u, 3u, 4u, 1u, 110, 0x0102u,
+                                              231, 303};
         emg_set_activation_t request = {0};
 
         request.mode = 1u;
         request.factor = 3u;
         request.baseline_shift = 4u;
         request.threshold_floor = 110;
+        request.reference_left = 231;
+        request.reference_right = 303;
         fwrite(out, 1,
                emg_encode_activation_state(out, sizeof(out), 0u, 6000u,
                                            &state), file);

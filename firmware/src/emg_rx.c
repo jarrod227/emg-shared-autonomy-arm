@@ -147,6 +147,10 @@ bool emg_rx_poll(emg_rx_t *rx, emg_set_activation_t *request)
         request->baseline_shift = rx->staging[EMG_HEADER_SIZE + 2u];
         request->threshold_floor =
             (int32_t)get_u32(&rx->staging[EMG_HEADER_SIZE + 4u]);
+        request->reference_left =
+            (int32_t)get_u32(&rx->staging[EMG_HEADER_SIZE + 8u]);
+        request->reference_right =
+            (int32_t)get_u32(&rx->staging[EMG_HEADER_SIZE + 12u]);
         discard_staged(rx, total);
         rx->accepted++;
         return true;
