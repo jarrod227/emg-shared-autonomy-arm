@@ -1194,8 +1194,92 @@ The rest is a use condition: record on battery. The effect is large enough that
 nothing else about the session matters if it is ignored -- threshold 78 against
 216, with the gestures unchanged in between.
 
+## Contact decays by the hour, and the calibration only describes the moment it was taken (2026-08-23)
+
+Three closed-loop runs on one evening, all with the same firmware, the same
+model, and the same controller, produced control quality that varied by a
+factor of five. The question they were run to answer was whether the direction
+classifier falls apart at high contraction -- co-contraction recruiting the
+antagonist until `ULNAR` and `NEXT_TARGET` stop being separable across three
+channels -- or whether it was the electrodes. The answer is the electrodes,
+and the more useful finding is how quickly it happened.
+
+The measure is direction reversals in the 20 Hz command stream. A reversal is
+expensive under rate control: it withdraws the goal and the axis decelerates
+through zero before it can move the other way, so the arm stalls for a few
+hundred milliseconds every time one happens.
+
+| effort (activation) | 16:52, donned 10:14 | 17:11, same donning | 22:04, fresh donning |
+| --- | --- | --- | --- |
+| 0.05-0.30 | 0.69/s | 0.83/s | 1.32/s |
+| 0.30-0.60 | 0.18/s | 1.62/s | 0.90/s |
+| 0.60-0.80 | 0.31/s | 3.26/s | 2.45/s (49 samples) |
+| 0.80-1.01 | 0.21/s (97) | **2.70/s (252)** | **0.84/s (382)** |
+| overall | 8 in 31 s | 60 in 41 s | 21 in 35 s |
+
+The top row is the one that decides it. The bad run reversed 2.70 times a
+second on 252 samples above 0.8 activation; the fresh donning reversed 0.84
+times a second on 382 -- more exposure to high effort, a third of the
+instability. The monotone rise with effort that the middle column shows is
+absent from both of the others. High contraction is not what breaks direction.
+
+What breaks it is contact, and the two runs that bracket the failure were
+nineteen minutes apart on the same electrodes, working from a calibration
+measured seven hours earlier. That calibration passed at separation 5.23. By
+the time the electrodes were replaced that evening, a fresh application
+measured separation 1.12 and was refused: rest had gone 18 -> 26, the gestures
+had not moved (136/136/146 -> 149/123/140), and `preparation` -- small
+non-command wrist shifts -- had gone 26 -> 110. Signal was being produced by
+movement rather than by effort, which is electrode motion, not muscle. Re-
+seating the band and re-running gave separation 5.6, `preparation` back to 20,
+and rest to 15.
+
+### What it changes
+
+The separation ratio describes the donning at the instant it was measured and
+nothing after. Treating a morning calibration as a property of the day is what
+cost two minutes of gestures that could not be interpreted.
+
+The rule that follows is cheap: after hours have passed since donning, run
+`emg_calibrate.py --dry-run` and read the separation before trusting a session.
+It takes half a minute and it is the difference between finding out now and
+finding out from the recording.
+
+### Two numbers from these runs that are not comparable across sessions
+
+Reported so a later reader does not draw the conclusion they invite.
+
+The correlation between effort and speed was 0.893 in the first run and 0.710
+in the third, which reads as a regression and is not one. The third run was
+deliberately weighted toward high effort to get sample count into the top bin,
+so 55% of its samples sit in one activation band. Range restriction lowers the
+correlation on its own. The per-band ratios are the honest comparison, and
+they improved where it mattered: 0.66-0.67x of ideal at high effort in the bad
+run against 0.79-0.82x in the fresh one.
+
+Activation itself is not comparable either. It is normalized against a
+compile-time multiple of the session threshold, and the threshold moved 59 ->
+47 between these donnings, so the same muscular effort reads as a higher
+activation on the cleaner donning. That inflates the denominator of every
+"fraction of ideal speed" figure computed from it. The reference level
+belonging in the calibration downlink rather than in a compile-time constant
+is already an open item; this is the first measurement that shows what it
+costs.
+
 ## Lessons
 
+- **Contact quality decays on a timescale shorter than a working day, and
+  every calibrated constant decays with it.** A donning that separated 5.23
+  in the morning could not hold a direction seven hours later, and the
+  session's own numbers -- rest, gesture plateaus -- barely moved while
+  `preparation` quadrupled. Signal produced by movement rather than by
+  effort is electrode motion, and it is invisible to any check that only
+  looks at rest and gesture amplitude.
+- **A statistic computed over a deliberately skewed sample is not
+  comparable to one computed over a spread.** Asking the wearer to spend a
+  run at high effort put 55% of samples in one band and dropped the
+  effort/speed correlation from 0.893 to 0.710 with no change in the
+  system. The protocol change, not the system, moved the number.
 - **Energy share is not amplitude share.** Four fifths of the charger's
   contribution sat on a harmonic comb and notching the comb changed the
   resting MAV by one count, because MAV is a time-domain mean carried by what
