@@ -420,8 +420,8 @@ static void emg_send_intent(emg_command_t command,
     intent.activation = emg_view_activation(
         total_mav, threshold,
         emg_view_reference(intent.direction, threshold,
-                           emg_activation.reference_left,
-                           emg_activation.reference_right));
+                           emg_view_reference_left,
+                           emg_view_reference_right));
   }
 
   const size_t length = emg_encode_intent(
