@@ -97,11 +97,48 @@ PREPARATION_TRIALS = 3
 GESTURE_TRIALS = 3
 GESTURES = ("NEXT_TARGET", "CONFIRM", "ABORT")
 
+# The two gestures that steer the proportional view axis. NEXT_TARGET is in
+# both lists: it is a gate command and it is also LEFT. ULNAR is here only --
+# it is a classifier class that never reaches the event gate, so it must not
+# be allowed to set T_session, and its gate reachability would mean nothing.
+REFERENCE_GESTURES = ("NEXT_TARGET", "ULNAR")
+CAPTURED_GESTURES = GESTURES + tuple(
+    name for name in REFERENCE_GESTURES if name not in GESTURES
+)
+
 GESTURE_PROMPTS = {
     "NEXT_TARGET": "lift your wrist upward and hold",
     "CONFIRM": "make a fist and hold",
     "ABORT": "press your wrist downward and hold",
+    "ULNAR": "tilt your wrist toward the little-finger side and hold",
 }
+
+# The level that maps to full deflection, per direction gesture.
+#
+# It cannot be derived from the threshold, which is what the firmware does
+# today with a compile-time reference = 3 x threshold. Measured 2026-08-23
+# across two donnings: the cleaner one calibrated to a *lower* threshold, 47
+# against 59, which lowered the derived reference from 177 to 141 while the
+# wearer's NEXT_TARGET amplitude did not move (146, then 152). The result is
+# perverse -- better electrode contact produced worse control -- and it is not
+# marginal: 58% of that session's LEFT commands sat pinned at full deflection,
+# carrying no proportional information at all.
+#
+# Two references rather than one, because the two gestures are not equally
+# strong and the asymmetry is systematic. Wrist extension ran 1.35x and 1.24x
+# above ulnar deviation on two separate donnings, same direction both times. A
+# single shared reference has to sacrifice one side: set to the stronger, the
+# weaker cannot reach full speed; set to the weaker, the stronger saturates
+# over its top quarter. Saturation costs resolution, which is the entire point
+# of proportional control, so neither compromise is acceptable when the fix is
+# one more field in a payload that has to grow anyway.
+#
+# Instantaneous, not sustained. activation is computed per window from that
+# window's total MAV, so the reference has to be a statistic of the same
+# thing. A 17-window sustained level is a run *minimum*, far below what the
+# window-by-window signal reaches, and setting the reference from one was
+# tried: the board saturated through most of every hold.
+REFERENCE_PERCENTILE = 90.0
 
 # Three tiers rather than one threshold: "recalibrate" and "re-place the
 # electrodes" are different instructions and conflating them wastes the
@@ -216,6 +253,43 @@ def sustained_level(totals, windows=SUSTAIN_WINDOWS):
     ))
 
 
+def instantaneous_level(totals, percentile=REFERENCE_PERCENTILE):
+    """The level this trial's windows actually reach, as a high percentile.
+
+    The maximum would be one window of a three-second hold and is hostage to
+    a single artifact; a percentile describes the ceiling the wearer held.
+    This is the statistic the frozen 3 x threshold reference was originally
+    fitted against, so measuring it directly replaces a constant with the
+    quantity it was standing in for.
+    """
+    totals = np.asarray(totals)
+    if len(totals) == 0:
+        raise CalibrationError("trial has no windows")
+    return float(np.percentile(totals, percentile))
+
+
+def reference_levels(gesture_totals):
+    """Full-deflection level per direction gesture, or None if not captured.
+
+    The median across trials, where the threshold takes each gesture's
+    weakest repetition. The two want opposite statistics for the same reason:
+    a threshold has to pass even the feeblest attempt, while a reference has
+    to sit where ordinary effort lands. Taking the minimum here would put a
+    typical contraction above full deflection and leave the wearer
+    permanently saturated -- which is the bug being fixed, arrived at by a
+    different route.
+    """
+    levels = {}
+    for name in REFERENCE_GESTURES:
+        trials = gesture_totals.get(name)
+        if not trials:
+            continue
+        levels[name] = float(np.median(
+            [instantaneous_level(trial) for trial in trials]
+        ))
+    return levels
+
+
 def gesture_sustain_windows(name):
     """How long this gesture must hold above the threshold to fire an event."""
     return GESTURE_SUSTAIN_WINDOWS.get(name, SUSTAIN_WINDOWS)
@@ -300,10 +374,18 @@ def summarize(rest_totals, preparation_trials, gesture_totals):
     for name, trials in gesture_totals.items():
         if not trials:
             raise CalibrationError(f"gesture {name} has no trials")
+        # Direction-only classes are captured for their reference level and
+        # nothing else. ULNAR never reaches the event gate, so letting it
+        # into the threshold would let a class the gate cannot act on decide
+        # what the gate suppresses.
+        if name not in GESTURES:
+            continue
         windows = gesture_sustain_windows(name)
         plateaus[name] = min(
             sustained_level(trial, windows) for trial in trials
         )
+    if not plateaus:
+        raise CalibrationError("no gate gesture was captured")
     weakest_name = min(plateaus, key=plateaus.get)
     weakest = plateaus[weakest_name]
 
@@ -331,8 +413,11 @@ def summarize(rest_totals, preparation_trials, gesture_totals):
     else:
         verdict = "fail"
     reachability = gate_reachability(
-        preparation_trials, gesture_totals, threshold
+        preparation_trials,
+        {n: t for n, t in gesture_totals.items() if n in GESTURES},
+        threshold,
     )
+    references = reference_levels(gesture_totals)
 
     summary = {
         "rest_baseline": round(rest_baseline, 1),
@@ -349,7 +434,58 @@ def summarize(rest_totals, preparation_trials, gesture_totals):
         "factor": FROZEN_FACTOR,
         "baseline_shift": FROZEN_BASELINE_SHIFT,
         "sustain_windows": SUSTAIN_WINDOWS,
+        "reference_levels": {
+            name: round(value, 1) for name, value in sorted(references.items())
+        },
+        "reference_percentile": REFERENCE_PERCENTILE,
+        # Recorded per donning so the question the frozen constant answered
+        # badly -- is reference / threshold stable? -- can be settled from
+        # data instead of assumed. It was 3 in the firmware; measured values
+        # so far disagree with each other by more than that constant's own
+        # margin.
+        "reference_over_threshold": {
+            name: round(value / threshold, 2)
+            for name, value in sorted(references.items())
+        } if threshold > 0 else {},
     }
+    unusable = sorted(
+        name for name, value in references.items() if value <= threshold
+    )
+    if unusable:
+        summary["reference_warning"] = (
+            f"reference level for {', '.join(unusable)} is at or below "
+            f"T_session ({threshold}); proportional control maps the span "
+            "above the threshold, so that span is empty. Re-run the trials "
+            "for that gesture rather than trusting the number."
+        )
+    missing = [n for n in REFERENCE_GESTURES if n not in references]
+    if missing:
+        summary["reference_warning"] = (
+            f"no reference measured for {', '.join(missing)}; the firmware "
+            "will fall back to its compile-time reference for that direction"
+        )
+    # Stillness cannot be noisier than deliberate small movement. When it
+    # measures that way the rest capture contains something that is not rest,
+    # and every number downstream of it is describing the wrong thing --
+    # including the K x baseline rule the firmware will actually judge with.
+    #
+    # Caught after the fact on 2026-08-23: a rest trial with a gesture in it
+    # reported baseline 80.5 against a preparation bound of 48.0, and the
+    # inconsistency sat in the output unremarked while the cause was looked
+    # for in the hardware. The comparison is free and the two numbers were
+    # already side by side.
+    #
+    # A warning rather than a verdict, because the separation ratio it would
+    # override is measuring electrode placement, which a botched rest trial
+    # says nothing about.
+    if rest_baseline > preparation_upper:
+        summary["rest_contamination_warning"] = (
+            f"rest baseline ({rest_baseline:.0f}) is above the preparation "
+            f"bound ({preparation_upper:.0f}); stillness cannot be louder "
+            "than deliberate movement, so the rest capture probably contains "
+            "movement. Re-run rather than trusting the threshold."
+        )
+
     # The firmware judges on max(K x baseline, floor). If the relative rule
     # already sits above the calibrated floor, the calibration is inert and
     # says nothing about what the board will actually do - worth stating
@@ -497,7 +633,7 @@ def run_capture(connection):
             PREPARATION_SECONDS,
         ))
     gestures = {}
-    for name in GESTURES:
+    for name in CAPTURED_GESTURES:
         trials = []
         for trial in range(1, GESTURE_TRIALS + 1):
             trials.append(capture.prompt(
@@ -520,6 +656,10 @@ def print_summary(summary):
     print(f"  weakest gesture         {summary['weakest_gesture']} "
           f"({summary['weakest_gesture_plateau']})")
     print(f"  separation ratio        {summary['separation_ratio']}")
+    for name, value in summary["reference_levels"].items():
+        ratio = summary["reference_over_threshold"].get(name)
+        suffix = f"  ({ratio}x T_session)" if ratio is not None else ""
+        print(f"  reference {name:<13} {value}{suffix}")
     print(f"  T_session               {summary['threshold_floor']}")
     print(f"  K (fixed)               {summary['factor']}")
     reach = summary["gate_reachability"]
@@ -532,8 +672,12 @@ def print_summary(summary):
               f"(needs {item['windows_needed']}) -> "
               f"{item['trials_firing']}/{item['trials']} fire")
     print("=" * 58)
+    if "rest_contamination_warning" in summary:
+        print(f"  WARNING: {summary['rest_contamination_warning']}")
     if "inert_floor_warning" in summary:
         print(f"  WARNING: {summary['inert_floor_warning']}")
+    if "reference_warning" in summary:
+        print(f"  WARNING: {summary['reference_warning']}")
     print(f"  {verdict_message(summary)}")
 
 

@@ -13,11 +13,16 @@ import pytest
 
 from emg_activation_ref import FROZEN_BASELINE_SHIFT, FROZEN_FACTOR
 from emg_calibrate import (
+    CAPTURED_GESTURES,
+    GESTURES,
+    REFERENCE_GESTURES,
     SEPARATION_MARGINAL,
     SEPARATION_PASS,
     SUSTAIN_WINDOWS,
     ABORT_SUSTAIN_WINDOWS,
     CalibrationError,
+    instantaneous_level,
+    reference_levels,
     confirm_applied,
     gate_reachability,
     gesture_sustain_windows,
@@ -355,3 +360,139 @@ def test_longest_run_restarts_after_a_single_dip():
     # hold-off and the stable run together.
     dips = np.array([200] * 10 + [50] + [200] * 8, dtype=np.int64)
     assert longest_run_above(dips, 100) == 10
+
+
+def test_every_reference_gesture_is_actually_captured():
+    # The list that drives the prompts and the list the reference is read
+    # from have to agree, or a reference silently goes missing.
+    for name in REFERENCE_GESTURES:
+        assert name in CAPTURED_GESTURES
+
+
+def test_a_direction_only_class_cannot_set_the_threshold():
+    """ULNAR never reaches the event gate, so it must not decide T_session.
+
+    Made concrete: a weak ulnar deviation, weaker than every gate gesture,
+    would otherwise become the "weakest gesture" and drag the threshold down
+    to suppress a class the gate cannot act on anyway.
+    """
+    measured = donning(35, 79, {"NEXT_TARGET": 400, "CONFIRM": 736,
+                                "ABORT": 318})
+    measured["gestures"]["ULNAR"] = [constant(120)]
+
+    summary = run(measured)
+
+    assert summary["weakest_gesture"] == "ABORT"
+    assert "ULNAR" not in summary["gesture_plateaus"]
+    assert "ULNAR" not in summary["gate_reachability"]["gestures"]
+    assert summary["threshold_floor"] == run(CLEAN)["threshold_floor"]
+    # But it is still measured, which is the whole reason it was captured.
+    assert summary["reference_levels"]["ULNAR"] == pytest.approx(120.0)
+
+
+def test_the_reference_is_instantaneous_where_the_threshold_is_sustained():
+    """The two statistics answer different questions about the same trial.
+
+    A late hold: mostly rest, then a genuine contraction. The threshold takes
+    the level held across the gate's whole run, which a late start pulls
+    down; activation is computed per window, so its reference has to be what
+    the windows actually reach. Setting a reference from a sustained level
+    was tried, and the board saturated through most of every hold.
+    """
+    # A real hold is not flat. The sustained level is a run *minimum*, so a
+    # hold that dips reports its dips; the windows themselves reach much
+    # higher, and activation is computed from those windows.
+    hold = np.array([700, 420, 680, 430, 660, 410, 690, 440, 670, 400,
+                     700, 430, 680, 420, 660, 440, 690, 410, 670, 430,
+                     700, 420, 680, 430, 660] * 2, dtype=np.int64)
+    trial = np.concatenate([np.full(20, 25, dtype=np.int64), hold])
+
+    sustained = sustained_level(trial)
+    instantaneous = instantaneous_level(trial)
+
+    assert sustained == pytest.approx(410.0), "not the run minimum"
+    assert instantaneous > 1.6 * sustained, (
+        f"instantaneous {instantaneous} should sit near the top of the hold, "
+        f"not at its floor {sustained}"
+    )
+
+
+def test_the_reference_takes_the_median_trial_not_the_weakest():
+    """A reference wants a typical effort; a threshold wants the feeblest.
+
+    Taking the minimum here would put ordinary effort above full deflection
+    and leave the wearer permanently saturated, which is the defect being
+    fixed, reached by another route.
+    """
+    levels = reference_levels({
+        "ULNAR": [constant(100), constant(300), constant(200)],
+    })
+
+    assert levels["ULNAR"] == pytest.approx(200.0)
+
+
+def test_a_reference_below_the_threshold_warns_without_failing_the_donning():
+    """The span proportional control maps is the one above the threshold.
+
+    A reference inside it means an empty span, which is a misjudged trial
+    rather than anything about electrode placement -- so it must not touch a
+    separation verdict that says the placement is fine.
+    """
+    measured = donning(35, 79, {"NEXT_TARGET": 400, "CONFIRM": 736,
+                                "ABORT": 318})
+    measured["gestures"]["ULNAR"] = [constant(10)]
+
+    summary = run(measured)
+
+    assert summary["verdict"] == "pass"
+    assert "ULNAR" in summary["reference_warning"]
+    assert "T_session" in summary["reference_warning"]
+
+
+def test_a_missing_direction_reference_says_the_firmware_will_fall_back():
+    summary = run(CLEAN)
+
+    assert "ULNAR" not in summary["reference_levels"]
+    assert "ULNAR" in summary["reference_warning"]
+    assert "compile-time" in summary["reference_warning"]
+
+
+def test_the_reference_ratio_is_recorded_per_donning():
+    # The frozen firmware constant assumed this ratio was 3 and stable. It is
+    # recorded per donning so that assumption can be checked against data
+    # rather than re-argued.
+    summary = run(CLEAN)
+
+    ratio = summary["reference_over_threshold"]["NEXT_TARGET"]
+    assert ratio == pytest.approx(
+        400.0 / summary["threshold_floor"], abs=0.01
+    )
+
+
+def test_a_rest_capture_with_a_gesture_in_it_is_flagged():
+    """Stillness louder than deliberate movement is not a donning property.
+
+    Measured 2026-08-23: a rest trial the wearer accidentally performed a
+    gesture during reported baseline 80.5 against a preparation bound of
+    48.0. The inconsistency was already printed, next to the number it
+    contradicts, and went unremarked while the cause was looked for in the
+    hardware instead.
+    """
+    measured = donning(80, 48, {"NEXT_TARGET": 174, "CONFIRM": 162,
+                                "ABORT": 170})
+
+    summary = run(measured)
+
+    assert "rest_contamination_warning" in summary
+    assert "80" in summary["rest_contamination_warning"]
+    # The separation ratio measures electrode placement, which a botched rest
+    # trial says nothing about, so it must not be overridden.
+    assert summary["verdict"] == "pass"
+
+
+def test_an_ordinary_donning_is_not_flagged_for_rest_contamination():
+    # The clean capture from the same evening: rest 15, preparation 19.
+    measured = donning(15, 19, {"NEXT_TARGET": 174, "CONFIRM": 162,
+                                "ABORT": 170})
+
+    assert "rest_contamination_warning" not in run(measured)
