@@ -622,7 +622,8 @@ class Capture:
 
 
 def send_calibration(connection, *, mode, factor, baseline_shift,
-                     threshold_floor, sequence=1, timeout_sec=4.0):
+                     threshold_floor, reference_left=0, reference_right=0,
+                     sequence=1, timeout_sec=4.0):
     """Send one request and return the ACTIVATION_STATE the board reports.
 
     Waits for the state rather than assuming success: the reply is the only
@@ -631,7 +632,8 @@ def send_calibration(connection, *, mode, factor, baseline_shift,
     """
     connection.write(encode_set_activation(
         sequence, mode=mode, factor=factor, baseline_shift=baseline_shift,
-        threshold_floor=threshold_floor,
+        threshold_floor=threshold_floor, reference_left=reference_left,
+        reference_right=reference_right,
     ))
     parser = PacketParser()
     deadline = time.perf_counter() + timeout_sec
@@ -650,15 +652,33 @@ def send_calibration(connection, *, mode, factor, baseline_shift,
     )
 
 
+def sendable_references(summary):
+    """The two reference levels as the wire wants them, rounded to int.
+
+    Absent from a summary recorded before they were measured, and zero then
+    means "use the firmware fallback" rather than being an error.
+    """
+    levels = summary.get("reference_levels", {})
+    return (int(round(levels.get("NEXT_TARGET", 0))),
+            int(round(levels.get("ULNAR", 0))))
+
+
 def confirm_applied(state, summary):
-    """Check the board is judging with what was just sent."""
+    """Check the board is judging with what was just sent.
+
+    The references are compared too. They were measured, written to the file,
+    and then not sent, while this function reported "board confirmed" -- true
+    of everything it looked at and false of the thing the measurement existed
+    for. A field worth sending is a field worth confirming.
+    """
     if state.last_result != SET_RESULT_ACCEPTED:
         raise CalibrationError(
             f"board rejected the calibration (last_result={state.last_result})"
         )
-    applied = (state.factor, state.baseline_shift, state.threshold_floor)
+    applied = (state.factor, state.baseline_shift, state.threshold_floor,
+               state.reference_left, state.reference_right)
     wanted = (summary["factor"], summary["baseline_shift"],
-              summary["threshold_floor"])
+              summary["threshold_floor"]) + sendable_references(summary)
     if applied != wanted:
         raise CalibrationError(
             f"board reports {applied}, expected {wanted}"
@@ -829,15 +849,19 @@ def main(argv=None):
                 print("  dry run: nothing sent")
                 return 0
 
+            left, right = sendable_references(summary)
             state = send_calibration(
                 connection, mode=SET_MODE_APPLY, factor=summary["factor"],
                 baseline_shift=summary["baseline_shift"],
                 threshold_floor=summary["threshold_floor"],
+                reference_left=left, reference_right=right,
             )
             confirm_applied(state, summary)
             print(f"  board confirmed: K={state.factor} "
                   f"shift={state.baseline_shift} "
-                  f"floor={state.threshold_floor}")
+                  f"floor={state.threshold_floor} "
+                  f"references={state.reference_left}/"
+                  f"{state.reference_right}")
             return 0
         except CalibrationError as error:
             print(f"  calibration aborted: {error}")

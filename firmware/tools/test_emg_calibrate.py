@@ -15,6 +15,7 @@ from emg_activation_ref import FROZEN_BASELINE_SHIFT, FROZEN_FACTOR
 from emg_calibrate import (
     CAPTURED_GESTURES,
     diagnose_failure,
+    sendable_references,
     GESTURES,
     REFERENCE_GESTURES,
     SEPARATION_MARGINAL,
@@ -287,16 +288,19 @@ def state(**overrides):
 def test_confirmation_requires_the_board_to_report_what_was_sent():
     summary = run(CLEAN)
     summary["threshold_floor"] = 158
+    left, right = sendable_references(summary)
+    applied = dict(reference_left=left, reference_right=right)
 
-    confirm_applied(state(), summary)
+    confirm_applied(state(**applied), summary)
 
     with pytest.raises(CalibrationError, match="rejected"):
-        confirm_applied(state(last_result=SET_RESULT_REJECTED), summary)
+        confirm_applied(state(last_result=SET_RESULT_REJECTED, **applied),
+                        summary)
     # A board that accepted something else is not a calibrated board.
     with pytest.raises(CalibrationError, match="expected"):
-        confirm_applied(state(threshold_floor=110), summary)
+        confirm_applied(state(threshold_floor=110, **applied), summary)
     with pytest.raises(CalibrationError, match="expected"):
-        confirm_applied(state(factor=FROZEN_FACTOR + 1), summary)
+        confirm_applied(state(factor=FROZEN_FACTOR + 1, **applied), summary)
 
 
 def test_the_sustain_run_is_the_one_the_gate_actually_needs():
@@ -551,3 +555,33 @@ def test_the_verdict_line_carries_the_diagnosis():
 
     assert message.startswith("FAIL")
     assert "NEXT_TARGET" in message
+
+
+def test_confirmation_covers_the_references_not_only_the_threshold():
+    """They were measured, written to the file, and then not sent.
+
+    The tool printed "board confirmed" -- true of everything it compared, and
+    false of the thing the measurement existed for. Caught on hardware
+    2026-08-25: a passing calibration left the board reporting
+    references 0/0.
+    """
+    summary = {"factor": 3, "baseline_shift": 4, "threshold_floor": 52,
+               "reference_levels": {"NEXT_TARGET": 184.4, "ULNAR": 165.0}}
+
+    assert sendable_references(summary) == (184, 165)
+
+    confirm_applied(state(threshold_floor=52, reference_left=184,
+                          reference_right=165), summary)
+    with pytest.raises(CalibrationError, match="expected"):
+        confirm_applied(state(threshold_floor=52), summary)
+    with pytest.raises(CalibrationError, match="expected"):
+        confirm_applied(state(threshold_floor=52, reference_left=184),
+                        summary)
+
+
+def test_a_summary_without_references_sends_and_confirms_zero():
+    # "Use the firmware fallback", not an error: older files stay usable.
+    summary = {"factor": 3, "baseline_shift": 4, "threshold_floor": 52}
+
+    assert sendable_references(summary) == (0, 0)
+    confirm_applied(state(threshold_floor=52), summary)
