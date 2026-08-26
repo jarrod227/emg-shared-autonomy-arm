@@ -23,6 +23,7 @@ setup(
     entry_points={
         "console_scripts": [
             "handoff_controller = assistive_handoff.handoff_controller:main",
+            "view_protocol = assistive_handoff.view_protocol:main",
             "sim_intent_publisher = assistive_handoff.sim_intent_publisher:main",
             "sim_hand_publisher = assistive_handoff.sim_hand_publisher:main",
             "sim_target_publisher = assistive_handoff.sim_target_publisher:main",
