@@ -17,6 +17,19 @@ was trying to answer.
 
 The marker stream is deliberately not an input to anything. Nothing subscribes
 to it, the controller cannot see it, and it exists only to be recorded.
+
+Every print flushes and every cue rings the terminal bell, because the first
+session run with this tool produced prompts the wearer never saw. Python block-
+buffers stdout when it is not a terminal, so a run whose output was redirected
+delivered the whole script at once, after it had finished. The wearer performed
+the protocol from memory and the markers labelled a timeline nobody was
+following -- which is worse than having no markers, since the analysis then
+scores gestures against the phase they happened to fall in. An alternating
+protocol makes that failure look exactly like a classifier confusing the two
+directions, and it did.
+
+Run this where the wearer can see and hear it. It is the one part of a session
+that cannot be launched somewhere its output will not be read.
 """
 
 import time
@@ -53,6 +66,7 @@ EFFORTS = {
     "hard": "hard, but only as hard as you would hold for a whole session",
 }
 
+BELL = "\a"
 REST_SECONDS = 3.0
 COUNT_IN_SECONDS = 3
 
@@ -84,24 +98,24 @@ class ViewProtocol(Node):
 
     def run(self):
         total = len(self._protocol)
-        print(f"\n  {total} movements, alternating direction.")
-        print("  Hold steady once you start. If the arm jitters or reverses,")
-        print("  do NOT correct it -- keep the same gesture and effort.\n")
+        print(f"\n  {total} movements, alternating direction.", flush=True)
+        print("  Hold steady once you start. If the arm jitters or reverses,", flush=True)
+        print("  do NOT correct it -- keep the same gesture and effort.\n", flush=True)
         self._hold("rest", REST_SECONDS)
 
         for index, (direction, effort, seconds) in enumerate(self._protocol, 1):
             print(f"  {index}/{total}  {direction} {effort} -- "
                   f"{GESTURES[direction]}, {EFFORTS[effort]}")
             for remaining in range(COUNT_IN_SECONDS, 0, -1):
-                print(f"    starting in {remaining}...")
+                print(f"    starting in {remaining}...", flush=True)
                 self._hold(f"count_in {direction} {effort}", 1.0)
-            print(f"    GO ({seconds:.0f} s)")
+            print(f"{BELL}    GO ({seconds:.0f} s)", flush=True)
             self._hold(f"hold {direction} {effort}", seconds)
-            print("    RELAX")
+            print(f"{BELL}    RELAX", flush=True)
             self._hold("rest", REST_SECONDS)
 
         self._mark("done")
-        print("\n  done -- stop the recording with Ctrl-C in its window.")
+        print("\n  done -- stop the recording with Ctrl-C in its window.", flush=True)
 
 
 def main(argv=None):
