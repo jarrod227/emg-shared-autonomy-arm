@@ -221,6 +221,12 @@ static void emg_send_activation_state(void)
   state.last_result = emg_activation_last_result;
   state.threshold_floor = emg_activation.threshold_floor;
   state.applied_sequence = emg_activation_applied_sequence;
+  {
+    /* Saturated rather than truncated: a baseline this large means nothing
+     * is working anyway, and a wrapped value would read as a healthy one. */
+    const int32_t baseline = emg_activation_baseline(&emg_activation);
+    state.baseline = (baseline > 65535) ? 65535u : (uint16_t)baseline;
+  }
   state.reference_left = emg_view_reference_left;
   state.reference_right = emg_view_reference_right;
   length = emg_encode_activation_state(

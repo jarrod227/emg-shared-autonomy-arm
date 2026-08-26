@@ -154,7 +154,7 @@ static void test_activation_state_layout(void)
 {
     uint8_t out[EMG_MAX_PACKET];
     const emg_activation_state_t state = {
-        1u, 3u, 4u, 1u, 110, 0x0102u, 231, 303,
+        1u, 3u, 4u, 1u, 110, 0x0102u, 21u, 231, 303,
     };
 
     CHECK(emg_encode_activation_state(out, sizeof(out), 11u, 7000u, &state)
@@ -167,7 +167,10 @@ static void test_activation_state_layout(void)
     CHECK(out[15] == 1u);                    /* last_result */
     CHECK(read_u32(&out[16]) == 110u);       /* threshold_floor */
     CHECK(read_u16(&out[20]) == 0x0102u);    /* applied_sequence */
-    CHECK(out[22] == 0u && out[23] == 0u);   /* reserved */
+    /* The live EMA baseline, in bytes the layout already reserved. The
+     * board judges on max(factor x baseline, floor), and reporting only the
+     * floor hides the half that moves. */
+    CHECK(read_u16(&out[22]) == 21u);        /* baseline */
     /* Reported, not merely accepted: the host confirms a calibration by
      * watching this reflect what it sent. */
     CHECK(read_u32(&out[24]) == 231u);       /* reference_left */
@@ -232,7 +235,7 @@ static int emit_fixture(const char *path)
          * decoder against these bytes and its own SET encoder against the
          * exact bytes this one produced. */
         const emg_activation_state_t state = {1u, 3u, 4u, 1u, 110, 0x0102u,
-                                              231, 303};
+                                              21u, 231, 303};
         emg_set_activation_t request = {0};
 
         request.mode = 1u;

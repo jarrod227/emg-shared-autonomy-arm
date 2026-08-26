@@ -44,9 +44,9 @@ CONTROLLER_VIEW_MIN_SIGNAL_QUALITY = 0.5
 def activation_state(*, source=ACTIVATION_SOURCE_DEFAULTS, factor=3,
                      baseline_shift=4, threshold_floor=110,
                      last_result=SET_RESULT_NONE, applied_sequence=0,
-                     reference_left=0, reference_right=0):
+                     baseline=0, reference_left=0, reference_right=0):
     return ActivationState(source, factor, baseline_shift, last_result,
-                           threshold_floor, applied_sequence,
+                           threshold_floor, applied_sequence, baseline,
                            reference_left, reference_right)
 
 

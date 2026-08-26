@@ -452,6 +452,24 @@ def summarize(rest_totals, preparation_trials, gesture_totals):
             for name, value in sorted(references.items())
         } if threshold > 0 else {},
     }
+    # Checked whatever the verdict, which is the point. Separation and single
+    # gesture strength are independent questions: the bands can be well apart
+    # while one command sits barely above the threshold. Measured 2026-08-25 --
+    # separation 3.24, a clean pass, with NEXT_TARGET at 94 against CONFIRM's
+    # 206. Three deliberate attempts during the session that followed produced
+    # zero events. The ratio was computed, stored, and never printed, because
+    # the only thing that looked at it ran on failure.
+    strongest = max(plateaus.values())
+    if strongest > 0.0 and weakest / strongest < WEAK_GESTURE_FRACTION:
+        summary["weak_gesture_warning"] = (
+            f"{weakest_name} is {weakest:.0f} against {strongest:.0f} for "
+            f"{max(plateaus, key=plateaus.get)}, {weakest / strongest:.2f} of "
+            f"it. Separation says the bands are apart; this says that one "
+            f"gesture sits close to the threshold and may stop firing as the "
+            f"baseline moves. Re-place the electrode over it before trusting "
+            f"the session."
+        )
+
     unusable = sorted(
         name for name, value in references.items() if value <= threshold
     )
@@ -745,6 +763,8 @@ def print_summary(summary):
               f"(needs {item['windows_needed']}) -> "
               f"{item['trials_firing']}/{item['trials']} fire")
     print("=" * 58)
+    if "weak_gesture_warning" in summary:
+        print(f"  WARNING: {summary['weak_gesture_warning']}")
     if "rest_contamination_warning" in summary:
         print(f"  WARNING: {summary['rest_contamination_warning']}")
     if "inert_floor_warning" in summary:

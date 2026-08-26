@@ -585,3 +585,34 @@ def test_a_summary_without_references_sends_and_confirms_zero():
 
     assert sendable_references(summary) == (0, 0)
     confirm_applied(state(threshold_floor=52), summary)
+
+
+def test_a_weak_gesture_is_reported_even_when_separation_passes():
+    """Tonight's failure, and the reason it cost a session.
+
+    2026-08-25: separation 3.24, a clean pass, with NEXT_TARGET at 94 against
+    CONFIRM's 206. Three deliberate wrist extensions in the run that followed
+    produced zero gate events. weakest_over_strongest was 0.46 -- computed,
+    stored in the file, and printed nowhere, because the only thing that
+    looked at it ran on failure.
+    """
+    measured = donning(21, 29, {"NEXT_TARGET": 94, "CONFIRM": 206,
+                                "ABORT": 131})
+
+    summary = run(measured)
+
+    assert summary["verdict"] == "pass"
+    assert summary["weakest_over_strongest"] == pytest.approx(0.46, abs=0.01)
+    warning = summary["weak_gesture_warning"]
+    assert "NEXT_TARGET" in warning and "94" in warning and "206" in warning
+
+
+def test_gestures_of_similar_strength_raise_nothing():
+    # The passing donning from two days earlier: 174 / 162 / 170.
+    measured = donning(15, 19, {"NEXT_TARGET": 174, "CONFIRM": 162,
+                                "ABORT": 170})
+
+    summary = run(measured)
+
+    assert summary["verdict"] == "pass"
+    assert "weak_gesture_warning" not in summary

@@ -142,6 +142,10 @@ class ActivationState:
     last_result: int     # SET_RESULT_*
     threshold_floor: int
     applied_sequence: int
+    # The board judges on max(factor * baseline, threshold_floor). The floor
+    # is fixed by calibration and the baseline moves during a session, so the
+    # floor alone does not say what the board is doing.
+    baseline: int = 0
     # Zero means the board has none for that direction and is using its
     # compile-time fallback. Reported so a host can confirm what it sent.
     reference_left: int = 0
@@ -151,16 +155,26 @@ class ActivationState:
     def from_host(self):
         return self.source == ACTIVATION_SOURCE_HOST
 
+    @property
+    def effective_threshold(self):
+        """What the board actually compares a window against."""
+        return max(self.factor * self.baseline, self.threshold_floor)
+
+    @property
+    def floor_is_inert(self):
+        """True when the relative rule, not the calibration, governs."""
+        return self.factor * self.baseline > self.threshold_floor
+
 
 def decode_activation_state(payload):
     if len(payload) != 20:
         raise ValueError(
             f"ACTIVATION_STATE payload must be 20 bytes, got {len(payload)}"
         )
-    (source, factor, shift, result, floor, applied, _,
+    (source, factor, shift, result, floor, applied, baseline,
      left, right) = struct.unpack("<BBBBiHHii", payload)
     return ActivationState(source, factor, shift, result, floor, applied,
-                           left, right)
+                           baseline, left, right)
 
 
 def encode_packet(packet_type, sequence, timestamp_us, payload=b""):

@@ -234,7 +234,7 @@ def test_raw_decoder_rejects_a_payload_too_short_for_its_header():
 
 def test_activation_state_decoder():
     state = decode_activation_state(
-        struct.pack("<BBBBiHHii", 1, 3, 4, 1, 110, 0x0102, 0, 231, 303)
+        struct.pack("<BBBBiHHii", 1, 3, 4, 1, 110, 0x0102, 21, 231, 303)
     )
 
     assert state.from_host
@@ -246,6 +246,11 @@ def test_activation_state_decoder():
     # watching this reflect what it sent, so a field it cannot read back is
     # a field it cannot verify was applied.
     assert (state.reference_left, state.reference_right) == (231, 303)
+    # The board compares against max(factor x baseline, floor), so the floor
+    # alone does not say what it is judging with.
+    assert state.baseline == 21
+    assert state.effective_threshold == 110
+    assert not state.floor_is_inert
     with pytest.raises(ValueError):
         decode_activation_state(b"\x00" * 19)
 
@@ -386,3 +391,23 @@ def test_decodes_the_fixture_produced_by_the_c_encoder():
     assert parser.stats.duplicated == 1
     assert parser.stats.discarded_bytes == 5
     assert HEADER_SIZE == 12
+
+
+def test_a_risen_baseline_is_visible_as_the_governing_threshold():
+    """The failure this field exists for.
+
+    A donning calibrated to floor 52 with a baseline of 21 judges at 63. An
+    hour later the baseline has drifted to 32 and it judges at 96, past a
+    gesture that measured 94 -- and every other reported number is unchanged.
+    """
+    fresh = decode_activation_state(
+        struct.pack("<BBBBiHHii", 1, 3, 4, 1, 52, 1, 21, 184, 165)
+    )
+    drifted = decode_activation_state(
+        struct.pack("<BBBBiHHii", 1, 3, 4, 1, 52, 1, 32, 184, 165)
+    )
+
+    assert fresh.threshold_floor == drifted.threshold_floor == 52
+    assert fresh.effective_threshold == 63
+    assert drifted.effective_threshold == 96
+    assert fresh.floor_is_inert and drifted.floor_is_inert

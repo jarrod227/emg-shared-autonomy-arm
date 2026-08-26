@@ -183,6 +183,17 @@ class EmgIntentBridge(Node):
             f"{self._handshake['description']}"
         )
 
+    def _effective_threshold(self):
+        state = self._reader.decoder.last_activation_state
+        if state is None:
+            return None
+        return (
+            f"{state.effective_threshold} "
+            f"(floor {state.threshold_floor}, "
+            f"{state.factor}x baseline {state.baseline}"
+            f"{'; floor inert' if state.floor_is_inert else ''})"
+        )
+
     @staticmethod
     def _load_handshake(calibration_file):
         """Build the startup request the board must be brought to."""
@@ -547,6 +558,11 @@ class EmgIntentBridge(Node):
             "handshake_sends": self._handshake_sends,
             "held_for_handshake": self._held_for_handshake,
             "mcu_activation_state": self._reader.decoder.last_activation_state,
+            # The floor alone does not say what the board is judging with:
+            # it compares against max(factor * baseline, floor), and only the
+            # baseline moves during a session. Surfaced separately so a
+            # gesture that stops firing is one glance away from its cause.
+            "mcu_effective_threshold": self._effective_threshold(),
             "queue_drops": self._reader.queue_drops,
             "stale_packets": self._stale_count,
             "clock_warmup_skipped": self._warmup_skipped,

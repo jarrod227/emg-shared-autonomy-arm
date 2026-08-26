@@ -98,6 +98,17 @@ typedef struct {
     uint8_t last_result;    /* emg_set_result_t */
     int32_t threshold_floor;
     uint16_t applied_sequence; /* sequence of the last accepted SET */
+    /* The EMA rest baseline the board is judging with right now, saturated
+     * into 16 bits. It occupies bytes the layout already reserved, so the
+     * payload length does not change.
+     *
+     * Reported because threshold_floor is only half of what the board
+     * actually uses: it judges on max(factor * baseline, threshold_floor),
+     * and the baseline moves during a session while the floor does not. A
+     * night was lost to gestures that fired during calibration and produced
+     * nothing an hour later, with every reported number unchanged, because
+     * the half that moved was the half nobody could see. */
+    uint16_t baseline;
     /* Full-deflection levels for the two steering gestures, in the same
      * units as threshold_floor. Reported, not just accepted, because the
      * host confirms a calibration by watching this reflect what it sent;

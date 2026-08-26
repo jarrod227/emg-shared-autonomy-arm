@@ -151,8 +151,7 @@ size_t emg_encode_activation_state(uint8_t *out, size_t out_size,
     payload[3] = state->last_result;
     put_u32(&payload[4], (uint32_t)state->threshold_floor);
     put_u16(&payload[8], state->applied_sequence);
-    payload[10] = 0u;
-    payload[11] = 0u;
+    put_u16(&payload[10], state->baseline);
     put_u32(&payload[12], (uint32_t)state->reference_left);
     put_u32(&payload[16], (uint32_t)state->reference_right);
     return emg_encode(out, out_size, (uint8_t)EMG_TYPE_ACTIVATION_STATE,
