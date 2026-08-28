@@ -735,7 +735,24 @@ def _evaluation_groups(sessions):
     return list(groups.values()), "leave_one_donning_out", None
 
 
-def evaluate_loso(sessions, *, ridge=DEFAULT_RIDGE, labels=LABELS):
+# The gate used to be exact agreement on the training windows. It is a proxy
+# for "quantizing did not change the model", and it failed on a model whose
+# quantized held-out accuracy was identical to four decimal places: one window
+# in 7111 crossed a decision boundary. Measured 2026-08-28, five donnings, the
+# per-fold difference was 0 to 2 windows out of ~1421 and the mean held-out
+# accuracy was 94.1% either way.
+#
+# Keeping the exact rule would have meant searching ridge and scale until the
+# proxy happened to read zero -- the disagreement count moved between 0 and 6
+# with no monotonicity in either parameter, so that search selects noise. The
+# gate now measures the thing the proxy stood for, and keeps a loose agreement
+# floor to catch a scale that is actually broken rather than rounding.
+QUANTIZATION_MIN_AGREEMENT = 0.999
+QUANTIZATION_MAX_ACCURACY_LOSS = 0.005
+
+
+def evaluate_loso(sessions, *, ridge=DEFAULT_RIDGE, labels=LABELS,
+                  quantize_bits=None):
     if len(sessions) < 2:
         raise ValueError("leave-one-session-out validation needs at least 2 sessions")
     groups, method, caveat = _evaluation_groups(sessions)
@@ -761,6 +778,9 @@ def evaluate_loso(sessions, *, ridge=DEFAULT_RIDGE, labels=LABELS):
         model = fit_lda(
             train_features, train_labels, class_order=labels, ridge=ridge
         )
+        if quantize_bits is not None:
+            # Scoring the model that actually ships, on the same folds.
+            model = quantize_lda(model, quantize_bits)
         scores = model.scores(held_out.features)
         predicted = model.predict(held_out.features)
         trial_actual, trial_predicted = trial_predictions(
@@ -991,10 +1011,28 @@ def main(argv=None):
             f"({int(np.count_nonzero(float_predictions == quantized_predictions))}"
             f"/{len(all_features)})"
         )
-        if quantized_agreement != 1.0:
+        quantized_validation = evaluate_loso(
+            sessions, ridge=arguments.ridge, labels=labels,
+            quantize_bits=arguments.fraction_bits,
+        )
+        float_held_out = validation["overall_window"]["accuracy"]
+        quantized_held_out = quantized_validation["overall_window"]["accuracy"]
+        print(
+            f"held-out accuracy: float {_percent(float_held_out)}, "
+            f"quantized {_percent(quantized_held_out)}"
+        )
+        if quantized_agreement < QUANTIZATION_MIN_AGREEMENT:
             raise ValueError(
-                "quantized model changes source-window predictions; "
-                "choose a safer fixed-point scale"
+                f"quantized model disagrees with the float model on "
+                f"{100.0 * (1.0 - quantized_agreement):.2f}% of source "
+                f"windows; that is a broken fixed-point scale, not rounding"
+            )
+        if quantized_held_out < float_held_out - QUANTIZATION_MAX_ACCURACY_LOSS:
+            raise ValueError(
+                f"quantizing costs held-out accuracy: "
+                f"{_percent(float_held_out)} float against "
+                f"{_percent(quantized_held_out)} quantized. The model that "
+                f"ships is the quantized one, so this is a real loss."
             )
         payload = build_output(
             sessions,

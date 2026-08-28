@@ -1266,8 +1266,155 @@ belonging in the calibration downlink rather than in a compile-time constant
 is already an open item; this is the first measurement that shows what it
 costs.
 
+## The validation was measuring the wrong thing, and the model paid for it (2026-08-27/28)
+
+Four evenings of closed-loop sessions failed in ways that kept pointing
+somewhere else. The wearer's wrist extension produced no motion at all on two
+of them: three deliberate attempts, zero gate events, while every reported
+number looked healthy. The cause was upstream of everything being adjusted.
+
+### Held-out by session is not held-out
+
+`evaluate_loso` held out one session at a time, and manifests recorded no
+electrode application. Every day of collection produced more than one session
+on one donning -- the deployed model's six training sessions span three days --
+so a held-out session's own donning sat in the training set, and the accepted
+accuracy measured within-donning performance. Cross-donning accuracy, the
+quantity that decides whether a wearer can use the system tomorrow, was never
+reported.
+
+Measured on five 2026-08-14 sessions that were in no model's training set, the
+deployed model calls `NEXT_TARGET` correctly 2%, 12%, 68%, 100% and 100% of
+the time, and in the two worst it calls it `ULNAR` 96% and 88%. That spread is
+what a within-donning figure cannot contain, and the 2% donning is what a
+wearer meets by putting the band on and finding out.
+
+Those two sessions are not defective recordings, which was checked before
+concluding anything: zero lost packets, normal resting level, and the
+*strongest* `NEXT_TARGET` amplitudes of the five (165 and 142 against 148, 126
+and 108). The gesture was performed cleanly and the model called it something
+else.
+
+### Five donnings, collected as donnings
+
+`--donning` is now required at capture, folds group by it, and a dataset whose
+sessions share one donning is refused: a model cannot be validated against
+variation it never saw. `ULNAR` also became collectable -- it had been a model
+class since 2026-08-23 while the guided session could not record it, so every
+session in between omitted the class the model was newest and least validated
+on, and it is the class `NEXT_TARGET` was collapsing into.
+
+Five donnings gave leave-one-donning-out window accuracy of 93.3-95.1% and
+trial accuracy 97.6%.
+
+### Internal validation improved while external transfer degraded
+
+Worth recording because it is the one result that changes how to collect.
+Adding the fifth donning tightened the internal folds -- 87.4-94.6% became
+93.3-95.1% -- and moved the external check the wrong way:
+
+| | deployed | 4 donnings | 5 donnings |
+| --- | ---: | ---: | ---: |
+| `REST` | 98% | 98% | 98% |
+| `NEXT_TARGET` | 56% | 77% | 61% |
+| `CONFIRM` | 93% | 80% | 75% |
+| `ABORT` | 84% | 83% | 94% |
+| worst class | 56% | 77% | 61% |
+
+An internal cross-donning number computed over donnings from one subject in
+two days does not predict transfer across a fortnight. The external set has
+now been used to compare three models and is no longer an unbiased estimate of
+any of them; a fresh one has to come from donnings recorded after the choice.
+
+### What the rest signal actually said
+
+Resting amplitude in the new batch did not overlap the old one -- 23-41 against
+13-22 -- and that was briefly taken as evidence of a changed contact regime,
+which was wrong. Rest amplitude is a contact-noise figure, and the spectrum
+says the opposite of contact noise: the new batch has *less* of its rest
+energy below 60 Hz (46-55% against 61-65%) and more in the 60-200 Hz EMG band
+(41-50% against 28-34%), on all three channels rather than one.
+
+That is residual muscle activity, not electrode noise, and it is the use
+condition rather than a collection fault: the wearer holds the arm up to
+operate the arm. Training on a fully relaxed rest would train on a state that
+does not occur. The protocol was left alone.
+
+### The gate on quantization was a proxy, and it failed on the proxy
+
+Emitting the five-donning model was refused because one window in 7111 changed
+class between the float and Q18 models. Searching ridge and fixed-point scale
+for a combination that read exactly zero was possible -- two of fifteen
+combinations did -- but the disagreement count moved between 0 and 6 with no
+monotonicity in either parameter, so that search selects noise, and selecting
+on the check is the same error as dropping the sessions a model scores worst
+on.
+
+What the proxy stands for was measured instead. Per fold, float and quantized
+held-out accuracy: 95.1/95.0, 94.1/94.2, 94.2/94.2, 93.7/93.7, 93.3/93.3, with
+0 to 2 differing windows out of about 1421. The gate is now held-out accuracy
+parity plus a loose agreement floor for a scale that is actually broken.
+
+### Closed loop, with the wearer following a prompted protocol
+
+The session that finally worked also used a prompter that counts the wearer in
+and records what was asked for, because scoring a recording by the direction
+that was *observed* cannot tell a six-second hold that produced three fragments
+from three fragments the wearer performed. Its first use produced prompts
+nobody saw -- Python block-buffers stdout when it is redirected -- and, because
+the protocol alternates direction, being one step out mapped every LEFT phase
+onto a RIGHT gesture and read as the classifier confusing the two.
+
+Scored against what was asked for:
+
+| asked | correct | wrong | none | deg/s |
+| --- | ---: | ---: | ---: | ---: |
+| LEFT light | 35% | 0% | 65% | -2.6 |
+| RIGHT light | 37% | 0% | 63% | +0.4 |
+| LEFT medium | 88% | 0% | 12% | -5.2 |
+| RIGHT medium | 100% | 0% | 0% | +10.1 |
+| LEFT hard | 100% | 0% | 0% | -13.4 |
+| RIGHT hard | 79% | 21% | 0% | +8.9 |
+
+`LEFT` had produced 0% on five consecutive holds two evenings earlier.
+
+Effort chose speed to within 1% of ideal across four of five activation bands
+(1.00x, 0.99x, 1.01x, 1.00x), with the top band at 0.82x where the axis meets
+the band edge and its speed ceiling. Motion against the gesture fell to 2.4%,
+reversals to 0.56/s with no rise at high effort, and nothing left the band.
+
+### What is left
+
+Light effort mostly does not register: 65%, 63% and 100% of those windows
+produced no direction at all. It is not the proportional path -- the 0.05-0.20
+activation band tracks ideal speed at 1.00x when it does register -- it is the
+activation threshold cutting off the bottom of the usable range. The working
+range is bounded below by `max(K x baseline, floor)` and above by the measured
+reference, and a gentle push falls under the floor.
+
 ## Lessons
 
+- **Held-out means held out on the thing that varies.** Leaving out one
+  session while its own donning stays in training measures within-donning
+  accuracy and reads as the cross-donning number that decides whether the
+  system works tomorrow. The gap was 56% against a reported figure in the
+  nineties, and it took a live failure to find.
+- **A class the collection tool cannot record can only be trained on data
+  from somewhere else.** `ULNAR` was a model class for four days before the
+  guided session could produce it, and it is the class that swallowed
+  `NEXT_TARGET`.
+- **Internal validation improving while external transfer degrades is a
+  statement about the folds, not the model.** Five donnings from one subject
+  in two days tightened every fold and lost sixteen points of external
+  `NEXT_TARGET`.
+- **When a check fails, measure what it was a proxy for before tuning
+  anything.** Two of fifteen ridge/scale combinations made the exact-agreement
+  gate read zero, and the count moved non-monotonically between 0 and 6 --
+  that search selects noise. Held-out accuracy was identical either way.
+- **Rest amplitude is contact noise; rest *spectrum* says whether it is.**
+  A doubled resting level with proportionally less energy below 60 Hz and more
+  in the EMG band is muscle tone, not electrodes, and holding the arm up is
+  the condition the system runs in.
 - **Contact quality decays on a timescale shorter than a working day, and
   every calibrated constant decays with it.** A donning that separated 5.23
   in the morning could not hold a direction seven hours later, and the
