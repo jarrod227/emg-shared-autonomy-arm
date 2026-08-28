@@ -13,6 +13,9 @@ __pycache__/
 # Editor and OS files
 .vscode/
 .idea/
+.project
+.cproject
+.settings/
 .DS_Store
 .aider*
 
@@ -43,6 +46,7 @@ firmware/test/features.bin
 firmware/test/classifier.bin
 firmware/test/gate.bin
 firmware/test/activation.bin
+firmware/test/view.bin
 
 # CubeMX project build output. The generated sources and cheez_emg.ioc are
 # tracked -- the .ioc is the authoritative record of the peripheral
@@ -67,3 +71,7 @@ weights/
 *.onnx
 *.engine
 firmware/test/test_emg_rx
+
+# Claude Code local settings. The installed skills and skills-lock.json are a
+# separate decision; this file is machine-local by name.
+.claude/settings.local.json
