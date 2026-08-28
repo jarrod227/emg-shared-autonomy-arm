@@ -28,6 +28,7 @@ from emg_protocol import (
     decode_raw,
 )
 from emg_train_lda import (
+    ACCEPTED_SCHEMA_VERSIONS,
     CHANNEL_COUNT,
     DIRECTION_ONLY_LABELS,
     FEATURE_NAMES,
@@ -267,8 +268,11 @@ def _trial_spans(manifest, included):
 def validate_event_gate_manifest(manifest, path=None):
     """Validate a complete alternating REST/event session without training it."""
     source = str(path) if path is not None else "manifest"
-    if manifest.get("schema_version") != SCHEMA_VERSION:
-        raise ValueError(f"{source}: expected schema_version {SCHEMA_VERSION}")
+    if manifest.get("schema_version") not in ACCEPTED_SCHEMA_VERSIONS:
+        raise ValueError(
+            f"{source}: expected schema_version in "
+            f"{sorted(ACCEPTED_SCHEMA_VERSIONS)}"
+        )
     if manifest.get("collection_protocol") != "event-gate":
         raise ValueError(f"{source}: collection_protocol must be event-gate")
     if manifest.get("status") != "complete":

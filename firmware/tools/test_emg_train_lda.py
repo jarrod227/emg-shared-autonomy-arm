@@ -426,3 +426,25 @@ def test_a_single_donning_cannot_be_validated_at_all():
 
     with pytest.raises(ValueError, match="two donnings"):
         evaluate_loso(sessions)
+
+
+def test_sessions_recorded_before_donnings_existed_still_load():
+    """Version 1 has no donning and every recording before 2026-08-27 is one.
+
+    Refusing them would discard the whole archive to gain nothing: they are
+    still trainable, and what they cannot do -- group folds by electrode
+    application -- evaluate_loso already reports rather than hides.
+    """
+    v1 = balanced_manifest()
+    v1["schema_version"] = 1
+    assert len(validate_complete_manifest(v1)) == len(LABELS)
+
+    v2 = balanced_manifest()
+    v2["schema_version"] = 2
+    v2["donning"] = "A1"
+    assert len(validate_complete_manifest(v2)) == len(LABELS)
+
+    future = balanced_manifest()
+    future["schema_version"] = 3
+    with pytest.raises(ValueError, match="schema_version"):
+        validate_complete_manifest(future)

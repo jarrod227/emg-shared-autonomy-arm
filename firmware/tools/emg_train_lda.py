@@ -32,7 +32,12 @@ from emg_filter_ref import design_emg_filter, filter_fixed, to_fixed
 from emg_guided_session import GESTURE_LABELS
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+# Version 1 sessions are still loadable and still worth training on; what they
+# cannot do is carry a donning, so evaluate_loso reports what its folds are
+# not rather than pretending they group. Refusing them outright would discard
+# every recording made before 2026-08-27 to gain nothing.
+ACCEPTED_SCHEMA_VERSIONS = (1, 2)
 MODEL_SCHEMA_VERSION = 1
 CHANNEL_COUNT = 3
 ZERO_CROSSING_THRESHOLD = 10
@@ -262,8 +267,11 @@ def validate_complete_manifest(manifest, path=None, labels=None):
     """Fail closed on metadata that could shift or mislabel training windows."""
     source = str(path) if path is not None else "manifest"
     expected = manifest_labels(manifest, path) if labels is None else tuple(labels)
-    if manifest.get("schema_version") != SCHEMA_VERSION:
-        raise ValueError(f"{source}: expected schema_version {SCHEMA_VERSION}")
+    if manifest.get("schema_version") not in ACCEPTED_SCHEMA_VERSIONS:
+        raise ValueError(
+            f"{source}: expected schema_version in "
+            f"{sorted(ACCEPTED_SCHEMA_VERSIONS)}"
+        )
     if manifest.get("status") != "complete":
         raise ValueError(f"{source}: session status must be complete")
     if manifest.get("final_phase") != "complete":
