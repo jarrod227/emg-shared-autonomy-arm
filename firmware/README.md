@@ -453,7 +453,7 @@ Host-side, in `tools/`. Neither needs the ARM toolchain.
 
 | Script | Purpose |
 | --- | --- |
-| `emg_probe.py` | **Obsolete, do not use.** Bring-up tool from before the binary protocol: it opens the port at 115200 and parses text with a regex. Against the v1 stream it reports plausible nonsense — 33 channels at 4.3 Hz, most of them "pinned, no signal" — from a board that is streaming perfectly. Use `emg_scope.py` for a live check or `emg_record.py` + `emg_analyze.py` to capture and judge. |
+| `emg_probe.py` | **Deleted 2026-08-28.** A bring-up tool from before the binary protocol: it opened the port at 115200 and parsed text with a regex, and against the v1 stream it reported plausible nonsense — 33 channels at 4.3 Hz, most of them "pinned, no signal" — from a board that was streaming perfectly. Marking it obsolete here was not enough, because the next person to open `firmware/tools/` sees the file and not this row. Use `emg_scope.py` for a live check, or `emg_record.py` + `emg_analyze.py` to capture and judge. |
 | `emg_scope.py` | Live scrolling plot. Close the window to stop; a text summary is printed on exit so a run leaves evidence even if nobody was watching. |
 | `emg_protocol.py` | Decoder for the v1 wire format, with per-type sequence tracking and resynchronization. |
 | `emg_record.py` | Records the stream to a raw byte log plus a JSON sidecar, or replays an existing log. |
