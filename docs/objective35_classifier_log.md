@@ -1392,6 +1392,42 @@ activation threshold cutting off the bottom of the usable range. The working
 range is bounded below by `max(K x baseline, floor)` and above by the measured
 reference, and a gentle push falls under the floor.
 
+## Ten minutes of ordinary activity, with the deployed system running (2026-08-28)
+
+The last item on Objective 3.5's own list. The wearer used the instrumented
+hand normally for ten minutes -- typing, a mouse, picking up and putting down a
+cup and a phone, changing posture, scratching, with stretches of resting the
+arm on the desk -- and performed none of the four command gestures.
+
+Measured on the deployed path rather than replayed, because a replay would
+have to simulate the activation baseline's own dynamics, and those are what an
+ordinary-activity number is about.
+
+| | |
+| --- | ---: |
+| duration | 10.0 minutes |
+| published intents | **0** |
+| MCU gate events | **none** |
+| view commands carrying a direction | 25 of 11987 (0.2%) |
+| separate view excursions | 6 |
+| longest excursion | 9 commands, 0.45 s |
+| median activation while steering | 0.605 |
+
+Zero false triggers, and not in the sense of being filtered downstream: the
+event gate on the MCU never fired at all.
+
+The view channel is the part that moves. Six excursions in ten minutes, none
+longer than half a second, at a median activation of 0.605 -- which also
+confirms the session contained real muscle activity rather than a wearer
+sitting still. Half a second at that activation is about four degrees of view
+motion, inside a band bounded at plus or minus forty-five, and only while the
+controller is in a search state; every other state ignores the channel
+entirely.
+
+The earlier ten-minute recording is not comparable and the log already says
+why: it was prompted relaxation containing no incidental movement, which
+measures the wrong thing. This one was collected against that note.
+
 ## Lessons
 
 - **Held-out means held out on the thing that varies.** Leaving out one
