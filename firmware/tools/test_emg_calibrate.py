@@ -14,6 +14,9 @@ import pytest
 from emg_activation_ref import FROZEN_BASELINE_SHIFT, FROZEN_FACTOR
 from emg_calibrate import (
     CAPTURED_GESTURES,
+    CLASSIFICATION_MIN_CORRECT,
+    classification_report,
+    classification_warning,
     diagnose_failure,
     sendable_references,
     GESTURES,
@@ -616,3 +619,54 @@ def test_gestures_of_similar_strength_raise_nothing():
 
     assert summary["verdict"] == "pass"
     assert "weak_gesture_warning" not in summary
+
+
+def confusion(counts):
+    return classification_report(counts)
+
+
+def test_a_gesture_the_model_does_not_recognise_is_called_out():
+    """The failure separation cannot see.
+
+    2026-08-25: a donning that passed at 4.76 and whose wrist extension the
+    model never once identified in a two-minute session. The trials to notice
+    it with were captured seconds before, on those electrodes, by the model
+    that would be judging them live.
+    """
+    report = confusion({
+        "NEXT_TARGET": {"ULNAR": 40, "NEXT_TARGET": 8, "REST": 12},
+        "CONFIRM": {"CONFIRM": 55, "REST": 5},
+    })
+
+    assert report["NEXT_TARGET"]["correct_fraction"] == pytest.approx(0.13)
+    warning = classification_warning({"classification": report})
+    assert "NEXT_TARGET" in warning
+    assert "mostly ULNAR" in warning
+    assert "no threshold can fix this" in warning
+
+
+def test_gestures_the_model_recognises_raise_nothing():
+    report = confusion({
+        "NEXT_TARGET": {"NEXT_TARGET": 50, "REST": 10},
+        "ULNAR": {"ULNAR": 48, "NEXT_TARGET": 12},
+    })
+
+    assert classification_warning({"classification": report}) is None
+
+
+def test_the_floor_is_a_floor_not_a_quality_target():
+    # Exactly at the cut passes; below it does not.
+    at_cut = confusion({"ULNAR": {
+        "ULNAR": int(CLASSIFICATION_MIN_CORRECT * 100),
+        "REST": 100 - int(CLASSIFICATION_MIN_CORRECT * 100),
+    }})
+    assert classification_warning({"classification": at_cut}) is None
+
+    below = confusion({"ULNAR": {"ULNAR": 59, "REST": 41}})
+    assert classification_warning({"classification": below}) is not None
+
+
+def test_a_calibration_without_the_check_is_not_flagged():
+    # A missing model header skips the check; it must not read as a failure.
+    assert classification_warning({"classification_error": "no header"}) is None
+    assert classification_warning({}) is None

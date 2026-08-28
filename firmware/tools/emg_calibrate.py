@@ -66,8 +66,10 @@ import numpy as np
 
 from emg_activation_ref import FROZEN_BASELINE_SHIFT, FROZEN_FACTOR
 from emg_event_gate_replay import VALIDATED_GATE
-from emg_features_ref import HOP, WINDOW, mean_absolute_value
+from emg_features_ref import HOP, WINDOW, compute_features, mean_absolute_value
 from emg_filter_ref import design_emg_filter, filter_fixed, to_fixed
+from emg_runtime_compare import load_deployed_model
+from emg_train_lda import ZERO_CROSSING_THRESHOLD
 from emg_protocol import (
     RAW_HEADER_SIZE,
     SET_MODE_APPLY,
@@ -288,6 +290,84 @@ def reference_levels(gesture_totals):
             [instantaneous_level(trial) for trial in trials]
         ))
     return levels
+
+
+# A gesture whose trials mostly classify as something else cannot be used,
+# however cleanly its amplitude separates. Provisional like every other cut
+# here, and deliberately loose: this is a floor below which the donning is
+# unusable, not a quality target.
+CLASSIFICATION_MIN_CORRECT = 0.6
+
+
+def classify_trials(gesture_frames, channel_count, model=None):
+    """What the deployed model calls each gesture's own calibration trials.
+
+    The separation ratio measures amplitude, and amplitude is not the only
+    way a donning fails. It cannot see that one gesture has no margin over
+    the threshold, and it cannot see that two gestures have stopped being
+    distinguishable -- both happened on 2026-08-25, on donnings that passed.
+
+    The second is what this measures, and the data was always here: three
+    trials of each gesture, captured seconds earlier on these electrodes. The
+    model that will judge them live can judge them now.
+
+    Windows below the activation threshold are excluded rather than counted
+    wrong. The activation stage rewrites those to REST before the classifier's
+    opinion reaches anything, so counting them as misclassifications would
+    blame the model for what the threshold did, and the two have different
+    remedies.
+    """
+    model = load_deployed_model() if model is None else model
+    sections = to_fixed(design_emg_filter())
+    confusion = {}
+    for name, trials in gesture_frames.items():
+        counts = {}
+        for frames in trials:
+            samples = np.asarray(frames, dtype=np.int64)
+            if len(samples) < WINDOW:
+                continue
+            filtered = [
+                filter_fixed(
+                    sections,
+                    np.clip(samples[:, c], -32768, 32767).astype(np.int16),
+                )
+                for c in range(channel_count)
+            ]
+            rows = []
+            for end in range(WINDOW, len(samples) + 1, HOP):
+                row = []
+                for column in filtered:
+                    row.extend(compute_features(
+                        column[end - WINDOW:end], ZERO_CROSSING_THRESHOLD
+                    ))
+                rows.append(row)
+            if not rows:
+                continue
+            for predicted in model.predict(np.asarray(rows, dtype=np.int64)):
+                label = str(predicted)
+                counts[label] = counts.get(label, 0) + 1
+        if counts:
+            confusion[name] = counts
+    return confusion
+
+
+def classification_report(confusion, threshold_floor=None, totals=None):
+    """Per gesture: how often its own trials were called by its own name."""
+    report = {}
+    for name, counts in confusion.items():
+        total = sum(counts.values())
+        correct = counts.get(name, 0)
+        report[name] = {
+            "windows": total,
+            "correct_fraction": round(correct / total, 2) if total else 0.0,
+            "called": {
+                label: round(count / total, 2)
+                for label, count in sorted(
+                    counts.items(), key=lambda item: -item[1]
+                )
+            },
+        }
+    return report
 
 
 def gesture_sustain_windows(name):
@@ -569,6 +649,37 @@ def diagnose_failure(summary):
     )
 
 
+def classification_warning(summary):
+    """Which gestures the model does not recognise on this donning.
+
+    Reported beside the separation verdict rather than folded into it. They
+    answer different questions -- "are the bands apart" and "is this gesture
+    still itself" -- and a donning can pass one while failing the other, which
+    is how 2026-08-25 spent two hours on a session whose wrist extension the
+    model never once identified.
+    """
+    report = summary.get("classification", {})
+    failing = sorted(
+        (name, item) for name, item in report.items()
+        if item["correct_fraction"] < CLASSIFICATION_MIN_CORRECT
+    )
+    if not failing:
+        return None
+    parts = []
+    for name, item in failing:
+        called = max(item["called"], key=item["called"].get)
+        parts.append(
+            f"{name} was called {name} in only "
+            f"{item['correct_fraction']:.0%} of its own trials"
+            + (f", mostly {called}" if called != name else "")
+        )
+    return (
+        "; ".join(parts)
+        + ". Amplitude is fine and the model does not recognise the gesture, "
+        "so re-place the electrode over it -- no threshold can fix this."
+    )
+
+
 def verdict_message(summary):
     separation = summary["separation_ratio"]
     if summary["verdict"] == "pass":
@@ -621,7 +732,13 @@ class Capture:
         return self.info
 
     def prompt(self, label, seconds):
-        """Count in, capture, and return the window totals for one interval."""
+        """Count in, capture, and return the window totals for one interval.
+
+        The frames are kept alongside them rather than discarded. Reducing to
+        total MAV answers "how loud" and throws away "which gesture", and the
+        second question turned out to be the one a passing donning can still
+        fail -- see classify_trials.
+        """
         print(f"\n  {label}")
         for remaining in (3, 2, 1):
             print(f"    starting in {remaining}...", flush=True)
@@ -634,9 +751,8 @@ class Capture:
                 f"only {len(frames)} fully-attached frames captured during "
                 f"'{label}'; an electrode is loose"
             )
-        return total_mav_windows(
-            np.asarray(frames, dtype=np.int64), self.info.channel_count
-        )
+        samples = np.asarray(frames, dtype=np.int64)
+        return total_mav_windows(samples, self.info.channel_count), samples
 
 
 def send_calibration(connection, *, mode, factor, baseline_shift,
@@ -713,27 +829,32 @@ def run_capture(connection):
     info = capture.wait_for_info()
     print(f"  board: {info.channel_count} channels at {info.sample_rate_hz} Hz")
 
-    rest = capture.prompt(
+    rest, _ = capture.prompt(
         f"REST - sit still, arm relaxed ({REST_SECONDS:.0f} s)", REST_SECONDS
     )
     preparation = []
     for trial in range(1, PREPARATION_TRIALS + 1):
-        preparation.append(capture.prompt(
+        totals, _ = capture.prompt(
             f"PREPARATION {trial}/{PREPARATION_TRIALS} - shift your wrist "
             f"slightly, as if adjusting position, NOT a command",
             PREPARATION_SECONDS,
-        ))
+        )
+        preparation.append(totals)
     gestures = {}
+    gesture_frames = {}
     for name in CAPTURED_GESTURES:
-        trials = []
+        trials, frames = [], []
         for trial in range(1, GESTURE_TRIALS + 1):
-            trials.append(capture.prompt(
+            totals, samples = capture.prompt(
                 f"{name} {trial}/{GESTURE_TRIALS} - "
                 f"{GESTURE_PROMPTS[name]}",
                 GESTURE_SECONDS,
-            ))
+            )
+            trials.append(totals)
+            frames.append(samples)
         gestures[name] = trials
-    return rest, preparation, gestures
+        gesture_frames[name] = frames
+    return rest, preparation, gestures, gesture_frames, info.channel_count
 
 
 def print_summary(summary):
@@ -747,6 +868,21 @@ def print_summary(summary):
     print(f"  weakest gesture         {summary['weakest_gesture']} "
           f"({summary['weakest_gesture_plateau']})")
     print(f"  separation ratio        {summary['separation_ratio']}")
+    report = summary.get("classification", {})
+    if report:
+        print("  --- what the model called each gesture's own trials ---")
+        for name in sorted(report):
+            item = report[name]
+            called = ", ".join(
+                f"{label} {fraction:.0%}"
+                for label, fraction in item["called"].items()
+            )
+            flag = "" if item["correct_fraction"] >= CLASSIFICATION_MIN_CORRECT \
+                else "   <-- UNUSABLE"
+            print(f"  {name:<23} {called}{flag}")
+    elif "classification_error" in summary:
+        print(f"  classification check skipped: "
+              f"{summary['classification_error']}")
     for name, value in summary["reference_levels"].items():
         ratio = summary["reference_over_threshold"].get(name)
         suffix = f"  ({ratio}x T_session)" if ratio is not None else ""
@@ -763,6 +899,9 @@ def print_summary(summary):
               f"(needs {item['windows_needed']}) -> "
               f"{item['trials_firing']}/{item['trials']} fire")
     print("=" * 58)
+    warning = classification_warning(summary)
+    if warning:
+        print(f"  WARNING: {warning}")
     if "weak_gesture_warning" in summary:
         print(f"  WARNING: {summary['weak_gesture_warning']}")
     if "rest_contamination_warning" in summary:
@@ -827,8 +966,18 @@ def main(argv=None):
                     baseline_shift=FROZEN_BASELINE_SHIFT, threshold_floor=110,
                 )
                 started = datetime.datetime.now().astimezone()
-                rest, preparation, gestures = run_capture(connection)
+                (rest, preparation, gestures, frames,
+                 channels) = run_capture(connection)
                 summary = summarize(rest, preparation, gestures)
+                try:
+                    summary["classification"] = classification_report(
+                        classify_trials(frames, channels)
+                    )
+                except (ValueError, OSError) as error:
+                    # A missing or malformed model header must not destroy a
+                    # capture the wearer just sat through; the threshold half
+                    # of the calibration stands on its own.
+                    summary["classification_error"] = str(error)
                 summary["started"] = started.isoformat()
                 summary["port"] = arguments.port
                 # Keep the windows the verdict was computed from. The first
