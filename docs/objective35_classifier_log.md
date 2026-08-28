@@ -1276,7 +1276,12 @@ number looked healthy. The cause was upstream of everything being adjusted.
 ### Held-out by session is not held-out
 
 `evaluate_loso` held out one session at a time, and manifests recorded no
-electrode application. Every day of collection produced more than one session
+electrode application. Not for want of knowing: the 2026-08-18 direction-gesture
+comparison above states it outright -- "leave-one-session-out inside one
+donning measures repeatability, not transfer; the electrodes never moved" --
+and does the train-on-A, test-on-B folds by hand. The finding lived in this
+document and never reached the tool, so every model trained afterwards was
+accepted on the number the document had already said was the wrong one. Every day of collection produced more than one session
 on one donning -- the deployed model's six training sessions span three days --
 so a held-out session's own donning sat in the training set, and the accepted
 accuracy measured within-donning performance. Cross-donning accuracy, the
@@ -1430,6 +1435,16 @@ measures the wrong thing. This one was collected against that note.
 
 ## Lessons
 
+- **A finding that lives in the log and not in the tool has not been
+  applied.** This project worked out on 2026-08-18 that leave-one-session-out
+  inside one donning measures repeatability rather than transfer, wrote it
+  down, and did the cross-donning folds by hand -- and then trained and
+  accepted every later model on the number it had already rejected, because
+  `evaluate_loso` still held out by session. Whoever runs the tool next, the
+  author three weeks later included, gets the tool's default behaviour and not
+  the document's conclusion. The fix was to make the tool refuse: a donning is
+  required at capture, folds group by it, and a single-donning dataset is not
+  scored at all.
 - **Held-out means held out on the thing that varies.** Leaving out one
   session while its own donning stays in training measures within-donning
   accuracy and reads as the cross-donning number that decides whether the
