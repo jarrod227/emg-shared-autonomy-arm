@@ -297,6 +297,36 @@ entry. Promote it on first use.
   `datasets/emg_calibration/calibration_20260815_155306.json`, is consistent
   with the paper's no-feedback figure and is not yet written up in a log.
 
+### `scheme2014motionnormalized`
+
+- Type: research paper
+- Primary source: [PubMed record](https://pubmed.ncbi.nlm.nih.gov/23475378/)
+  and [IEEE Xplore](https://ieeexplore.ieee.org/abstract/document/6473893)
+- DOI: [10.1109/TNSRE.2013.2247421](https://doi.org/10.1109/TNSRE.2013.2247421)
+- Metadata: Scheme, Lock, Hargrove, Hill, Kuruganti, Englehart, *IEEE
+  Transactions on Neural Systems and Rehabilitation Engineering*, 2014
+  Jan;22(1):149-57.
+- Verified claim: two proportional-control algorithms for pattern
+  recognition-based myoelectric control that automatically configure
+  **motion-specific gains** and normalize the control space to the user's
+  usable dynamic range, with **class-specific normalization parameters
+  computed from the data collected during classifier training**, requiring no
+  additional user action. Reported improvements over the incumbent method of
+  21% for amputee and 40% for able-bodied subjects.
+- Read: abstract and bibliographic record only. The full text has not been
+  read, so no experimental condition, metric definition, or number from it may
+  enter project prose beyond what is written above.
+- Claim boundary: the improvement figures come from the abstract and their
+  experimental conditions have not been checked here.
+- Use: Objective 3.5 -- **this is the prior art for what this project measures
+  per direction.** Measuring a full-deflection reference for each steering
+  gesture and normalizing that gesture's activation against its own reference
+  is class-specific normalization, published in 2014. This project derives its
+  references from a separate per-donning calibration capture rather than from
+  the classifier training data, which is a variant of the procedure and not a
+  new idea. Recorded so no part of the reference-level work is described as
+  novel.
+
 ### `hwang2017robustness`
 
 - Type: research paper
@@ -343,6 +373,15 @@ entry. Promote it on first use.
   59.5 kB footprint does not fit an STM32F103C8T6 at all: 20 kB RAM total and
   about 20 kB of flash left after the current firmware. The paper does not
   claim its architecture is necessary for the categorical-label result.
+- Use: Objective 3.5 -- the feasibility precedent that kept proportional
+  control from categorical labels on the table when it was in question. No
+  method, architecture, or result from this paper is used in the
+  implementation: direction comes from the classifier class and magnitude from
+  the envelope, which is not their regression network. Their photograph-guided
+  re-donning was adopted in intent -- photographs are taken -- but no protocol
+  uses them yet. Their day-1/day-7 result without recalibration is the
+  contrast this project cannot claim: every session here is recalibrated, and
+  contact was measured decaying within hours.
 - Use: Objective 3.5 -- the source for training a proportional output from the
   discrete gesture labels this project already records, which would remove the
   need for a measured reference level and the downlink to carry it. The
