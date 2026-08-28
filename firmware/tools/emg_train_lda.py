@@ -63,6 +63,10 @@ class SessionFeatures:
     labels: np.ndarray
     trial_ids: np.ndarray
     manifest_path: pathlib.Path | None = None
+    # Which electrode application this was recorded under. None for sessions
+    # captured before the field existed; those cannot be grouped, and
+    # evaluate_loso says so rather than guessing.
+    donning: str | None = None
 
     def __post_init__(self):
         rows = len(self.features)
@@ -409,6 +413,7 @@ def load_feature_session(
         labels=labels,
         trial_ids=trial_ids,
         manifest_path=path,
+        donning=manifest.get("donning"),
     )
 
 
@@ -671,16 +676,56 @@ def trial_predictions(actual, predicted, scores, trial_ids, labels=LABELS):
     return np.asarray(trial_actual, dtype=object), np.asarray(trial_predicted, dtype=object)
 
 
+def _evaluation_groups(sessions):
+    """Group sessions by donning, or refuse to pretend they are independent.
+
+    Holding out one session at a time puts a held-out session's own donning
+    back into the training set whenever more than one session was recorded on
+    it, and the number that comes out is within-donning accuracy. The quantity
+    that decides whether a wearer can use the system tomorrow is cross-donning
+    accuracy, and it was never what this reported: the deployed model's six
+    training sessions span three days, and held-out donnings from 2026-08-14
+    give NEXT_TARGET at 2%, 12%, 68%, 100% and 100%.
+
+    Sessions recorded before the field existed carry no donning, and there is
+    no way to recover it. They are grouped one per fold, as before, and the
+    caller is told the result is not a cross-donning number.
+    """
+    if any(session.donning is None for session in sessions):
+        return (
+            [[session] for session in sessions],
+            "leave_one_session_out",
+            "at least one session has no donning recorded, so folds cannot be "
+            "grouped by electrode application; this is a within-donning "
+            "number wherever a donning contributed more than one session",
+        )
+    groups = {}
+    for session in sessions:
+        groups.setdefault(session.donning, []).append(session)
+    return list(groups.values()), "leave_one_donning_out", None
+
+
 def evaluate_loso(sessions, *, ridge=DEFAULT_RIDGE, labels=LABELS):
     if len(sessions) < 2:
         raise ValueError("leave-one-session-out validation needs at least 2 sessions")
+    groups, method, caveat = _evaluation_groups(sessions)
+    if len(groups) < 2:
+        raise ValueError(
+            "held-out validation needs at least two donnings; every session "
+            "here was recorded on one electrode application, and a model "
+            "cannot be validated against the variation it never saw"
+        )
     folds = []
     all_window_actual = []
     all_window_predicted = []
     all_trial_actual = []
     all_trial_predicted = []
-    for held_out in sessions:
-        training = [session for session in sessions if session is not held_out]
+    for group in groups:
+        held_out = _merge_sessions(group)
+        training = [
+            session for session in sessions
+            if all(session is not member for member in group)
+        ]
         train_features = np.vstack([session.features for session in training])
         train_labels = np.concatenate([session.labels for session in training])
         model = fit_lda(
@@ -705,8 +750,8 @@ def evaluate_loso(sessions, *, ridge=DEFAULT_RIDGE, labels=LABELS):
         all_trial_actual.extend(trial_actual.tolist())
         all_trial_predicted.extend(trial_predicted.tolist())
 
-    return {
-        "method": "leave_one_session_out",
+    result = {
+        "method": method,
         "folds": folds,
         "overall_window": matrix_metrics(
             confusion_matrix(all_window_actual, all_window_predicted, labels),
@@ -717,6 +762,28 @@ def evaluate_loso(sessions, *, ridge=DEFAULT_RIDGE, labels=LABELS):
             labels,
         ),
     }
+    if caveat:
+        result["caveat"] = caveat
+    return result
+
+
+def _merge_sessions(group):
+    """One fold's held-out sessions as a single session-shaped record."""
+    if len(group) == 1:
+        return group[0]
+    return SessionFeatures(
+        session_id="+".join(session.session_id for session in group),
+        features=np.vstack([session.features for session in group]),
+        labels=np.concatenate([session.labels for session in group]),
+        # Trial ids are only unique within a session, so they are namespaced
+        # before merging or two sessions' trial 0 would be scored as one.
+        trial_ids=np.concatenate([
+            np.char.add(f"{session.session_id}:",
+                        session.trial_ids.astype(str))
+            for session in group
+        ]),
+        donning=group[0].donning,
+    )
 
 
 def format_confusion(matrix, labels=LABELS):

@@ -719,6 +719,7 @@ class CaptureApp:
         manifest = self.session.to_manifest(
             seed=self.seed,
             status=self._final_status,
+            donning=self.arguments.donning,
         )
         manifest.update(
             {
@@ -842,6 +843,18 @@ def parse_arguments(argv=None):
     parser.add_argument("--port", default="/dev/ttyACM0")
     parser.add_argument("--out-root")
     parser.add_argument("--session-id")
+    parser.add_argument(
+        "--donning",
+        required=True,
+        help=(
+            "identifier for this electrode application. Sessions recorded "
+            "without taking the band off share one; re-placing the electrodes "
+            "starts a new one. Required, because evaluation held out by "
+            "session rather than by donning measures within-donning accuracy "
+            "and reads as the cross-donning number that actually decides "
+            "whether the system works tomorrow."
+        ),
+    )
     parser.add_argument("--repetitions", type=int)
     parser.add_argument("--prepare-seconds", type=float)
     parser.add_argument("--transition-seconds", type=float, default=0.5)

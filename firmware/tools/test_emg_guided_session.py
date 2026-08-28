@@ -9,6 +9,7 @@ import pytest
 
 import emg_guided_capture as capture
 from emg_guided_session import (
+    EVENT_GATE_LABELS,
     CLASSIFIER_PROTOCOL,
     EVENT_GATE_PROTOCOL,
     GESTURE_ACTIONS,
@@ -73,12 +74,27 @@ def finish_active_and_verify(session, active_end, verify_end=None):
 
 
 def test_accepted_gesture_mapping_is_frozen():
+    """Frozen against the deployed model, not against habit.
+
+    ULNAR joined the model on 2026-08-23 and was missing here until 2026-08-27,
+    so every session recorded in between omitted the class the model was
+    newest and least validated on.
+    """
     assert GESTURE_ACTIONS == {
         "REST": "RELAX",
         "NEXT_TARGET": "WRIST UP",
         "CONFIRM": "MAKE A FIST",
         "ABORT": "WRIST DOWN",
+        "ULNAR": "TILT TOWARD THE LITTLE FINGER",
     }
+
+
+def test_the_collectable_gestures_are_the_ones_the_model_has():
+    # A class the model judges but this tool cannot record is a class that can
+    # only ever be trained on data from somewhere else.
+    from emg_train_lda import LABELS
+
+    assert set(GESTURE_ACTIONS) == set(LABELS)
 
 
 def test_plan_is_balanced_by_randomized_repetition_block():
@@ -98,7 +114,7 @@ def test_plan_is_balanced_by_randomized_repetition_block():
 def test_event_gate_plan_wraps_every_event_in_labelled_rest():
     plan = build_event_gate_plan(3, seed=123)
 
-    assert len(plan) == 1 + 2 * 3 * (len(GESTURE_LABELS) - 1)
+    assert len(plan) == 1 + 2 * 3 * (len(EVENT_GATE_LABELS) - 1)
     assert plan[0].label == plan[-1].label == "REST"
     for index, trial in enumerate(plan):
         assert trial.index == index
@@ -111,7 +127,9 @@ def test_event_gate_plan_wraps_every_event_in_labelled_rest():
             for trial in plan
             if trial.repetition == repetition and trial.label != "REST"
         }
-        assert labels == set(GESTURE_LABELS) - {"REST"}
+        # Direction-only classes are absent: they produce no event for a
+        # REST bracket to wrap.
+        assert labels == set(EVENT_GATE_LABELS) - {"REST"}
 
 
 CANDIDATE_GESTURES = {
@@ -404,6 +422,7 @@ def test_session_rejects_non_positive_or_non_finite_timing():
 
 def test_gesture_cli_builds_a_replacement_set_and_defaults_to_none():
     parsed = capture.parse_arguments([
+        "--donning", "d1",
         "--gesture", "REST=RELAX",
         "--gesture", "PRONATE=ROTATE PALM DOWN",
     ])
@@ -412,7 +431,7 @@ def test_gesture_cli_builds_a_replacement_set_and_defaults_to_none():
     # No --gesture means None, which the plan builders resolve to the four
     # protocol commands. It must not become an empty dict, which would be
     # rejected as a malformed set instead of meaning "unchanged".
-    assert capture.parse_arguments([]).gestures is None
+    assert capture.parse_arguments(["--donning", "d1"]).gestures is None
 
 
 @pytest.mark.parametrize("entry", [
@@ -424,20 +443,23 @@ def test_malformed_gesture_arguments_exit_rather_than_collect(entry):
     # argparse errors exit(2); collecting a session against a half-parsed
     # label set would waste the wearer's time and produce unusable data.
     with pytest.raises(SystemExit):
-        capture.parse_arguments(["--gesture", entry])
+        capture.parse_arguments(["--donning", "d1", "--gesture", entry])
 
 
 def test_a_repeated_gesture_label_is_an_error_not_a_silent_overwrite():
     with pytest.raises(SystemExit):
         capture.parse_arguments([
+            "--donning", "d1",
             "--gesture", "PRONATE=ROTATE PALM DOWN",
             "--gesture", "PRONATE=TURN PALM DOWN",
         ])
 
 
 def test_event_gate_cli_uses_short_independent_collection_defaults():
-    classifier = capture.parse_arguments([])
-    event_gate = capture.parse_arguments(["--protocol", EVENT_GATE_PROTOCOL])
+    classifier = capture.parse_arguments(["--donning", "d1"])
+    event_gate = capture.parse_arguments(["--donning", "d1",
+                                          "--protocol",
+                                          EVENT_GATE_PROTOCOL])
 
     assert classifier.out_root == "datasets/emg"
     assert classifier.repetitions == 5
@@ -486,7 +508,7 @@ class FakeConnection:
 
 class FakeRecording:
     def __init__(self):
-        self.info = SimpleNamespace(channel_count=3)
+        self.info = SimpleNamespace(donning='d1', channel_count=3)
         self.raw_frames = 6000
         self.last_raw_timestamp_us = 3000000
 
@@ -593,7 +615,7 @@ class FakeFinishWorker:
         )
 
     def snapshot(self):
-        return SimpleNamespace(position=position(6000))
+        return SimpleNamespace(donning='d1', position=position(6000))
 
 
 def bare_capture_app(tmp_path):
@@ -601,7 +623,7 @@ def bare_capture_app(tmp_path):
     app.worker = FakeFinishWorker()
     app.session = GuidedSession(one_trial())
     app.seed = 7
-    app.arguments = SimpleNamespace(port="/dev/fake")
+    app.arguments = SimpleNamespace(donning='d1', port="/dev/fake")
     app.session_id = "test_session"
     app.bin_path = pathlib.Path(tmp_path) / "session.bin"
     app.json_path = pathlib.Path(tmp_path) / "session.json"

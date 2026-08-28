@@ -7,6 +7,8 @@ import numpy as np
 import pytest
 
 from emg_train_lda import (
+    SessionFeatures,
+    evaluate_loso,
     FEATURE_NAMES,
     LABELS,
     LDAModel,
@@ -76,7 +78,7 @@ def balanced_manifest(*, session_id="session_test", labels=LABELS):
 
 def test_manifest_requires_complete_balanced_labels():
     manifest = balanced_manifest()
-    assert len(validate_complete_manifest(manifest)) == 4
+    assert len(validate_complete_manifest(manifest)) == len(LABELS)
 
     manifest["segments"][0]["include"] = False
     manifest["completed_trials"] -= 1
@@ -85,7 +87,9 @@ def test_manifest_requires_complete_balanced_labels():
         validate_complete_manifest(manifest)
 
 
-CANDIDATE_LABELS = LABELS + ("RADIAL", "ULNAR", "PRONATE")
+# ULNAR is a model class now, so the screening set adds only the two
+# candidates that never made it in.
+CANDIDATE_LABELS = LABELS + ("RADIAL", "PRONATE")
 
 
 def test_labels_come_from_the_session_not_the_module_constant():
@@ -191,11 +195,11 @@ def test_global_windows_stay_wholly_inside_included_segments():
     features, labels, trial_ids = extract_feature_windows(columns, manifest)
 
     # Each aligned 600-frame segment yields ends at +400, +500, +600.
-    assert features.shape == (12, len(FEATURE_NAMES))
+    assert features.shape == (3 * len(LABELS), len(FEATURE_NAMES))
     assert {label: int(np.count_nonzero(labels == label)) for label in LABELS} == {
         label: 3 for label in LABELS
     }
-    assert len(set(trial_ids)) == 4
+    assert len(set(trial_ids)) == len(LABELS)
 
 
 def test_complete_selector_skips_stopped_session(tmp_path):
@@ -361,3 +365,64 @@ def test_trial_vote_uses_majority_and_score_for_tie():
 
     assert trial_actual.tolist() == ["REST"]
     assert trial_predicted.tolist() == ["ABORT"]
+
+
+def features_for(session_id, donning, rows=8, label_cycle=None):
+    labels = np.array(
+        [(label_cycle or LABELS)[i % len(label_cycle or LABELS)]
+         for i in range(rows)]
+    )
+    rng = np.random.default_rng(abs(hash(session_id)) % (2 ** 32))
+    return SessionFeatures(
+        session_id=session_id,
+        features=rng.normal(size=(rows, len(FEATURE_NAMES))),
+        labels=labels,
+        trial_ids=np.arange(rows),
+        donning=donning,
+    )
+
+
+def test_folds_are_held_out_by_donning_not_by_session():
+    """Two sessions on one donning must never straddle a fold.
+
+    Leave-one-session-out put a held-out session's own donning back into the
+    training set, so the accepted number measured within-donning performance.
+    Held-out donnings from 2026-08-14 give NEXT_TARGET at 2%, 12%, 68%, 100%
+    and 100% -- the spread the reported figure could not contain.
+    """
+    sessions = [
+        features_for("a1", "donningA"),
+        features_for("a2", "donningA"),
+        features_for("b1", "donningB"),
+    ]
+
+    result = evaluate_loso(sessions)
+
+    assert result["method"] == "leave_one_donning_out"
+    assert len(result["folds"]) == 2
+    held = {fold["held_out_session"] for fold in result["folds"]}
+    assert "a1+a2" in held and "b1" in held
+    for fold in result["folds"]:
+        assert not (set(fold["training_sessions"]) & {"a1", "a2"}) or \
+            fold["held_out_session"] != "a1+a2"
+
+
+def test_sessions_without_a_donning_are_reported_as_not_cross_donning():
+    sessions = [features_for("a1", None), features_for("b1", None)]
+
+    result = evaluate_loso(sessions)
+
+    assert result["method"] == "leave_one_session_out"
+    assert "cannot be grouped" in result["caveat"]
+
+
+def test_a_single_donning_cannot_be_validated_at_all():
+    # Every session on one electrode application says nothing about the
+    # variation the wearer will actually meet.
+    sessions = [
+        features_for("a1", "donningA"),
+        features_for("a2", "donningA"),
+    ]
+
+    with pytest.raises(ValueError, match="two donnings"):
+        evaluate_loso(sessions)

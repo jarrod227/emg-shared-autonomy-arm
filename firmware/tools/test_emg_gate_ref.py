@@ -41,7 +41,8 @@ def test_label_order_matches_the_c_command_enum():
     # The fixture stores commands as emg_command_t values and this module reads
     # them as indices into LABELS. That is only sound while the two agree, and
     # nothing else in this file would notice if they stopped.
-    assert LABELS == ("REST", "NEXT_TARGET", "CONFIRM", "ABORT")
+    assert LABELS == ("REST", "NEXT_TARGET", "CONFIRM", "ABORT",
+                      "ULNAR")
 
 
 def test_c_gate_matches_python_event_for_event():

@@ -25,8 +25,21 @@ GESTURE_ACTIONS = {
     "NEXT_TARGET": "WRIST UP",
     "CONFIRM": "MAKE A FIST",
     "ABORT": "WRIST DOWN",
+    # The fifth class has been in the deployed model since 2026-08-23 and was
+    # not collectable here, so every session since was recorded without it and
+    # the model's newest class was trained on data this tool cannot produce.
+    "ULNAR": "TILT TOWARD THE LITTLE FINGER",
 }
 GESTURE_LABELS = tuple(GESTURE_ACTIONS)
+
+# ULNAR steers the view axis and never reaches the event gate, so it has no
+# event to bracket with REST and cannot be validated by the event-gate
+# protocol. Including it there would demand events the firmware will not emit
+# and fail every such session as unbalanced.
+DIRECTION_ONLY_LABELS = ("ULNAR",)
+EVENT_GATE_LABELS = tuple(
+    label for label in GESTURE_LABELS if label not in DIRECTION_ONLY_LABELS
+)
 CLASSIFIER_PROTOCOL = "classifier"
 EVENT_GATE_PROTOCOL = "event-gate"
 COLLECTION_PROTOCOLS = (CLASSIFIER_PROTOCOL, EVENT_GATE_PROTOCOL)
@@ -150,6 +163,10 @@ def build_event_gate_plan(repetitions, seed, gestures=None):
         raise TypeError("seed must be an integer")
 
     resolved = _resolve_gestures(gestures)
+    resolved = {
+        label: action for label, action in resolved.items()
+        if label not in DIRECTION_ONLY_LABELS
+    }
     if "REST" not in resolved:
         raise ValueError(
             "the event-gate protocol brackets every gesture with a labelled "
@@ -648,10 +665,26 @@ class GuidedSession:
         self._set_phase(Phase.STOPPED, now)
         self.last_result = reason
 
-    def to_manifest(self, *, seed, status):
-        """Return the serializable experiment contract for the sidecar."""
+    def to_manifest(self, *, seed, status, donning=None):
+        """Return the serializable experiment contract for the sidecar.
+
+        ``donning`` identifies the electrode application this session was
+        recorded under. Sessions recorded without taking the band off share
+        one; a session after re-placing the electrodes gets a new one.
+
+        It is recorded because held-out evaluation is dishonest without it.
+        Leave-one-session-out puts a held-out session's own donning back into
+        the training set whenever more than one session was recorded on it,
+        and the deployed model's six training sessions span three days --
+        so the number it was accepted on measures within-donning accuracy,
+        while the quantity that decides whether a wearer can use the system
+        tomorrow is cross-donning accuracy, which was never measured. Held-out
+        donnings recorded on 2026-08-14 give NEXT_TARGET at 2%, 12%, 68%,
+        100% and 100%.
+        """
         return {
-            "schema_version": 1,
+            "schema_version": 2,
+            "donning": donning,
             "collection_protocol": self.protocol,
             "status": status,
             "gesture_actions": {

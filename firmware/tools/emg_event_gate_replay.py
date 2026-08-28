@@ -29,6 +29,7 @@ from emg_protocol import (
 )
 from emg_train_lda import (
     CHANNEL_COUNT,
+    DIRECTION_ONLY_LABELS,
     FEATURE_NAMES,
     LABELS,
     SCHEMA_VERSION,
@@ -43,7 +44,14 @@ from emg_train_lda import (
 
 
 SAMPLE_RATE_HZ = 2000
-ACTIVE_LABELS = tuple(label for label in LABELS if label != "REST")
+# REST produces no event, and neither does a direction-only class: ULNAR
+# steers the view axis and is never a gate output, so an event-gate session
+# has nothing to bracket it with and would be rejected as unbalanced for
+# missing events the firmware will not emit.
+ACTIVE_LABELS = tuple(
+    label for label in LABELS
+    if label != "REST" and label not in DIRECTION_ONLY_LABELS
+)
 
 
 @dataclass(frozen=True)
