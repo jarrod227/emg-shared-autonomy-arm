@@ -165,11 +165,18 @@ learn the outcome.
 | 3 | 1 | `last_result` | `0` no SET ever received, `1` last SET accepted, `2` last SET rejected (values out of range) |
 | 4 | 4 | `threshold_floor` | `int32`, floor in effect |
 | 8 | 2 | `applied_sequence` | `sequence` of the last **accepted** SET; `0` before the first |
-| 10 | 2 | `reserved` | write `0` |
+| 10 | 2 | `baseline` | `uint16`, the EMA rest baseline in effect, saturated into 16 bits; `0` before any rest has been observed |
 | 12 | 4 | `reference_left` | `int32`, full-deflection level for the LEFT gesture; `0` = none, firmware fallback in use |
 | 16 | 4 | `reference_right` | `int32`, same for RIGHT |
 
 Payload length 20.
+
+`baseline` occupies bytes the layout previously reserved, so the payload length
+did not change when it was added. It is reported because `threshold_floor` is
+only half of what the board judges with: the comparison is against
+`max(factor * baseline, threshold_floor)`, and only the baseline moves during a
+session. A gesture that fired during calibration and produces nothing an hour
+later, with every other reported number unchanged, is that half moving.
 
 The references are reported, not merely accepted, because this is how a host
 confirms a calibration: a field it cannot read back is a field it cannot
@@ -280,6 +287,10 @@ including the raw EMG datasets this project retrains models from, whose
 INFO/RAW/INTENT bytes the change did not touch. Paying that to describe an
 incompatibility that two length checks already report is the worse trade. The
 rule protects against silence, not against incompatibility.
+
+- **2026-08-25** — `ACTIVATION_STATE` byte 10 became `baseline`, taking two
+  bytes the layout had reserved. No length change and compatible in both
+  directions: an older parser skipped those bytes and still can.
 
 - **2026-08-23** — `ACTIVATION_STATE` grew to 20 bytes and `SET_ACTIVATION`
   to 16, both by appending `reference_left` and `reference_right`. No version

@@ -305,14 +305,15 @@ against their own gesture. Commanding a rate costs the property that one
 effort always names one angle and buys back the property that a push in a
 direction moves in that direction, at a speed the push chooses.
 
-The five accepted sessions train and evaluate only the discrete four-class
-branch. They do not contain `LEFT`/`RIGHT` labels and cannot validate the
-proportional branch. Before that branch is implemented, choose two physical
-direction actions that do not reuse wrist-flexion/down `ABORT`, then run a
-separate short calibration containing neutral rest, both directions, and a
-comfortable maximum contraction. Direction comes from the calibrated signed
-pattern and activation from the normalized envelope; target-angle labels such
-as 10/20/30 degrees are unnecessary. `HOLD` initially means the activation is
+This was written while the proportional branch was unimplemented and the
+2026-08-14 sessions carried no `LEFT`/`RIGHT` labels. Both are settled:
+wrist extension and ulnar deviation are the two direction actions, neither
+reusing wrist flexion's `ABORT`, and five donning-labelled five-class sessions
+were collected on 2026-08-27/28. Direction comes from the classifier class and
+activation from the normalized envelope, against a full-deflection reference
+measured per donning *and per direction* -- one number cannot serve both, since
+the same capture measured 4.19x and 5.51x of the session threshold for the two
+gestures. Target-angle labels are unnecessary, as expected. `HOLD` initially means the activation is
 inside the deadband or no fresh direction command exists, not another mandatory
 contraction class.
 
@@ -830,8 +831,8 @@ responsibilities are:
 | markerless object perception | Objective 3.2 complete; pure mask/aligned-XYZ localization, YOLO adapter, synthetic/exact-time live publishers, organized point cloud, 10 Hz default-gap runtime, and measured bottle-distance check verified |
 | generalized target selector/tracker | Objective 3.2/3.5 integration; N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose + confirmation-gated retained publisher implemented; status contract pending |
 | shared ROS interfaces | `AssistiveIntent`, `HandObservation`, `ViewControlCommand`, `ObjectCandidate`, and `ObjectCandidateArray` implemented; target-status contract remains planned |
-| STM32 EMG firmware | Objective 3.5 in progress: raw acquisition plus Q29 DSP/features, Q18 classifier, activation, frozen gate, and 20 Hz INTENT live; ordinary-activity/soak metrics remain |
-| PC EMG tooling | Objective 3.5 in progress: full host pipeline, frozen gate, and activation validation implemented; reproducible absolute-frame MCU/host comparison tool remains |
+| STM32 EMG firmware | Objective 3.5 complete: raw acquisition, Q29 DSP/features, Q18 classifier, per-donning activation and per-direction reference levels, frozen gate, and 20 Hz INTENT live; ten minutes of ordinary activity produced zero false triggers |
+| PC EMG tooling | Objective 3.5 complete: full host pipeline, frozen gate, activation validation, the absolute-frame MCU/host comparison tool, and a calibration that classifies its own trials against the deployed model; validation holds out by donning |
 | EMG USB CDC ROS bridge | Objective 3.5 planned MVP Python/`rclpy`; optional measured `rclcpp` receiver/parser/ring-buffer rewrite in Phase 3 |
 | SO-ARM101 LeRobot backend (backend B) | Objective 5 (Phase 2; real-arm commands, cancellation, gripper/held-object status) |
 | eye-in-hand calibration and deterministic visual refinement | Objective 5 (stereo remount/recalibration plus `PREGRASP -> REOBSERVE -> REFINE -> GRASP`) |
