@@ -1,0 +1,35 @@
+{
+  "byte_rate": 13450.7,
+  "bytes": 807060,
+  "elapsed_sec": 60.001,
+  "frames": 120000,
+  "frames_all_attached": 120000,
+  "frames_per_device_second": 2000.0,
+  "info": {
+    "adc_bits": 12,
+    "channel_count": 3,
+    "firmware_version": 256,
+    "frames_per_raw_packet": 32,
+    "sample_rate_hz": 2000
+  },
+  "packets": {
+    "info": 30,
+    "intent": 1200,
+    "raw": 3750
+  },
+  "parser": {
+    "accepted": 4980,
+    "discarded_bytes": 0,
+    "duplicated": 0,
+    "lost": 0,
+    "malformed": 0,
+    "reasons": {},
+    "time_reversed": 0
+  },
+  "port": "/dev/ttyACM0",
+  "raw_packets_before_info": 105,
+  "sample_rate_hz_nominal": 2000,
+  "sample_rate_hz_wall": 2000.0,
+  "started": "2026-08-14T14:39:20.422263-04:00",
+  "usable_fraction": 1.0
+}

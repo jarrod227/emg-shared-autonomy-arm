@@ -1,0 +1,1210 @@
+{
+  "collection_protocol": "classifier",
+  "completed_trials": 25,
+  "created": "2026-08-28T09:21:08.422433-04:00",
+  "donning": "A3",
+  "final_phase": "complete",
+  "final_stream_position": {
+    "detached_by_channel": [
+      0,
+      0,
+      0
+    ],
+    "duplicated_packets": 0,
+    "frame_index": 367136,
+    "lost_packets": 0,
+    "malformed_packets": 0,
+    "time_reversed_packets": 0,
+    "timestamp_us": 386256000
+  },
+  "gesture_actions": {
+    "ABORT": "WRIST DOWN",
+    "CONFIRM": "MAKE A FIST",
+    "NEXT_TARGET": "WRIST UP",
+    "REST": "RELAX",
+    "ULNAR": "TILT TOWARD THE LITTLE FINGER"
+  },
+  "last_result": "accepted ABORT",
+  "minimum_active_fraction": 0.9,
+  "pause_spans": [],
+  "port": "/dev/ttyACM0",
+  "raw_log": "session.bin",
+  "sample_rate_hz": 2000,
+  "schedule": [
+    {
+      "action": "WRIST UP",
+      "index": 0,
+      "label": "NEXT_TARGET",
+      "repetition": 1
+    },
+    {
+      "action": "RELAX",
+      "index": 1,
+      "label": "REST",
+      "repetition": 1
+    },
+    {
+      "action": "TILT TOWARD THE LITTLE FINGER",
+      "index": 2,
+      "label": "ULNAR",
+      "repetition": 1
+    },
+    {
+      "action": "MAKE A FIST",
+      "index": 3,
+      "label": "CONFIRM",
+      "repetition": 1
+    },
+    {
+      "action": "WRIST DOWN",
+      "index": 4,
+      "label": "ABORT",
+      "repetition": 1
+    },
+    {
+      "action": "TILT TOWARD THE LITTLE FINGER",
+      "index": 5,
+      "label": "ULNAR",
+      "repetition": 2
+    },
+    {
+      "action": "WRIST DOWN",
+      "index": 6,
+      "label": "ABORT",
+      "repetition": 2
+    },
+    {
+      "action": "RELAX",
+      "index": 7,
+      "label": "REST",
+      "repetition": 2
+    },
+    {
+      "action": "MAKE A FIST",
+      "index": 8,
+      "label": "CONFIRM",
+      "repetition": 2
+    },
+    {
+      "action": "WRIST UP",
+      "index": 9,
+      "label": "NEXT_TARGET",
+      "repetition": 2
+    },
+    {
+      "action": "TILT TOWARD THE LITTLE FINGER",
+      "index": 10,
+      "label": "ULNAR",
+      "repetition": 3
+    },
+    {
+      "action": "RELAX",
+      "index": 11,
+      "label": "REST",
+      "repetition": 3
+    },
+    {
+      "action": "WRIST DOWN",
+      "index": 12,
+      "label": "ABORT",
+      "repetition": 3
+    },
+    {
+      "action": "WRIST UP",
+      "index": 13,
+      "label": "NEXT_TARGET",
+      "repetition": 3
+    },
+    {
+      "action": "MAKE A FIST",
+      "index": 14,
+      "label": "CONFIRM",
+      "repetition": 3
+    },
+    {
+      "action": "WRIST UP",
+      "index": 15,
+      "label": "NEXT_TARGET",
+      "repetition": 4
+    },
+    {
+      "action": "MAKE A FIST",
+      "index": 16,
+      "label": "CONFIRM",
+      "repetition": 4
+    },
+    {
+      "action": "TILT TOWARD THE LITTLE FINGER",
+      "index": 17,
+      "label": "ULNAR",
+      "repetition": 4
+    },
+    {
+      "action": "RELAX",
+      "index": 18,
+      "label": "REST",
+      "repetition": 4
+    },
+    {
+      "action": "WRIST DOWN",
+      "index": 19,
+      "label": "ABORT",
+      "repetition": 4
+    },
+    {
+      "action": "RELAX",
+      "index": 20,
+      "label": "REST",
+      "repetition": 5
+    },
+    {
+      "action": "TILT TOWARD THE LITTLE FINGER",
+      "index": 21,
+      "label": "ULNAR",
+      "repetition": 5
+    },
+    {
+      "action": "MAKE A FIST",
+      "index": 22,
+      "label": "CONFIRM",
+      "repetition": 5
+    },
+    {
+      "action": "WRIST UP",
+      "index": 23,
+      "label": "NEXT_TARGET",
+      "repetition": 5
+    },
+    {
+      "action": "WRIST DOWN",
+      "index": 24,
+      "label": "ABORT",
+      "repetition": 5
+    }
+  ],
+  "schema_version": 2,
+  "seed": 2457055602,
+  "segments": [
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 15136,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 210256000
+      },
+      "end_host_sec": 5.725502,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 8992,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 207184000
+      },
+      "start_host_sec": 2.657342,
+      "trial": {
+        "action": "WRIST UP",
+        "index": 0,
+        "label": "NEXT_TARGET",
+        "repetition": 1
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 30048,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 217712000
+      },
+      "end_host_sec": 13.195288,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 24000,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 214688000
+      },
+      "start_host_sec": 10.153744,
+      "trial": {
+        "action": "RELAX",
+        "index": 1,
+        "label": "REST",
+        "repetition": 1
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 44608,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 224992000
+      },
+      "end_host_sec": 20.468045,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 38624,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 222000000
+      },
+      "start_host_sec": 17.461015,
+      "trial": {
+        "action": "TILT TOWARD THE LITTLE FINGER",
+        "index": 2,
+        "label": "ULNAR",
+        "repetition": 1
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 59328,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 232352000
+      },
+      "end_host_sec": 27.82854,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 53312,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 229344000
+      },
+      "start_host_sec": 24.809999,
+      "trial": {
+        "action": "MAKE A FIST",
+        "index": 3,
+        "label": "CONFIRM",
+        "repetition": 1
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 73856,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 239616000
+      },
+      "end_host_sec": 35.080785,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 67840,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 236608000
+      },
+      "start_host_sec": 32.077607,
+      "trial": {
+        "action": "WRIST DOWN",
+        "index": 4,
+        "label": "ABORT",
+        "repetition": 1
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 88416,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 246896000
+      },
+      "end_host_sec": 42.36667,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 82304,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 243840000
+      },
+      "start_host_sec": 39.319905,
+      "trial": {
+        "action": "TILT TOWARD THE LITTLE FINGER",
+        "index": 5,
+        "label": "ULNAR",
+        "repetition": 2
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 103040,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 254208000
+      },
+      "end_host_sec": 49.682839,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 96992,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 251184000
+      },
+      "start_host_sec": 46.64459,
+      "trial": {
+        "action": "WRIST DOWN",
+        "index": 6,
+        "label": "ABORT",
+        "repetition": 2
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 117760,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 261568000
+      },
+      "end_host_sec": 57.044542,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 111584,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 258480000
+      },
+      "start_host_sec": 53.945057,
+      "trial": {
+        "action": "RELAX",
+        "index": 7,
+        "label": "REST",
+        "repetition": 2
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 132416,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 268896000
+      },
+      "end_host_sec": 64.371577,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 126336,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 265856000
+      },
+      "start_host_sec": 61.336831,
+      "trial": {
+        "action": "MAKE A FIST",
+        "index": 8,
+        "label": "CONFIRM",
+        "repetition": 2
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 147040,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 276208000
+      },
+      "end_host_sec": 71.674166,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 140928,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 273152000
+      },
+      "start_host_sec": 68.625684,
+      "trial": {
+        "action": "WRIST UP",
+        "index": 9,
+        "label": "NEXT_TARGET",
+        "repetition": 2
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 161728,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 283552000
+      },
+      "end_host_sec": 79.011829,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 155584,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 280480000
+      },
+      "start_host_sec": 75.941569,
+      "trial": {
+        "action": "TILT TOWARD THE LITTLE FINGER",
+        "index": 10,
+        "label": "ULNAR",
+        "repetition": 3
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 176384,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 290880000
+      },
+      "end_host_sec": 86.346102,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 170368,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 287872000
+      },
+      "start_host_sec": 83.335847,
+      "trial": {
+        "action": "RELAX",
+        "index": 11,
+        "label": "REST",
+        "repetition": 3
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 190816,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 298096000
+      },
+      "end_host_sec": 93.566644,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 184768,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 295072000
+      },
+      "start_host_sec": 90.539066,
+      "trial": {
+        "action": "WRIST DOWN",
+        "index": 12,
+        "label": "ABORT",
+        "repetition": 3
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 205568,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 305472000
+      },
+      "end_host_sec": 100.94842,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 199456,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 302416000
+      },
+      "start_host_sec": 97.875296,
+      "trial": {
+        "action": "WRIST UP",
+        "index": 13,
+        "label": "NEXT_TARGET",
+        "repetition": 3
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 220224,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 312800000
+      },
+      "end_host_sec": 108.263335,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 214144,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 309760000
+      },
+      "start_host_sec": 105.228313,
+      "trial": {
+        "action": "MAKE A FIST",
+        "index": 14,
+        "label": "CONFIRM",
+        "repetition": 3
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 235040,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 320208000
+      },
+      "end_host_sec": 115.684692,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 228832,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 317104000
+      },
+      "start_host_sec": 112.58731,
+      "trial": {
+        "action": "WRIST UP",
+        "index": 15,
+        "label": "NEXT_TARGET",
+        "repetition": 4
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 249760,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 327568000
+      },
+      "end_host_sec": 123.023208,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 243648,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 324512000
+      },
+      "start_host_sec": 119.984162,
+      "trial": {
+        "action": "MAKE A FIST",
+        "index": 16,
+        "label": "CONFIRM",
+        "repetition": 4
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 264224,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 334800000
+      },
+      "end_host_sec": 130.271498,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 258176,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 331776000
+      },
+      "start_host_sec": 127.244908,
+      "trial": {
+        "action": "TILT TOWARD THE LITTLE FINGER",
+        "index": 17,
+        "label": "ULNAR",
+        "repetition": 4
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 278976,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 342176000
+      },
+      "end_host_sec": 137.649025,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 272928,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 339152000
+      },
+      "start_host_sec": 134.621318,
+      "trial": {
+        "action": "RELAX",
+        "index": 18,
+        "label": "REST",
+        "repetition": 4
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 293472,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 349424000
+      },
+      "end_host_sec": 144.883798,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 287360,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 346368000
+      },
+      "start_host_sec": 141.835281,
+      "trial": {
+        "action": "WRIST DOWN",
+        "index": 19,
+        "label": "ABORT",
+        "repetition": 4
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 308384,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 356880000
+      },
+      "end_host_sec": 152.349324,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 302208,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 353792000
+      },
+      "start_host_sec": 149.271053,
+      "trial": {
+        "action": "RELAX",
+        "index": 20,
+        "label": "REST",
+        "repetition": 5
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 322912,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 364144000
+      },
+      "end_host_sec": 159.604459,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 316896,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 361136000
+      },
+      "start_host_sec": 156.602862,
+      "trial": {
+        "action": "TILT TOWARD THE LITTLE FINGER",
+        "index": 21,
+        "label": "ULNAR",
+        "repetition": 5
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 337408,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 371392000
+      },
+      "end_host_sec": 166.854179,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 331296,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 368336000
+      },
+      "start_host_sec": 163.814316,
+      "trial": {
+        "action": "MAKE A FIST",
+        "index": 22,
+        "label": "CONFIRM",
+        "repetition": 5
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 352096,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 378736000
+      },
+      "end_host_sec": 174.212567,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 346112,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 375744000
+      },
+      "start_host_sec": 171.208479,
+      "trial": {
+        "action": "WRIST UP",
+        "index": 23,
+        "label": "NEXT_TARGET",
+        "repetition": 5
+      }
+    },
+    {
+      "attempt": 1,
+      "end": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 366848,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 386112000
+      },
+      "end_host_sec": 181.579739,
+      "include": true,
+      "reasons": [],
+      "start": {
+        "detached_by_channel": [
+          0,
+          0,
+          0
+        ],
+        "duplicated_packets": 0,
+        "frame_index": 360832,
+        "lost_packets": 0,
+        "malformed_packets": 0,
+        "time_reversed_packets": 0,
+        "timestamp_us": 383104000
+      },
+      "start_host_sec": 178.559363,
+      "trial": {
+        "action": "WRIST DOWN",
+        "index": 24,
+        "label": "ABORT",
+        "repetition": 5
+      }
+    }
+  ],
+  "session_id": "session_20260828_092108",
+  "status": "complete",
+  "stream_summary": {
+    "byte_rate": 13467.8,
+    "bytes": 2472298,
+    "elapsed_sec": 183.572,
+    "frames": 367136,
+    "frames_all_attached": 367136,
+    "frames_per_device_second": 2000.0,
+    "info": {
+      "adc_bits": 12,
+      "channel_count": 3,
+      "firmware_version": 256,
+      "frames_per_raw_packet": 32,
+      "sample_rate_hz": 2000
+    },
+    "packets": {
+      "3": 92,
+      "info": 92,
+      "intent": 3671,
+      "raw": 11473
+    },
+    "parser": {
+      "accepted": 15328,
+      "discarded_bytes": 0,
+      "duplicated": 0,
+      "lost": 0,
+      "malformed": 0,
+      "reasons": {},
+      "time_reversed": 0
+    },
+    "port": "/dev/ttyACM0",
+    "raw_packets_before_info": 80,
+    "sample_rate_hz_nominal": 2000,
+    "sample_rate_hz_wall": 2000.0,
+    "started": "2026-08-28T09:21:08.422433-04:00",
+    "usable_fraction": 1.0
+  },
+  "timing_seconds": {
+    "active_labelled": 3.0,
+    "prepare": 2.0,
+    "recovery_unlabelled": 1.5,
+    "transition_unlabelled": 0.5,
+    "verification_unlabelled": 0.1
+  },
+  "total_trials": 25
+}

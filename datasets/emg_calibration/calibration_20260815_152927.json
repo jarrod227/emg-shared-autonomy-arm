@@ -1,0 +1,18 @@
+{
+  "baseline_shift": 4,
+  "factor": 3,
+  "gesture_plateaus": {
+    "ABORT": 130.0,
+    "CONFIRM": 239.8,
+    "NEXT_TARGET": 194.5
+  },
+  "port": "/dev/ttyACM0",
+  "preparation_upper": 85.7,
+  "rest_upper": 53.5,
+  "separation_ratio": 1.52,
+  "started": "2026-08-15T15:29:27.775897-04:00",
+  "threshold_floor": 106,
+  "verdict": "fail",
+  "weakest_gesture": "ABORT",
+  "weakest_gesture_plateau": 130.0
+}

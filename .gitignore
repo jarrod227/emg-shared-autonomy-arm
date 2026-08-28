@@ -63,13 +63,19 @@ checkerboard_*.png
 docs/SO-ARM101开源6轴机械臂/
 docs/单目相机/
 
-# Local ML datasets and generated training artifacts
-datasets/
+# Generated training artifacts, all of them reproducible from what is tracked.
 runs/
 weights/
 *.pt
 *.onnx
 *.engine
+
+# datasets/ is deliberately NOT ignored. Every number in docs/ is derived from
+# those recordings by tools in this repository, so tracking them is what makes
+# the claims checkable rather than merely stated. 44 MB across 74 files, the
+# largest 2.4 MB, which is comfortably inside GitHub's limits and needs no LFS.
+# They contain no paths, usernames, or identifiers -- only samples, labels, and
+# calibration summaries.
 firmware/test/test_emg_rx
 
 # Claude Code local settings. The installed skills and skills-lock.json are a
