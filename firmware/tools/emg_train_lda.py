@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Train and evaluate the Objective 3.5 four-intent LDA baseline.
+"""Train and evaluate the Objective 3.5 intent LDA baseline.
 
 The guided collector stores one continuous RAW stream plus exact half-open
 frame ranges for every ACTIVE gesture.  This tool filters each channel once
 over that continuous stream, then keeps only feature windows that fit wholly
-inside an accepted labelled range.  Validation is leave-one-session-out: the
-overlapping 200 ms windows from one recording can never leak into both train
-and test data.
+inside an accepted labelled range.
+
+Validation holds out one *donning* at a time wherever the sessions record
+which electrode application they came from, and says so when they do not.
+Overlapping 200 ms windows from one recording cannot leak into both train and
+test data, and neither can two recordings of one electrode placement -- which
+is the leak that made the previously accepted figure a within-donning number
+while the quantity that matters is cross-donning.
 
 Example::
 
-    python3 firmware/tools/emg_train_lda.py datasets/emg \
+    python3 firmware/tools/emg_train_lda.py datasets/emg --require-donning \
         --output datasets/emg/lda_model.json
 """
 
@@ -425,7 +430,8 @@ def load_feature_session(
     )
 
 
-def load_dataset(dataset_root, threshold=ZERO_CROSSING_THRESHOLD):
+def load_dataset(dataset_root, threshold=ZERO_CROSSING_THRESHOLD,
+                 require_donning=False):
     """Load every complete session and the one label set they all share.
 
     Sessions that disagree on their labels cannot be pooled: a fold would
@@ -435,6 +441,22 @@ def load_dataset(dataset_root, threshold=ZERO_CROSSING_THRESHOLD):
     the reported accuracy is an accuracy *of*.
     """
     paths, skipped = select_complete_manifests(dataset_root)
+    if require_donning:
+        # Keeping only sessions that can be grouped by electrode application.
+        # Without it a fold is held out by session, which puts the held-out
+        # recording's own donning back into training and reports a
+        # within-donning number as if it were a cross-donning one.
+        kept = []
+        for path in paths:
+            manifest = read_manifest(path)
+            if manifest.get("donning"):
+                kept.append(path)
+            else:
+                skipped.append({
+                    "session_id": manifest.get("session_id", path.parent.name),
+                    "status": "no donning recorded",
+                })
+        paths = kept
     if not paths:
         raise ValueError("no complete sessions are available for training")
     labels = manifest_labels(read_manifest(paths[0]), paths[0])
@@ -876,6 +898,15 @@ def main(argv=None):
         type=pathlib.Path,
         help="model JSON (default: DATASET_ROOT/lda_model.json)",
     )
+    parser.add_argument(
+        "--require-donning",
+        action="store_true",
+        help=(
+            "train only on sessions that record which electrode application "
+            "they came from, so folds can be held out by donning. Sessions "
+            "recorded before that field existed are listed as skipped."
+        ),
+    )
     parser.add_argument("--ridge", type=float, default=DEFAULT_RIDGE)
     parser.add_argument(
         "--fraction-bits",
@@ -901,7 +932,9 @@ def main(argv=None):
     output = arguments.output or root / "lda_model.json"
     try:
         sessions, skipped, labels = load_dataset(
-            root, arguments.zero_crossing_threshold
+            root,
+            arguments.zero_crossing_threshold,
+            require_donning=arguments.require_donning,
         )
         if tuple(labels) not in (PROTOCOL_COMMAND_LABELS, FIRMWARE_LABELS):
             print(
@@ -919,7 +952,9 @@ def main(argv=None):
         validation = evaluate_loso(
             sessions, ridge=arguments.ridge, labels=labels
         )
-        print("\nLeave-one-session-out:")
+        print(f"\n{validation['method'].replace('_', '-')}:")
+        if validation.get("caveat"):
+            print(f"  NOTE: {validation['caveat']}")
         for fold in validation["folds"]:
             print(
                 f"  {fold['held_out_session']}: "
