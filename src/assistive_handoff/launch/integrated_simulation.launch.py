@@ -33,6 +33,7 @@ def generate_launch_description():
     planning_frame = LaunchConfiguration("planning_frame")
     camera_frame = LaunchConfiguration("camera_frame")
     appears_after_sec = LaunchConfiguration("appears_after_sec")
+    sim_motion_sec = LaunchConfiguration("sim_motion_sec")
 
     return LaunchDescription([
         DeclareLaunchArgument("planning_frame", default_value="world"),
@@ -45,6 +46,11 @@ def generate_launch_description():
         # can already see. Set this to run the acquisition path instead:
         # sweep, observation arrives, stop, lock, confirm.
         DeclareLaunchArgument("appears_after_sec", default_value="0.0"),
+        # How long the simulated motion takes. Shortening it does not
+        # touch the decision path -- a state transition caused by an
+        # intent happens before the motion it starts -- so a latency
+        # run can cycle quickly without biasing what it measures.
+        DeclareLaunchArgument("sim_motion_sec", default_value="2.0"),
 
         # A placeholder, and labelled as one wherever it appears. The real
         # camera-to-world extrinsic is an Objective 5 deliverable and does not
@@ -96,6 +102,7 @@ def generate_launch_description():
             parameters=[{
                 "proportional_search_available": True,
                 "search_timeout_sec": 300.0,
+                "sim_motion_sec": sim_motion_sec,
             }],
             output="screen",
         ),

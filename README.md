@@ -35,6 +35,10 @@ From the closed-loop session of 2026-08-28 (`docs/objective35_classifier_log.md`
   ordinary activity — typing, a cup, a phone, posture changes.
 - Cross-donning classification, holding out one electrode application at a
   time: **93.3–95.1%** window accuracy over five donnings.
+- A published intent reaches the state it causes in **2.4 ms** (median of 40
+  cycles). The wearer feels that plus two parts measured separately: the event
+  gate's 650 ms for `ABORT`, and a 26 ms median serial receipt. So an `ABORT`
+  arrives in about **680 ms**, of which the gate is 96%.
 
 ## What does not work
 

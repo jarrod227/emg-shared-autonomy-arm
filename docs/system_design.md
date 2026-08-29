@@ -403,7 +403,7 @@ old bench extrinsic or the latest TF is invalid.
 | semantic object candidates | instance mask + stereo points | synthetic and exact-time live publishers implemented; 10 Hz default-gap runtime and measured bottle-distance check complete (3.2) |
 | discrete intent | simulated input, then STM32 bridge | simulated source implemented (4.1); STM32 planned (3.5) |
 | bounded search command | simulated input, then STM32 bridge | simulated contract/controller implemented (4.3); STM32 source planned (3.5) |
-| target acquisition and final pose | generalized target selector | N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose + confirmation-gated retained publisher implemented; status contract pending |
+| target acquisition and final pose | generalized target selector | N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose implemented, with the locked target reported every frame it stays visible rather than only on a confirmation -- the controller's acquisition needs observations before the confirmation, not because of it; status contract pending |
 
 The former four-class offline training plan is abandoned. Existing unused code
 does not add traffic or state to the runtime ROS graph and must not be treated
@@ -822,24 +822,56 @@ responsibilities are:
 | fixed target-pose publisher | implemented and runtime-verified |
 | unified `/target_object_pose` interface | implemented and runtime-verified |
 | ArUco pose baseline | implemented (`marker_pose_provider` + `target_selector`), accuracy quantified (3.1) |
-| source-neutral handoff controller | implemented (Objectives 4.1/4.3 Phase-0; simulated actions plus target/intent/hand/view inputs and two bounded search states) |
+| source-neutral handoff controller | implemented (Objectives 4.1/4.3; target/intent/hand/view inputs and two bounded search states) with a selectable motion backend: timers for tests, or MoveIt through the goal construction Objective 1 was verified with, shared in `assistive_motion` |
 | shared stereo acquisition/rectification | DECXIN composite capture, same-stamp left/right split, run-2 CameraInfo, rectified topics, disparity, and organized `/stereo/points2` live-verified; shared stamp does not prove exposure sync |
 | stereo hand-observation node | Objective 4.2 fixed-bench scope complete after 2026-08-11 measurements; synthetic/live paths, MediaPipe detector, representative-point adapter, quality/volume/stability gates, exact stamps, and watchdog implemented; documented pose-bias, delivery-volume, exposure-sync, shutdown, and Objective 5 extrinsic gaps remain |
-| bounded active-view search controller | implemented as Objective 4.3 Phase-0 simulated motion; physical view joint deferred to Objective 5 |
+| bounded active-view search controller | implemented as Objective 4.3; the view axis itself is still simulated and the physical view joint is deferred to Objective 5 |
 | simulated target/intent/hand providers | implemented (Objective 4.1) |
 | simulated view provider | implemented (Objective 4.3) |
 | markerless object perception | Objective 3.2 complete; pure mask/aligned-XYZ localization, YOLO adapter, synthetic/exact-time live publishers, organized point cloud, 10 Hz default-gap runtime, and measured bottle-distance check verified |
-| generalized target selector/tracker | Objective 3.2/3.5 integration; N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose + confirmation-gated retained publisher implemented; status contract pending |
+| generalized target selector/tracker | Objective 3.2/3.5 integration; N-frame gate + ROS candidate/intent subscriptions + lock/watchdog + exact-stamp TF/grasp pose implemented, with the locked target reported every frame it stays visible rather than only on a confirmation -- the controller's acquisition needs observations before the confirmation, not because of it; status contract pending |
 | shared ROS interfaces | `AssistiveIntent`, `HandObservation`, `ViewControlCommand`, `ObjectCandidate`, and `ObjectCandidateArray` implemented; target-status contract remains planned |
 | STM32 EMG firmware | Objective 3.5 complete: raw acquisition, Q29 DSP/features, Q18 classifier, per-donning activation and per-direction reference levels, frozen gate, and 20 Hz INTENT live; ten minutes of ordinary activity produced zero false triggers |
 | PC EMG tooling | Objective 3.5 complete: full host pipeline, frozen gate, activation validation, the absolute-frame MCU/host comparison tool, and a calibration that classifies its own trials against the deployed model; validation holds out by donning |
-| EMG USB CDC ROS bridge | Objective 3.5 planned MVP Python/`rclpy`; optional measured `rclcpp` receiver/parser/ring-buffer rewrite in Phase 3 |
+| EMG USB CDC ROS bridge | Objective 3.5 complete: Python/`rclpy`, with a warm-up-chosen device-clock anchor and the calibration handshake verified against the board's reported state; optional measured `rclcpp` rewrite in Phase 3 |
 | SO-ARM101 LeRobot backend (backend B) | Objective 5 (Phase 2; real-arm commands, cancellation, gripper/held-object status) |
 | eye-in-hand calibration and deterministic visual refinement | Objective 5 (stereo remount/recalibration plus `PREGRASP -> REOBSERVE -> REFINE -> GRASP`) |
 | learned ACT policy + EMG intervention layer (backend C) | Objective 6 (Phase 3, PhD research) |
 | MuJoCo environment + thin policy adapter | Objective 6 (Phase 3; repeated seeded simulation and learning evaluation, not real-arm validation) |
 | one measured rclcpp rewrite (reaching coordinator default; EMG bridge alternative), MuJoCo evaluation, LeRobot imitation learning | Phase 3 (conditional) |
 | evaluation tooling | incremental scripts or package |
+
+### Intent-to-action latency, and the wearer-facing figure it composes into
+
+Measured 2026-08-29 over 40 cycles of the integrated chain, from a published
+`/assistive_intent` to the state transition it causes:
+
+| | ms |
+| --- | ---: |
+| median | 2.4 |
+| p95 | 3.2 |
+| max | 3.6 |
+
+Deliberately measured without the board. The wearer-facing delay is this plus
+two parts that are known on their own, and folding them in here would add a
+fixed offset and the electrodes' variance to a figure about the software path.
+
+| stage | source | ms |
+| --- | --- | ---: |
+| event gate, `ABORT` | 13 windows at 50 ms, frozen | 650 |
+| event gate, others | 17 windows at 50 ms, frozen | 850 |
+| serial receipt | 599 diagnostic samples over ten minutes, median | 26 |
+| serial receipt, p95 | same | 49 |
+| decision path | 40 cycles, median | 2.4 |
+
+So a wearer's `ABORT` reaches the state machine in about **680 ms**, and the
+gate is 96% of it. That number is the one Objective 6's design turns on: an
+action-chunk length below it cannot be interrupted within a chunk, and the
+floor is set by the gate rather than by anything in the software.
+
+`CONFIRM` and `NEXT_TARGET` cost more than their 850 ms row suggests, because
+a published intent needs two gate events inside the 5.5 s confirmation window
+-- two gestures, at the wearer's own pace, not one.
 
 Avoid creating these packages until their milestone begins and their interfaces
 are understood.
