@@ -48,7 +48,21 @@ class SyntheticObjectCandidatePublisher(Node):
         if not isinstance(self._simulate_no_detection, bool):
             raise ValueError('simulate_no_detection must be a boolean')
 
-        self._result = self._build_synthetic_result()
+        # Seconds of empty frames before the object appears. Zero means it is
+        # there from the first frame, which is the historical behaviour and
+        # cannot exercise a search: the handoff controller only searches when
+        # no target is available, and correctly goes straight to the object it
+        # can already see. Giving the object an arrival time is what lets the
+        # acquisition path -- sweep, observation arrives, stop, lock -- be run.
+        self._appears_after_sec = _nonnegative_parameter(
+            self,
+            'appears_after_sec',
+        )
+        self._started_at = self.get_clock().now()
+        self._empty_result = self._build_synthetic_result(detected=False)
+        self._result = self._build_synthetic_result(
+            detected=not self._simulate_no_detection
+        )
         self._publisher = self.create_publisher(
             ObjectCandidateArray,
             candidate_topic,
@@ -78,6 +92,7 @@ class SyntheticObjectCandidatePublisher(Node):
         # real path does not produce, against a gate correctly sized for it.
         self.declare_parameter('publish_rate_hz', 10.0)
         self.declare_parameter('pair_skew_sec', 0.005)
+        self.declare_parameter('appears_after_sec', 0.0)
         self.declare_parameter('class_label', 'bottle')
         self.declare_parameter('class_confidence', 0.9)
         self.declare_parameter('track_id', 1)
@@ -86,7 +101,7 @@ class SyntheticObjectCandidatePublisher(Node):
         self.declare_parameter('object_point_z', 0.7)
         self.declare_parameter('simulate_no_detection', False)
 
-    def _build_synthetic_result(self):
+    def _build_synthetic_result(self, detected=None):
         xyz_points = np.full(
             (8, 8, 3),
             [
@@ -96,8 +111,10 @@ class SyntheticObjectCandidatePublisher(Node):
             ],
             dtype=np.float64,
         )
+        if detected is None:
+            detected = not self._simulate_no_detection
         detections = ()
-        if not self._simulate_no_detection:
+        if detected:
             detections = (
                 InstanceMaskDetection(
                     class_label=_string_parameter(self, 'class_label'),
@@ -120,8 +137,14 @@ class SyntheticObjectCandidatePublisher(Node):
 
     def _publish(self):
         now = self.get_clock().now()
+        elapsed_sec = (now - self._started_at).nanoseconds / 1_000_000_000
+        result = (
+            self._empty_result
+            if elapsed_sec < self._appears_after_sec
+            else self._result
+        )
         message = object_candidate_array_from_result(
-            self._result,
+            result,
             self._frame_id,
             source_time_nanoseconds=now.nanoseconds,
             pair_skew_sec=self._pair_skew_sec,

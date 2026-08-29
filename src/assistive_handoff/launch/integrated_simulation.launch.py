@@ -32,12 +32,19 @@ from launch_ros.actions import Node
 def generate_launch_description():
     planning_frame = LaunchConfiguration("planning_frame")
     camera_frame = LaunchConfiguration("camera_frame")
+    appears_after_sec = LaunchConfiguration("appears_after_sec")
 
     return LaunchDescription([
         DeclareLaunchArgument("planning_frame", default_value="world"),
         DeclareLaunchArgument(
             "camera_frame", default_value="stereo_left_optical"
         ),
+        # Seconds before the synthetic object appears. Zero, the default,
+        # means it is visible from the first frame -- and then the controller
+        # never searches, because it correctly goes straight to an object it
+        # can already see. Set this to run the acquisition path instead:
+        # sweep, observation arrives, stop, lock, confirm.
+        DeclareLaunchArgument("appears_after_sec", default_value="0.0"),
 
         # A placeholder, and labelled as one wherever it appears. The real
         # camera-to-world extrinsic is an Objective 5 deliverable and does not
@@ -60,7 +67,10 @@ def generate_launch_description():
             package="markerless_object_perception",
             executable="synthetic_candidate_publisher",
             name="synthetic_candidates",
-            parameters=[{"frame_id": camera_frame}],
+            parameters=[{
+                "frame_id": camera_frame,
+                "appears_after_sec": appears_after_sec,
+            }],
             output="screen",
         ),
 
