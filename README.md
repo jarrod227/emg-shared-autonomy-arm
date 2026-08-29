@@ -16,10 +16,13 @@ say so.
 | Discrete intent on the MCU | `REST` / `NEXT_TARGET` / `CONFIRM` / `ABORT` at 20 Hz, filter → features → Q18 LDA → activation threshold → event gate, entirely on an STM32F103C8T6 (40% flash, 58% RAM) |
 | Proportional view control | wrist extension and ulnar deviation steer one bounded axis; contraction strength selects **rate** |
 | Perception | ArUco baseline, and markerless instance segmentation with passive-stereo metric localization |
-| Handoff | simulated state machine with bounded active-view search, stale-input gating, and global `ABORT` |
+| Handoff | state machine with bounded active-view search, stale-input gating, and global `ABORT` |
+| Arm motion | MoveIt on a simulated Panda, or a timer backend for tests; goal construction shared with the Objective 1 reaching path |
 
-Simulated arm motion. Real-arm validation on an SO-ARM101 is the next
-objective and has not started.
+The whole chain runs end to end from one launch: EMG intent and steering →
+candidate segmentation and stereo localization → target lock → handoff state
+machine → MoveIt. Real-arm validation on an SO-ARM101 is the next objective
+and has not started.
 
 ## Measured, on a wearer
 
@@ -48,10 +51,27 @@ result and not open bugs.
   fifth donning improved internal folds while *degrading* transfer to
   recordings from a fortnight earlier.
 
+## Running the whole chain without hardware
+
+```bash
+ros2 launch assistive_handoff integrated_simulation.launch.py
+# in another terminal, the wearer's inputs:
+ros2 run assistive_handoff sim_intent_publisher      # n / c / a
+```
+
+Add `appears_after_sec:=8.0` to hold the object back and exercise the search
+path: the controller sweeps, stops itself when the observation arrives, locks
+on a second one after the stop, and one CONFIRM takes it to APPROACH.
+
+Add `-p motion_backend:=moveit` to the controller to plan and execute on a
+Panda instead of simulating the motion with timers, with the MoveIt stack
+running separately.
+
 ## Layout
 
 ```
-src/          ROS 2 packages: perception, handoff state machine, EMG bridge
+src/          ROS 2 packages: perception, handoff state machine, EMG bridge,
+              and the MoveIt goal construction they share
 firmware/     STM32 firmware, host tools, and the wire protocol
 datasets/     every recording the numbers above come from
 docs/         design, proposal, and the logs of how each result was reached
