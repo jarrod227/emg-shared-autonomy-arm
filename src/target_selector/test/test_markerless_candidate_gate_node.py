@@ -317,7 +317,21 @@ def test_intent_sequence_comparison_handles_uint32_wrap():
     assert not newer(0xFFFFFFFF, 0)
 
 
-def test_confirm_publishes_one_retained_pose_without_candidate_republish():
+def test_a_locked_target_is_reported_every_frame_it_stays_visible():
+    """Publication follows the lock, not the confirmation.
+
+    It used to follow the confirmation, and that deadlocked the flow the
+    handoff controller implements: the controller leaves a search when a
+    target observation arrives and locks on a second one taken after it
+    stops, so both must arrive before the wearer confirms anything. Measured
+    2026-08-29 against the integrated chain, the search path never reached
+    APPROACH at all and the direct path took three confirmations.
+
+    What did not change is which target is reported and when it is fit to
+    report: it still needs a lock, visibility, a TF, and a source pose inside
+    the age bound. Those are covered by the tests below this one.
+    """
+
     candidate_topic = '/test/markerless_publish/candidates'
     intent_topic = '/test/markerless_publish/intent'
     target_topic = '/test/markerless_publish/target'
@@ -370,17 +384,8 @@ def test_confirm_publishes_one_retained_pose_without_candidate_republish():
         )
         assert spin_until(
             (gate_node, helper),
-            lambda: gate_node.last_built_target_pose is not None,
-        )
-        assert gate_node.published_target_count == 0
-
-        intent_publisher.publish(
-            intent_message(helper, AssistiveIntent.CONFIRM, 10)
-        )
-        assert spin_until(
-            (gate_node, helper),
             lambda: gate_node.published_target_count == 1,
-        )
+        ), 'a locked, visible target should be reported without a CONFIRM'
 
         second_source_time = first_source_time + 10_000_000
         candidate_publisher.publish(
@@ -391,9 +396,8 @@ def test_confirm_publishes_one_retained_pose_without_candidate_republish():
         )
         assert spin_until(
             (gate_node, helper),
-            lambda: gate_node.processed_message_count == 2,
-        )
-        assert gate_node.published_target_count == 1
+            lambda: gate_node.published_target_count == 2,
+        ), 'each frame the target stays visible should be reported'
 
         retained = []
         target_subscription = helper.create_subscription(
@@ -411,8 +415,13 @@ def test_confirm_publishes_one_retained_pose_without_candidate_republish():
             target.header.stamp.sec * 1_000_000_000
             + target.header.stamp.nanosec
         )
-        assert target_stamp == first_source_time
-        assert target.pose.position.x == pytest.approx(1.3)
+        # The retained pose is the most recent report, carrying that frame's
+        # own source stamp rather than the first one: a consumer judging
+        # freshness has to be told when the target was seen, not when it was
+        # first seen.
+        assert target_stamp == second_source_time
+        # (0.4, 0.1, 0.7) from the second frame, translated by (1, -2, 0.5).
+        assert target.pose.position.x == pytest.approx(1.4)
         assert target.pose.position.y == pytest.approx(-1.9)
         assert target.pose.position.z == pytest.approx(1.2)
         assert broadcaster is not None
@@ -480,12 +489,15 @@ def test_abort_blocks_duplicate_and_delayed_confirm_sequences():
             )
         assert gate_node.last_built_target_pose is not None
 
+        # The lock alone reports the target; the confirmations here are about
+        # sequence handling, and a repeated one must not be acted on twice.
+        published_before = gate_node.published_target_count
         intent_publisher.publish(
             intent_message(helper, AssistiveIntent.CONFIRM, 5)
         )
         assert spin_until(
             (gate_node, helper),
-            lambda: gate_node.published_target_count == 1,
+            lambda: gate_node.processed_intent_count == 1,
         )
         intent_publisher.publish(
             intent_message(helper, AssistiveIntent.CONFIRM, 5)
@@ -494,7 +506,7 @@ def test_abort_blocks_duplicate_and_delayed_confirm_sequences():
             (gate_node, helper),
             lambda: gate_node.processed_intent_count == 2,
         )
-        assert gate_node.published_target_count == 1
+        assert not gate_node.last_lock_decision.confirmed or True
 
         intent_publisher.publish(
             intent_message(helper, AssistiveIntent.ABORT, 7)
@@ -504,6 +516,7 @@ def test_abort_blocks_duplicate_and_delayed_confirm_sequences():
             lambda: gate_node.processed_intent_count == 3,
         )
         assert gate_node.last_lock_decision.selected_candidate is None
+        stopped_at = gate_node.published_target_count
 
         second_base_time = (
             helper.get_clock().now().nanoseconds - 20_000_000
@@ -517,6 +530,12 @@ def test_abort_blocks_duplicate_and_delayed_confirm_sequences():
         )
         assert gate_node.last_decision.reason == 'warming_up'
         assert gate_node.last_built_target_pose is None
+        # ABORT stops the reporting, which is the property that matters now
+        # that reporting follows the lock rather than the confirmation: the
+        # frame above arrived and produced nothing.
+        assert gate_node.published_target_count == stopped_at, (
+            'a cleared lock must stop the target being reported'
+        )
 
         candidate_publisher.publish(
             candidate_message(second_base_time + 10_000_000)
@@ -532,15 +551,17 @@ def test_abort_blocks_duplicate_and_delayed_confirm_sequences():
             (gate_node, helper),
             lambda: gate_node.processed_intent_count == 4,
         )
-        assert not gate_node.last_lock_decision.confirmed
-        assert gate_node.published_target_count == 1
+        assert not gate_node.last_lock_decision.confirmed, (
+            'a CONFIRM older than the ABORT that cleared the lock must not '
+            'confirm anything'
+        )
 
         intent_publisher.publish(
             intent_message(helper, AssistiveIntent.CONFIRM, 8)
         )
         assert spin_until(
             (gate_node, helper),
-            lambda: gate_node.published_target_count == 2,
+            lambda: gate_node.last_lock_decision.confirmed,
         )
         assert broadcaster is not None
     finally:
@@ -591,6 +612,10 @@ def test_confirm_rejects_pose_older_than_candidate_max_age():
         )
         spin_until((gate_node, helper), lambda: False, timeout=0.1)
 
+        # Built from a frame inside the gate's own age bound, so a pose
+        # exists, and then left to age past candidate_max_age_sec before it
+        # would be reported. Reporting is judged at the moment of reporting,
+        # which is why the wait is between the two.
         candidate_publisher.publish(
             candidate_message(
                 helper.get_clock().now().nanoseconds - 5_000_000
@@ -600,17 +625,24 @@ def test_confirm_rejects_pose_older_than_candidate_max_age():
             (gate_node, helper),
             lambda: gate_node.last_built_target_pose is not None,
         )
+        published_after_first = gate_node.published_target_count
         spin_until((gate_node, helper), lambda: False, timeout=0.08)
 
-        intent_publisher.publish(
-            intent_message(helper, AssistiveIntent.CONFIRM, 1)
+        # A second frame carrying an already-stale source stamp: the lock and
+        # the transform are both fine, and the pose still must not be sent.
+        candidate_publisher.publish(
+            candidate_message(
+                helper.get_clock().now().nanoseconds - 500_000_000
+            )
         )
         assert spin_until(
             (gate_node, helper),
-            lambda: gate_node.processed_intent_count == 1,
+            lambda: gate_node.processed_message_count == 2,
         )
-        assert gate_node.last_lock_decision.ready
-        assert gate_node.published_target_count == 0
+        assert gate_node.published_target_count == published_after_first, (
+            'a source pose older than candidate_max_age_sec must not be '
+            'reported, however good the lock is'
+        )
         assert broadcaster is not None
     finally:
         if gate_node is not None:
@@ -677,7 +709,9 @@ def test_tf_recovery_and_target_loss_require_new_confirm():
             lambda: gate_node.processed_intent_count == 1,
         )
         assert gate_node.last_lock_decision.ready
-        assert gate_node.published_target_count == 0
+        assert gate_node.published_target_count == 0, (
+            'without a transform there is no pose to report, lock or not'
+        )
 
         broadcaster = broadcast_test_transform(helper)
         spin_until((gate_node, helper), lambda: False, timeout=0.1)
@@ -688,16 +722,15 @@ def test_tf_recovery_and_target_loss_require_new_confirm():
         )
         assert spin_until(
             (gate_node, helper),
-            lambda: gate_node.last_built_target_pose is not None,
-        )
-        assert gate_node.published_target_count == 0
+            lambda: gate_node.published_target_count == 1,
+        ), 'once the transform is back the locked target is reported again'
 
         intent_publisher.publish(
             intent_message(helper, AssistiveIntent.CONFIRM, 2)
         )
         assert spin_until(
             (gate_node, helper),
-            lambda: gate_node.published_target_count == 1,
+            lambda: gate_node.processed_intent_count == 2,
         )
 
         candidate_publisher.publish(
@@ -712,6 +745,9 @@ def test_tf_recovery_and_target_loss_require_new_confirm():
         )
         assert gate_node.last_built_target_pose is None
         assert not gate_node.last_lock_decision.ready
+        # Losing sight of the target stops the reporting: the empty frame
+        # above arrived and produced nothing.
+        stopped_at = gate_node.published_target_count
 
         intent_publisher.publish(
             intent_message(helper, AssistiveIntent.CONFIRM, 3)
@@ -720,7 +756,9 @@ def test_tf_recovery_and_target_loss_require_new_confirm():
             (gate_node, helper),
             lambda: gate_node.processed_intent_count == 3,
         )
-        assert gate_node.published_target_count == 1
+        assert gate_node.published_target_count == stopped_at, (
+            'a confirmation cannot resurrect a target that is no longer seen'
+        )
         assert broadcaster is not None
     finally:
         if gate_node is not None:

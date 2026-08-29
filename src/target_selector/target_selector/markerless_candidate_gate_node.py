@@ -275,6 +275,7 @@ class MarkerlessCandidateGateNode(Node):
         else:
             self._latest_stable_header = None
         self._refresh_built_target_pose()
+        self._publish_locked_target()
         self._processed_message_count += 1
         if self._last_decision.stable_candidates:
             tracks = ', '.join(
@@ -332,8 +333,13 @@ class MarkerlessCandidateGateNode(Node):
         else:
             self._last_lock_decision = self._lock.confirm(now_sec)
         self._refresh_built_target_pose()
-        if message.command == AssistiveIntent.CONFIRM:
-            self._publish_confirmed_target(message, now_sec)
+        # A CONFIRM no longer publishes. It did until 2026-08-29, and now
+        # that a locked target is reported every frame that would be a second
+        # copy of the same pose whose only effect is to make "was this
+        # confirmation accepted" unobservable: the count moves for two
+        # unrelated reasons. The confirmation's effect lives in the lock
+        # decision, and the controller is what acts on it.
+        self._publish_locked_target()
 
         selected = self._last_lock_decision.selected_candidate
         selected_name = (
@@ -465,6 +471,45 @@ class MarkerlessCandidateGateNode(Node):
             self._latest_stable_header = None
             self._last_built_target_pose = None
             self.get_logger().warning('markerless target lock expired')
+
+    def _publish_locked_target(self):
+        """Report where the locked target is, for as long as it is visible.
+
+        This used to happen only in response to a CONFIRM, which deadlocked
+        the flow the handoff controller is written for. That controller stops
+        searching when a target observation arrives -- "observation acquired;
+        stopping view" is its own log line -- and then locks on a second
+        observation taken after the stop. Both have to arrive *before* the
+        wearer confirms anything. Publishing only on CONFIRM meant the
+        controller never saw an observation, never left the sweep, and the
+        gate then refused the CONFIRM because a sweep was still active.
+        Measured 2026-08-29: the wearer pressed confirm three times to reach
+        APPROACH, and on the search path it never got there at all.
+
+        Nothing about *acting* on a target moved here. The controller still
+        requires its own CONFIRM to approach, so gating publication on one as
+        well was a second copy of the same rule -- and the copy is what broke
+        the acquisition the first one depends on.
+
+        Publication stops on its own when the lock ends: an expired lock, a
+        target that goes out of view, or an ABORT all clear the built pose
+        through _refresh_built_target_pose.
+        """
+        if self._last_built_target_pose is None:
+            return
+        stamp = self._last_built_target_pose.header.stamp
+        age_sec = (
+            self.get_clock().now().nanoseconds / 1_000_000_000
+            - (stamp.sec + stamp.nanosec / 1_000_000_000)
+        )
+        if (
+            age_sec < -self._candidate_future_tolerance_sec
+            or age_sec > self._candidate_max_age_sec
+        ):
+            return
+        self._target_publisher.publish(self._last_built_target_pose)
+        self._last_published_target_pose = self._last_built_target_pose
+        self._published_target_count += 1
 
     def _refresh_built_target_pose(self):
         self._last_built_target_pose = None
