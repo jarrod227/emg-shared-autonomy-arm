@@ -60,6 +60,7 @@ import math
 
 import rclpy
 from geometry_msgs.msg import PoseStamped
+from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile
 from rclpy.time import Time
@@ -108,6 +109,19 @@ class HandoffController(Node):
         # for the future MoveIt backend (velocity scaling factor) and only
         # validated here so a bad config fails at startup, not mid-motion.
         self.declare_parameter("speed_scale", 1.0)
+        # "simulated" keeps the Phase-0 timers; "moveit" sends the same goals
+        # the Objective 1 coordinator was verified with, through
+        # assistive_motion. Simulated remains the default because it is what
+        # every test and the integrated launch run against, and because a
+        # backend that needs a planning scene should not be what a
+        # freshly-cloned workspace tries first.
+        self.declare_parameter("motion_backend", "simulated")
+        self.declare_parameter("planning_group", "panda_arm")
+        self.declare_parameter("planning_frame", "world")
+        self.declare_parameter("end_effector_frame", "panda_link8")
+        self.declare_parameter("allowed_planning_time", 5.0)
+        self.declare_parameter("num_planning_attempts", 10)
+        self.declare_parameter("execute_motions", True)
         self.declare_parameter("sim_motion_sec", 2.0)
         self.declare_parameter("motion_timeout_sec", 10.0)
         self.declare_parameter("ready_timeout_sec", 30.0)
@@ -204,6 +218,14 @@ class HandoffController(Node):
         self.declare_parameter("handoff_search_deceleration", 0.5)
 
         self._speed_scale = self.get_parameter("speed_scale").value
+        self._motion_backend = str(
+            self.get_parameter("motion_backend").value
+        ).strip()
+        if self._motion_backend not in ("simulated", "moveit"):
+            raise ValueError(
+                f"motion_backend must be 'simulated' or 'moveit', got "
+                f"{self._motion_backend!r}"
+            )
         if not 0.0 < self._speed_scale <= 1.0:
             raise ValueError(
                 f"speed_scale must be in (0, 1], got {self._speed_scale}"
@@ -273,6 +295,8 @@ class HandoffController(Node):
 
         self._state = HandoffState.IDLE
         self._last_target: PoseStamped | None = None
+        self._move_group_client = None
+        self._move_group_goal_handle = None
         self._last_hand: HandObservation | None = None
         self._fault = False
         # Generation counter: bumped on every transition (and fault latch);
@@ -1174,16 +1198,20 @@ class HandoffController(Node):
         )
 
     def _start_motion(self, result_state: HandoffState) -> None:
-        # Phase-0 uses a one-shot timer in place of a MoveIt action goal; the
-        # deadline timer is the watchdog for a motion that never reports.
-        # Motion-backend integration replaces the completion timer with the
-        # real goal request and routes its result into _on_motion_result.
+        """Begin the motion for the state just entered.
+
+        The timeout watchdog is armed the same way whatever moves the arm: a
+        backend that never reports is the failure it exists for, and a real
+        one can fail that way as easily as a simulated one.
+        """
         epoch = self._epoch
         if self._simulate_stuck_motion == self._state.value:
             self.get_logger().warning(
                 f"simulate_stuck_motion: motion in '{self._state.value}' "
                 "will never complete"
             )
+        elif self._motion_backend == "moveit":
+            self._start_moveit_motion(epoch, result_state)
         else:
             self._pending_timers.append(
                 self.create_timer(
@@ -1196,6 +1224,120 @@ class HandoffController(Node):
                 self._motion_timeout_sec,
                 lambda: self._on_motion_timeout(epoch),
             )
+        )
+
+    def _planning_settings(self):
+        from assistive_motion.goal_builders import PlanningSettings
+
+        return PlanningSettings(
+            planning_group=str(self.get_parameter("planning_group").value),
+            planning_frame=str(self.get_parameter("planning_frame").value),
+            end_effector_frame=str(
+                self.get_parameter("end_effector_frame").value
+            ),
+            allowed_planning_time=float(
+                self.get_parameter("allowed_planning_time").value
+            ),
+            num_planning_attempts=int(
+                self.get_parameter("num_planning_attempts").value
+            ),
+            # speed_scale finally has a consumer. It was declared for this and
+            # documented as unused by the simulated motion.
+            velocity_scaling=float(self._speed_scale),
+            acceleration_scaling=float(self._speed_scale),
+            execute=bool(self.get_parameter("execute_motions").value),
+        )
+
+    def _motion_goal(self, result_state: HandoffState):
+        """Which goal this state's motion is asking MoveIt for."""
+        from assistive_motion.goal_builders import (
+            HOME_JOINT_POSITIONS,
+            build_joint_goal,
+            build_pose_goal,
+        )
+
+        settings = self._planning_settings()
+        if self._state is HandoffState.APPROACH:
+            if self._last_target is None:
+                raise ValueError("APPROACH has no target pose to plan to")
+            pose = self._last_target.pose
+            return build_pose_goal(
+                settings,
+                (pose.position.x, pose.position.y, pose.position.z),
+                (
+                    pose.orientation.x,
+                    pose.orientation.y,
+                    pose.orientation.z,
+                    pose.orientation.w,
+                ),
+            )
+        if self._state is HandoffState.RELEASE:
+            # The delivery zone is fixed and the wearer's hand comes to it;
+            # the hand observation gates whether releasing is allowed, it does
+            # not steer the arm. Identity orientation matches the pose goal
+            # the Objective 1 path sends for a position-only target.
+            return build_pose_goal(
+                settings, self._delivery_center, (0.0, 0.0, 0.0, 1.0)
+            )
+        return build_joint_goal(settings, HOME_JOINT_POSITIONS)
+
+    def _start_moveit_motion(
+        self, epoch: int, result_state: HandoffState
+    ) -> None:
+        from moveit_msgs.action import MoveGroup
+        from moveit_msgs.msg import MoveItErrorCodes
+
+        if self._move_group_client is None:
+            self._move_group_client = ActionClient(
+                self, MoveGroup, "move_action"
+            )
+        if not self._move_group_client.server_is_ready():
+            # Not a timeout to wait out: without a planner nothing will move,
+            # and the state machine's failure path returns home rather than
+            # sitting in a state that looks like progress.
+            self.get_logger().error(
+                "motion_backend is 'moveit' but /move_action has no server; "
+                "is the MoveIt planning stack running?"
+            )
+            self._on_motion_failure()
+            return
+        try:
+            goal = self._motion_goal(result_state)
+        except ValueError as error:
+            self.get_logger().error(f"cannot build a motion goal: {error}")
+            self._on_motion_failure()
+            return
+
+        def _on_result(future):
+            if epoch != self._epoch:
+                return  # a superseded motion; its result is not ours
+            outcome = future.result()
+            code = outcome.result.error_code.val
+            if code == MoveItErrorCodes.SUCCESS:
+                self._on_motion_result(epoch, result_state)
+            else:
+                self.get_logger().error(
+                    f"MoveIt refused the motion in '{self._state.value}': "
+                    f"error_code={code}"
+                )
+                self._on_motion_failure()
+
+        def _on_accepted(future):
+            if epoch != self._epoch:
+                return
+            handle = future.result()
+            if not handle.accepted:
+                self.get_logger().error(
+                    f"MoveIt rejected the goal for '{self._state.value}'"
+                )
+                self._on_motion_failure()
+                return
+            self._move_group_goal_handle = handle
+            handle.get_result_async().add_done_callback(_on_result)
+
+        self._move_group_goal_handle = None
+        self._move_group_client.send_goal_async(goal).add_done_callback(
+            _on_accepted
         )
 
     def _on_motion_result(

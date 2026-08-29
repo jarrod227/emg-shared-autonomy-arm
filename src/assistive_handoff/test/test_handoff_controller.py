@@ -1173,3 +1173,118 @@ def test_search_timeout_stops_view_before_return_home(make_graph):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_an_unknown_motion_backend_is_refused_at_startup():
+    """A typo must not silently leave the arm on the simulated backend.
+
+    The two differ in whether anything physical happens, which is the one
+    misconfiguration that cannot be allowed to look like it worked.
+    """
+    rclpy.init()
+    try:
+        with pytest.raises(ValueError, match="motion_backend"):
+            HandoffController(parameter_overrides=[
+                Parameter("motion_backend", value="move_it"),
+            ])
+    finally:
+        rclpy.shutdown()
+
+
+def test_the_moveit_backend_returns_home_when_no_planner_is_listening():
+    """No planner is a failure, not something to wait out.
+
+    Waiting for the motion timeout would leave the controller in a state that
+    reads as progress for as long as the deadline lasts. The state machine
+    already has the right answer for a motion that cannot happen.
+    """
+    rclpy.init()
+    node = None
+    try:
+        node = HandoffController(parameter_overrides=[
+            Parameter("motion_backend", value="moveit"),
+            Parameter("motion_timeout_sec", value=30.0),
+        ])
+        node._state = HandoffState.APPROACH
+        node._start_motion(HandoffState.READY)
+        assert node._state is HandoffState.RETURN_HOME
+    finally:
+        if node is not None:
+            node.destroy_node()
+        rclpy.shutdown()
+
+
+def test_each_state_asks_for_the_goal_that_state_means():
+    """APPROACH plans to the target, RELEASE to the delivery zone, home to
+    the joint pose -- and APPROACH refuses rather than planning to nothing."""
+    rclpy.init()
+    node = None
+    try:
+        node = HandoffController(parameter_overrides=[
+            Parameter("motion_backend", value="moveit"),
+            Parameter("delivery_center_x", value=0.4),
+            Parameter("delivery_center_y", value=0.3),
+            Parameter("delivery_center_z", value=1.0),
+        ])
+
+        node._state = HandoffState.APPROACH
+        with pytest.raises(ValueError, match="no target pose"):
+            node._motion_goal(HandoffState.READY)
+
+        target = PoseStamped()
+        target.pose.position.x = 0.11
+        target.pose.position.z = 1.12
+        target.pose.orientation.w = 1.0
+        node._last_target = target
+        goal = node._motion_goal(HandoffState.READY)
+        placed = (
+            goal.request.goal_constraints[0]
+            .position_constraints[0]
+            .constraint_region.primitive_poses[0]
+            .position
+        )
+        assert (placed.x, placed.z) == pytest.approx((0.11, 1.12))
+
+        node._state = HandoffState.RELEASE
+        placed = (
+            node._motion_goal(HandoffState.RETURN_HOME)
+            .request.goal_constraints[0]
+            .position_constraints[0]
+            .constraint_region.primitive_poses[0]
+            .position
+        )
+        assert (placed.x, placed.y, placed.z) == pytest.approx(
+            (0.4, 0.3, 1.0)
+        )
+
+        node._state = HandoffState.RETURN_HOME
+        joints = (
+            node._motion_goal(HandoffState.IDLE)
+            .request.goal_constraints[0]
+            .joint_constraints
+        )
+        assert [c.joint_name for c in joints][0] == "panda_joint1"
+    finally:
+        if node is not None:
+            node.destroy_node()
+        rclpy.shutdown()
+
+
+def test_speed_scale_reaches_the_planner_it_was_declared_for():
+    # It was declared for a MoveIt backend and documented as unused by the
+    # simulated motion, which is exactly how a parameter quietly stops
+    # meaning anything.
+    rclpy.init()
+    node = None
+    try:
+        node = HandoffController(parameter_overrides=[
+            Parameter("motion_backend", value="moveit"),
+            Parameter("speed_scale", value=0.25),
+        ])
+        settings = node._planning_settings()
+        assert settings.velocity_scaling == pytest.approx(0.25)
+        assert settings.acceleration_scaling == pytest.approx(0.25)
+    finally:
+        if node is not None:
+            node.destroy_node()
+        rclpy.shutdown()

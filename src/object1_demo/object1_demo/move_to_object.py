@@ -3,19 +3,18 @@
 import time
 
 import rclpy
-from geometry_msgs.msg import Pose, PoseStamped
+from geometry_msgs.msg import PoseStamped
 from moveit_msgs.action import MoveGroup
-from moveit_msgs.msg import (
-    Constraints,
-    JointConstraint,
-    MoveItErrorCodes,
-    OrientationConstraint,
-    PositionConstraint,
+from moveit_msgs.msg import MoveItErrorCodes
+from assistive_motion.goal_builders import (
+    HOME_JOINT_POSITIONS,
+    PlanningSettings,
+    build_joint_goal,
+    build_pose_goal,
 )
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from shape_msgs.msg import SolidPrimitive
 from visualization_msgs.msg import Marker
 
 
@@ -36,16 +35,9 @@ class MoveToObjectNode(Node):
     DONE = "DONE"
     FAILED = "FAILED"
 
-    # Panda "ready" pose; the arm starts here, so it is the home pose.
-    HOME_JOINT_POSITIONS = (
-        ("panda_joint1", 0.0),
-        ("panda_joint2", -0.785),
-        ("panda_joint3", 0.0),
-        ("panda_joint4", -2.356),
-        ("panda_joint5", 0.0),
-        ("panda_joint6", 1.571),
-        ("panda_joint7", 0.785),
-    )
+    # Kept as a class attribute because callers and tests reach for it here;
+    # the values live in assistive_motion so every backend shares one home.
+    HOME_JOINT_POSITIONS = HOME_JOINT_POSITIONS
 
     def __init__(self, **kwargs) -> None:
         super().__init__("move_to_object", **kwargs)
@@ -215,84 +207,35 @@ class MoveToObjectNode(Node):
         )
         return False
 
+    def _planning_settings(self) -> PlanningSettings:
+        return PlanningSettings(
+            planning_group=self.planning_group,
+            planning_frame=self.planning_frame,
+            end_effector_frame=self.end_effector_frame,
+            allowed_planning_time=self.allowed_planning_time,
+            num_planning_attempts=self.num_planning_attempts,
+            velocity_scaling=self.velocity_scaling,
+            acceleration_scaling=self.acceleration_scaling,
+            execute=self.execute,
+        )
+
     def _build_joint_goal(self, joint_positions) -> MoveGroup.Goal:
         """Create a MoveIt goal that drives the arm to a joint configuration.
 
         When ``execute`` is True the goal plans and runs the trajectory;
         otherwise MoveIt only returns the plan without moving the arm.
         """
-        goal = MoveGroup.Goal()
-        goal.request.group_name = self.planning_group
-        goal.request.allowed_planning_time = float(self.allowed_planning_time)
-        goal.request.num_planning_attempts = int(self.num_planning_attempts)
-        goal.request.max_velocity_scaling_factor = self.velocity_scaling
-        goal.request.max_acceleration_scaling_factor = self.acceleration_scaling
-        goal.planning_options.plan_only = not self.execute
-
-        constraints = Constraints()
-        for joint_name, position in joint_positions:
-            joint_constraint = JointConstraint()
-            joint_constraint.joint_name = joint_name
-            joint_constraint.position = position
-            joint_constraint.tolerance_above = 0.001
-            joint_constraint.tolerance_below = 0.001
-            joint_constraint.weight = 1.0
-            constraints.joint_constraints.append(joint_constraint)
-        goal.request.goal_constraints.append(constraints)
-
-        return goal
+        return build_joint_goal(self._planning_settings(), joint_positions)
 
     def _build_pose_goal(self) -> MoveGroup.Goal:
         """Create a MoveIt goal for the received object1 end-effector pose."""
         if self.object1_position is None or self.object1_orientation is None:
             raise RuntimeError("Cannot build pose goal before receiving a target pose.")
-
-        goal = MoveGroup.Goal()
-        goal.request.group_name = self.planning_group
-        goal.request.allowed_planning_time = float(self.allowed_planning_time)
-        goal.request.num_planning_attempts = int(self.num_planning_attempts)
-        goal.request.max_velocity_scaling_factor = self.velocity_scaling
-        goal.request.max_acceleration_scaling_factor = self.acceleration_scaling
-        goal.planning_options.plan_only = not self.execute
-
-        position_constraint = PositionConstraint()
-        position_constraint.header.frame_id = self.planning_frame
-        position_constraint.link_name = self.end_effector_frame
-        position_constraint.weight = 1.0
-
-        tolerance_region = SolidPrimitive()
-        tolerance_region.type = SolidPrimitive.SPHERE
-        tolerance_region.dimensions = [0.005]
-
-        target_pose = Pose()
-        (
-            target_pose.position.x,
-            target_pose.position.y,
-            target_pose.position.z,
-        ) = self.object1_position
-        target_pose.orientation.w = 1.0
-        position_constraint.constraint_region.primitives.append(tolerance_region)
-        position_constraint.constraint_region.primitive_poses.append(target_pose)
-
-        orientation_constraint = OrientationConstraint()
-        orientation_constraint.header.frame_id = self.planning_frame
-        orientation_constraint.link_name = self.end_effector_frame
-        (
-            orientation_constraint.orientation.x,
-            orientation_constraint.orientation.y,
-            orientation_constraint.orientation.z,
-            orientation_constraint.orientation.w,
-        ) = self.object1_orientation
-        orientation_constraint.absolute_x_axis_tolerance = 0.01
-        orientation_constraint.absolute_y_axis_tolerance = 0.01
-        orientation_constraint.absolute_z_axis_tolerance = 0.01
-        orientation_constraint.weight = 1.0
-
-        constraints = Constraints()
-        constraints.position_constraints.append(position_constraint)
-        constraints.orientation_constraints.append(orientation_constraint)
-        goal.request.goal_constraints.append(constraints)
-        return goal
+        return build_pose_goal(
+            self._planning_settings(),
+            self.object1_position,
+            self.object1_orientation,
+        )
 
     def _send_pose_goal(self, target_name: str) -> None:
         """Send the fixed Cartesian object1 goal."""
