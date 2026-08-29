@@ -926,3 +926,42 @@ def test_the_flag_defaults_to_not_sweeping_before_any_controller_speaks():
             gate_node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
+
+
+def test_the_synthetic_stand_in_publishes_fast_enough_for_this_gate():
+    """The seam between two packages whose defaults were each defensible.
+
+    The gate's 0.2 s maximum frame gap is sized for the live candidate path,
+    measured delivering 150 of 150 valid frames at 10 Hz. The synthetic
+    publisher stands in for that path and defaulted to 5 Hz, which puts the
+    gap exactly on the limit: run together on 2026-08-29 the chain locked and
+    expired a target ten times in twelve seconds, while the same chain at
+    10 Hz locked once and held.
+
+    Neither default was wrong alone, which is why every per-package test
+    passed and nothing surfaced until the two ran in one graph. This pins the
+    relationship so a change to either one is told which other file it has to
+    look at.
+    """
+    from markerless_object_perception.synthetic_candidate_publisher import (
+        SyntheticObjectCandidatePublisher,
+    )
+
+    rclpy.init()
+    publisher = gate = None
+    try:
+        publisher = SyntheticObjectCandidatePublisher()
+        gate = MarkerlessCandidateGateNode()
+        rate = float(publisher.get_parameter('publish_rate_hz').value)
+        max_gap = float(gate.get_parameter('max_frame_gap_sec').value)
+    finally:
+        for node in (publisher, gate):
+            if node is not None:
+                node.destroy_node()
+        rclpy.shutdown()
+
+    assert 1.0 / rate < max_gap, (
+        f"the synthetic publisher's {rate} Hz gives a {1.0 / rate:.3f} s "
+        f"frame gap and the gate allows {max_gap} s; a stand-in cannot be "
+        f"slower than the source it stands in for"
+    )

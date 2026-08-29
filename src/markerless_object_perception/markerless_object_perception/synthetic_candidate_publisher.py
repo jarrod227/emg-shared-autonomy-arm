@@ -69,7 +69,14 @@ class SyntheticObjectCandidatePublisher(Node):
     def _declare_parameters(self):
         self.declare_parameter('candidate_topic', '/object_candidates')
         self.declare_parameter('frame_id', 'stereo_left_optical')
-        self.declare_parameter('publish_rate_hz', 5.0)
+        # 10 Hz, matching the live candidate path this node stands in for.
+        # It defaulted to 5, which puts the frame gap exactly on the
+        # markerless gate's max_frame_gap_sec of 0.2 s: measured 2026-08-29,
+        # a chain driven at 5 Hz locked and expired a target ten times in
+        # twelve seconds, and at 10 Hz locked once and held. A stand-in that
+        # publishes at half the rate of the source exercises a condition the
+        # real path does not produce, against a gate correctly sized for it.
+        self.declare_parameter('publish_rate_hz', 10.0)
         self.declare_parameter('pair_skew_sec', 0.005)
         self.declare_parameter('class_label', 'bottle')
         self.declare_parameter('class_confidence', 0.9)
