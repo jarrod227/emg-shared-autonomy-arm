@@ -48,7 +48,7 @@ All entries in this section are `FORMAL` and have matching entries in
   including radial-distortion modeling.
 - Claim boundary: it does not validate this project's stereo extrinsics,
   timestamp synchronization, hand-eye transform, or working-range error.
-- Use: `docs/proposal.md` §4 research boundary and Objective 3.2/5 calibration
+- Use: Objective 3.2/5 calibration
   plan; `docs/system_design.md` “Stereo Sensing Foundation.”
 
 ### `hirschmuller2008stereo`
@@ -62,7 +62,7 @@ All entries in this section are `FORMAL` and have matching entries in
 - Claim boundary: it does not prove that OpenCV StereoSGBM parameters are
   suitable for the purchased cameras, nor that approximately paired frames are
   exposure-synchronized.
-- Use: `docs/proposal.md` §4 and Objective 3.2; `docs/system_design.md`
+- Use: Objective 3.2; `docs/system_design.md`
   “Stereo Sensing Foundation.”
 
 ### `he2017maskrcnn`
@@ -75,7 +75,7 @@ All entries in this section are `FORMAL` and have matching entries in
   architecture.
 - Claim boundary: it does not select the final lightweight model, establish
   edge-device feasibility, or prove accuracy on this project's objects.
-- Use: `docs/proposal.md` §4 and Objective 3.2; `docs/system_design.md`
+- Use: Objective 3.2; `docs/system_design.md`
   “Perception and Selection.”
 
 ### `zhang2020mediapipehands`
@@ -87,7 +87,7 @@ All entries in this section are `FORMAL` and have matching entries in
   monocular RGB input.
 - Claim boundary: its reported landmarks are not a calibrated stereo 3D hand
   observation and are not a safety-rated human-presence signal.
-- Use: `docs/proposal.md` §4 and Objective 4.2; `docs/system_design.md`
+- Use: Objective 4.2; `docs/system_design.md`
   hand-observation design.
 
 ### `lopez2009robustemg`
@@ -101,7 +101,7 @@ All entries in this section are `FORMAL` and have matching entries in
   robustness to electrode and noise faults.
 - Claim boundary: it does not validate this project's three-channel STM32
   classifier, activation calibration, command mapping, or safety response.
-- Use: `docs/proposal.md` §4 and Objective 3.5; `docs/system_design.md`
+- Use: Objective 3.5; `docs/system_design.md`
   “Embedded EMG Intent.”
 
 ### `minati2016hybrid`
@@ -114,7 +114,7 @@ All entries in this section are `FORMAL` and have matching entries in
 - Claim boundary: the paper establishes related system integration, not the
   proposed bounded EMG intervention experiment, STM32 implementation, or this
   project's stereo accuracy and safety contracts.
-- Use: `docs/proposal.md` §4 research novelty boundary.
+- Use: the research novelty boundary.
 - Metadata note: the archival IEEE Access volume is 4 (2016); the DOI string
   contains 2017 and the landing page appeared later, but that is not used to
   change the volume year.
@@ -128,7 +128,7 @@ All entries in this section are `FORMAL` and have matching entries in
   sequential prediction.
 - Claim boundary: ordinary DAgger does not model a low-bandwidth EMG channel,
   human takeover cost, abort latency, or action chunks.
-- Use: `docs/proposal.md` Phase 3 Objective 6; `TODO.md` P3.2.
+- Use: Objective 6.
 
 ### `kelly2019hgdagger`
 
@@ -139,7 +139,7 @@ All entries in this section are `FORMAL` and have matching entries in
   intervention and learns an uncertainty-based risk threshold.
 - Claim boundary: it evaluates human intervention in autonomous driving, not
   EMG-gated manipulation or action-chunk abort latency.
-- Use: `docs/proposal.md` Phase 3 novelty boundary; `TODO.md` P3.2.
+- Use: the Objective 6 novelty boundary.
 
 ### `hoque2022thriftydagger`
 
@@ -150,7 +150,7 @@ All entries in this section are `FORMAL` and have matching entries in
   performance against supervisor burden.
 - Claim boundary: it does not study EMG decoding, proportional view control,
   or ACT chunk-length versus abort latency.
-- Use: `docs/proposal.md` §4 and Phase 3 Objective 6; `TODO.md` P3.2.
+- Use: Objective 6.
 
 ### `zhao2023act`
 
@@ -163,8 +163,8 @@ All entries in this section are `FORMAL` and have matching entries in
 - Claim boundary: ACT does not establish that a particular chunk length is
   optimal, nor does it evaluate EMG abort latency; that interaction remains a
   candidate project experiment.
-- Use: `docs/proposal.md` §4 and Phase 3 Objective 6; `docs/system_design.md`
-  learned backend; `TODO.md` P3.2.
+- Use: Objective 6; `docs/system_design.md`
+  learned backend.
 
 ### `liu2025sirius`
 
@@ -176,7 +176,7 @@ All entries in this section are `FORMAL` and have matching entries in
   behavioral-cloning updates.
 - Claim boundary: Sirius does not study biosignal-channel constraints or ACT
   chunk-length versus abort latency.
-- Use: `docs/proposal.md` §4 and Phase 3 Objective 6; `TODO.md` P3.2.
+- Use: Objective 6.
 - Metadata note: first published online in 2024; the formal journal issue is
   volume 44, issues 10–11 (2025), pages 1727–1742, which is used in BibTeX.
 
@@ -255,7 +255,7 @@ or message-semantics claim.
   end or channel wiring.
 - Intended use: Objective 3.5 firmware design — the choice of ADC1 scan mode
   + DMA1 channel 1 for three channels, and the corrected wording of the
-  three-channel acquisition item in `TODO.md`.
+  three-channel acquisition requirement.
 
 ## Verified research papers not yet formally cited
 

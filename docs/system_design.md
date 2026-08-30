@@ -111,8 +111,6 @@ assistive_robot_ws/
 │   ├── stereo_hand_observer/  stereo geometry/gates + live adapter (4.2)
 │   └── markerless_object_perception/  mask/XYZ + YOLO adapter (3.2)
 ├── firmware/                  STM32 sEMG firmware + host tools (3.5)
-├── AGENTS.md
-└── TODO.md
 ```
 
 ROS 2 packages live under `src/`. Project-level planning and design documents
@@ -209,7 +207,7 @@ Only one selected-pose source is active at a time. Each physical camera driver
 is launched once in its own namespace; multiple consumers may reuse the
 rectified streams. The preserved ArUco path may use the left camera alone.
 
-Language / voice target selection is cut, not deferred — see `docs/proposal.md`
+Language / voice target selection is cut, not deferred — see the cut list
 §5. It would occupy the same layer as biosignal intent and is functionally
 redundant with it.
 
@@ -639,7 +637,7 @@ constrained EMG channel (abort / confirm / gate) that catches policy failures
 and flags failure-adjacent states for correction-data collection. The
 intervention channel is deliberately low-bandwidth (the same shared-autonomy
 thesis as the intent layer); its cost is the object of study. See
-`docs/proposal.md` Phase 3 and `TODO.md` P3.2.
+Objective 6.
 
 MuJoCo is the selected Phase 3 simulation and learning-evaluation backend for
 backend C. A thin adapter preserves the policy observation/action contract and
@@ -759,7 +757,7 @@ fixed delivery zone under the real-hardware safety policy.
 
 Isaac Lab / Isaac Sim RL is cut, not deferred. Conditional Phase 3 uses MuJoCo
 for repeatable learning experiments and LeRobot for real-arm validation. See
-`docs/proposal.md` §5.
+the cut list.
 
 ## Interface Principles
 

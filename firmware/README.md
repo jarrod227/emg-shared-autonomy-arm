@@ -17,8 +17,8 @@ nothing in this directory imports rclpy.
 
 ## Verified hardware
 
-Measured on 2026-08-13. See `TODO.md` P0.1b for the same facts in roadmap form
-and `docs/literature_ledger.md` (`DOC-ST-RM0008`) for the manual citations.
+Measured on 2026-08-13. See `docs/literature_ledger.md` (`DOC-ST-RM0008`) for
+the manual citations.
 
 | | |
 | --- | --- |
@@ -271,7 +271,7 @@ host before flashing.
 | Host: guided labelled capture GUI | implemented, headless-tested, and used for six complete balanced sessions across two donnings |
 | Host: event-gate validation capture | two real complete sequences; the second passed independent validation 9/9 with pre-registered counts |
 | Host: training pipeline | session-aware continuous-Q29 ridge-LDA LOSO plus Q18/C export implemented and measured |
-| Host: MCU/host runtime comparison (`tools/emg_runtime_compare.py`) | done, absolute-frame-grid aligned; blind to uint32 timestamp wrap past 71.6 min of uptime — see TODO.md |
+| Host: MCU/host runtime comparison (`tools/emg_runtime_compare.py`) | done, absolute-frame-grid aligned; the uint32 timestamp wrap past 71.6 min of uptime is unwrapped rather than assumed away |
 | ROS 2 bridge | `emg_intent_bridge` package live: double-event confirmation for `NEXT_TARGET`/`CONFIRM` (5.5 s window, measured — see docs/objective35_classifier_log.md), single-shot `ABORT`, `confidence=1.0` on publish (MCU margin is diagnostic-only, in `/diagnostics`), frozen monotonic clock mapping. Verified live: all three commands published correctly, `ABORT` margin 20 the first time it fired |
 | Host-to-device calibration downlink (`src/emg_rx.c`, `SET_ACTIVATION`/`ACTIVATION_STATE`) | done and live-verified: apply, reject-without-mutating, and restore-defaults all confirmed on real hardware with zero packet loss during the exchange. `emg_activation_reconfigure` preserves the measured baseline across a parameter change and re-scales the accumulator on a `baseline_shift` change so the baseline itself does not silently move. RAM-only — a reset returns to compile-time defaults, no flash writes. The per-donning calibration flow that sends real values is not built yet |
 
@@ -366,7 +366,7 @@ class order, float/Q18 parameters, folds, and confusion matrices. `main.c` now
 runs this classifier in the complete live path; host replay and MCU output
 matched event for event on the same recording.
 
-The classifier order is set in `TODO.md` and is deliberate: the Hudgins
+The classifier order is deliberate: the Hudgins
 feature set with an LDA/SVM baseline first, and a quantized MLP only if it
 measurably beats that. The part can carry either — a 12-feature, 16-hidden,
 4-class int8 MLP is 256 weights — so the constraint is not the silicon, it is

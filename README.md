@@ -141,7 +141,11 @@ windows on one held-out donning.
 
 ## Status and plans
 
-`TODO.md` is the roadmap and carries the current progress. `docs/proposal.md`
-is the personal build plan behind it. Citations are tracked in
-`docs/literature_ledger.md`, which records for each source the smallest claim
-it actually supports and what it does not establish for this project.
+`docs/system_design.md` carries the architecture and the current per-component
+status. Citations are tracked in `docs/literature_ledger.md`, which records for
+each source the smallest claim it actually supports and what it does *not*
+establish for this project -- including, for the one paper closest to this
+work, that none of its method is used here.
+
+The roadmap and schedule are not published; they are a personal plan rather
+than part of the system.

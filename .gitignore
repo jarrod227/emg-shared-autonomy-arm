@@ -83,3 +83,13 @@ firmware/test/test_emg_rx
 # project's history.
 .claude/
 skills-lock.json
+
+# Personal planning and career documents, and the AI-assistant working guide.
+# They stay on disk because they are used; they are not part of the system this
+# repository publishes, and the roadmap in particular is a personal plan rather
+# than a description of anything here.
+docs/proposal.md
+docs/weekly_plan.md
+docs/project_context.md
+TODO.md
+AGENTS.md
