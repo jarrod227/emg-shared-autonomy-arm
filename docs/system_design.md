@@ -357,80 +357,99 @@ A newer valid command preempts the old search target after a smooth halt;
 
 ### The arithmetic behind the rate
 
-The Intent Layer above says what the proportional channel does and why it
-commands a rate. This is the arithmetic, which is spread over five files and
-two clocks and is otherwise only reconstructable by reading all of them.
+The Intent Layer above says why the channel commands a rate. This is how the
+number is computed, across five files and two clocks.
 
-It drives `SimulatedViewMotion` and publishes on `/simulated_view_angle`, which
-nothing subscribes to. The MoveIt goals the controller issues are state
-transitions carrying a static `speed_scale`, unrelated to contraction strength.
+It drives `SimulatedViewMotion` on `/simulated_view_angle`, which nothing
+subscribes to. The MoveIt goals are state transitions carrying a static
+`speed_scale`, unrelated to contraction strength.
 
-**Firmware, once per 400-sample window (50 ms hop).** The classifier names the
-gesture; a separate stage decides whether enough muscle was behind it, from the
-same window's features:
+| Symbol | Meaning | Value or source |
+| --- | --- | --- |
+| $A$ | summed MAV of the three channels over one window | `emg_features.c` |
+| $B$ | rest amplitude baseline | tracked, REST windows only |
+| $s$ | baseline shift | 4 |
+| $K$ | threshold factor | 3 |
+| $F$ | absolute threshold floor | per donning, calibration |
+| $T$ | activation threshold | derived |
+| $R$ | full-deflection reference | per donning **and direction** |
+| $a$ | normalized activation | $0..1$, wire format $0..65535$ |
+| $\alpha$ | activation smoothing | 0.15 |
+| $d$ | direction | $\pm 1$ |
+| $`v_{\text{nom}}`$ | nominal speed | 0.25 (target), 0.12 (handoff) rad/s |
+| $\hat{v}$ | commanded speed ceiling | derived |
+| $v$ | current axis velocity | integrated |
+| $`a_{\uparrow},a_{\downarrow}`$ | acceleration, deceleration | 0.5 / 0.75, 0.3 / 0.5 rad/s² |
+| $\Delta$ | remaining distance to the goal | derived |
+| $\delta t$ | motion step | 0.02 s |
 
-    total_mav = MAV_0 + MAV_1 + MAV_2
+**Firmware, once per 400-sample window (50 ms hop).**
 
-    acc      <- acc + A - (acc >> 4)      updated only on REST windows
-    baseline  = acc >> 4
-    T         = max(3 * baseline, floor)
-    a         = clamp( (total_mav - T) / (reference - T) )   sent as 0..65535
+```math
+\mathrm{acc} \leftarrow \mathrm{acc} + A - \lfloor \mathrm{acc}/2^{s} \rfloor,
+\qquad B = \lfloor \mathrm{acc}/2^{s} \rfloor
+```
 
-Both stages read the same window, so `EMG_FEATURES_WINDOW` cannot change
-without retraining the model, regenerating the golden vectors, and re-deriving
-every gate constant -- the gate counts windows, not seconds.
+```math
+T = \max(K B,\; F),
+\qquad
+a = \operatorname{clamp}_{[0,1]}\!\left(\frac{A - T}{R - T}\right)
+```
 
-Three details are load-bearing. The baseline keeps its residue inside the
-accumulator, because written as a plain shift-and-store a drift under one LSB
-per window dies in the truncation, and contact drift is that size. The absolute
-`floor` applies before any rest has been observed, which closes the cold-start
-gap a purely relative threshold leaves open. And the C multiplies before
-dividing, because the other order truncates every value below the reference to
-zero in integer arithmetic.
+- The classifier reads the same window, so `EMG_FEATURES_WINDOW` is not free:
+  changing it retrains the model, regenerates the golden vectors, and
+  re-derives every gate constant. The gate counts windows, not seconds.
+- $\mathrm{acc}$ keeps its residue rather than storing $B$: a drift under one
+  LSB per window would die in the truncation, and contact drift is that size.
+- $F$ applies before any rest is observed, closing the cold-start gap a purely
+  relative threshold leaves open.
+- The C multiplies before dividing, or integer arithmetic truncates everything
+  below $R$ to zero.
 
-**Host, once per message (20 Hz).** Inside the deadband, or on `HOLD`, the axis
-is asked to stop. A change of direction resets the filter, and a direction must
-survive two consecutive messages before it steers:
+**Host, once per message (20 Hz).** Below the 0.05 deadband, or on `HOLD`, the
+axis is asked to stop; a direction must survive two consecutive messages.
 
-    a_k = 0.15 * a_raw + 0.85 * a_(k-1)      tau ~ hop/alpha ~ 333 ms
-    v_cmd = direction * nominal_speed * a_k
+```math
+a_k = \alpha\, a_k^{\text{raw}} + (1-\alpha)\, a_{k-1}, \qquad
+\tau \approx \frac{\text{hop}}{\alpha} \approx 333\,\text{ms}
+```
 
-The command becomes a goal at the band edge with `|v_cmd|` as a ceiling, so the
-trapezoid planner decelerates the axis to a stop *on* the edge. A command in
-the direction already travelled updates only the ceiling: the same goal at a
-new rate, not a second goal, which is what keeps a 20 Hz stream from tripping
-the serialized-preemption stop and crawling.
+```math
+\hat{v} = d \cdot v_{\text{nom}} \cdot a_k
+```
 
-**Motion model, every 20 ms.**
+$\hat v$ is a *ceiling* on a goal at the band edge, so the trapezoid planner
+stops the axis **on** the edge. A same-direction command updates only the
+ceiling -- one goal at a new rate, which is what keeps a 20 Hz stream from
+tripping the preemption stop and crawling.
 
-    s_stop   = v^2 / (2 * a_dec)
-    v_target = 0 when s_stop >= |remaining|,
-               else direction * min(nominal, ceiling)
-    rate     = a_acc when speeding up, a_dec otherwise
-    v       <- v + clamp(v_target - v, +- rate * dt)
+**Motion model, every $\delta t$.**
 
-`a_dec` exceeds `a_acc` in both profiles (0.75 against 0.5 for `target_search`,
-0.5 against 0.3 for `handoff_search`): easing off should feel like braking, not
-like drifting down to the new rate.
+```math
+v \leftarrow v + \operatorname{clamp}\big(v^{\ast} - v,\; \pm r\,\delta t\big),
+\qquad
+v^{\ast} = \begin{cases}
+0 & \dfrac{v^{2}}{2 a_{\downarrow}} \ge |\Delta| \\
+d \cdot \min(v_{\text{nom}}, |\hat v|) & \text{otherwise}
+\end{cases}
+```
 
-**A jittery envelope does not produce jittery motion.** A step changes velocity
-by at most `0.5 * 0.02` = 0.010 rad/s, and reaching 0.25 rad/s from rest takes
-0.5 s, or ten windows. The acceleration limit is an order of magnitude slower
-than the ceiling can move, so window-to-window variation is absorbed by the
-ramp; an effort has to be held for about ten windows before the axis travels at
-the speed it asks for.
+with $`r = a_{\uparrow}`$ when speeding up and $`a_{\downarrow}`$ otherwise. Since
+$`a_{\downarrow} > a_{\uparrow}`$ in both profiles, easing off brakes rather than
+drifting down.
 
-**Only `ABORT` can change velocity abruptly.** `emergency_stop()` zeroes it in
-one step, because an abort bound by the smoothing rule is not an abort.
-`request_hold()` is not an exception -- it drops the goal and lets the axis
-decelerate, and the watchdog, an arriving observation, and easing off all take
-that path. `_clamp_into_band` zeroing an outward velocity at the boundary is
-bound enforcement rather than a command: without it a reversal at full speed
-near the edge coasted 0.098 degrees past it.
+**Envelope jitter does not reach the joint.** A step moves $v$ by at most
+$`a_{\uparrow}\delta t = 0.010`$ rad/s, and $`v_{\text{nom}}/a_{\uparrow} = 0.5`$ s
+-- ten windows -- to reach full speed. The ramp is an order of magnitude slower
+than $\hat v$ can move, so an effort must be held about ten windows before the
+axis travels at the speed it asks for.
 
-Host-side constants: `view_activation_deadband` 0.05,
-`view_activation_smoothing_alpha` 0.15, `view_stable_command_count` 2,
-`view_update_period_sec` 0.02, `view_watchdog_sec` 0.25.
+**Only `ABORT` changes $v$ abruptly**, via `emergency_stop()`; an abort bound
+by the smoothing rule is not an abort. Everything else decelerates: the 0.25 s
+watchdog, an arriving observation, and easing off all drop the goal through
+`request_hold()`. `_clamp_into_band` zeroing an outward $v$ at the boundary is
+bound enforcement, not a command -- without it a full-speed reversal near the
+edge coasted 0.098° past it.
 
 ### Stereo Sensing Foundation
 
