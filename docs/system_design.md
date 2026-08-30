@@ -355,170 +355,82 @@ of motion nobody asked for.
 A newer valid command preempts the old search target after a smooth halt;
 `ABORT` bypasses smoothing and always has priority.
 
-### How Effort Becomes a Rate
+### The arithmetic behind the rate
 
-The sections above say what the proportional channel does. This one follows a
-single contraction all the way through, because the arithmetic is spread across
-five files and two clocks and is hard to reconstruct from any one of them.
+The Intent Layer above says what the proportional channel does and why it
+commands a rate. This is the arithmetic, which is spread over five files and
+two clocks and is otherwise only reconstructable by reading all of them.
 
-One caveat first. This chain drives `SimulatedViewMotion` and publishes on
-`/simulated_view_angle`, which nothing subscribes to. The MoveIt goals the
-controller issues are state transitions, and they carry a static `speed_scale`
-that has nothing to do with how hard the wearer is pushing. What follows was
-closed on a wearer and measured; the axis it closed on is in software.
+It drives `SimulatedViewMotion` and publishes on `/simulated_view_angle`, which
+nothing subscribes to. The MoveIt goals the controller issues are state
+transitions carrying a static `speed_scale`, unrelated to contraction strength.
 
-**Shape first, then strength.** Every 50 ms the firmware finishes a 400-sample
-window and does two independent things with it. The Q18 LDA names the gesture
-the window resembles. Separately, the three channels' mean absolute values are
-summed into one number that stands for how hard the contraction was. The split
-matters because a preparatory movement at twice resting amplitude classifies
-correctly as a gesture and still is not one -- the classifier answers *which*,
-and the stage below answers *whether* and *how much*.
+**Firmware, once per 400-sample window (50 ms hop).** The classifier names the
+gesture; a separate stage decides whether enough muscle was behind it, from the
+same window's features:
 
-Both read the same window. `EMG_FEATURES_WINDOW` is therefore one of the
-constants least free to change in this project: the model was trained on
-features from a 400-sample window, the golden vectors were generated from it,
-and the event gate is defined in windows rather than seconds, so its
-`onset_holdoff + stable = 17` would silently stop meaning 850 ms.
+    total_mav = MAV_0 + MAV_1 + MAV_2
 
-**A resting level that follows contact drift.** The threshold cannot be a fixed
-number, because resting amplitude changes with contact. The firmware keeps a
-running rest level, updated only on windows the classifier calls `REST`:
+    acc      <- acc + A - (acc >> 4)      updated only on REST windows
+    baseline  = acc >> 4
+    T         = max(3 * baseline, floor)
+    a         = clamp( (total_mav - T) / (reference - T) )   sent as 0..65535
 
-    acc <- acc + A - (acc >> s),    baseline = acc >> s,    s = 4
+Both stages read the same window, so `EMG_FEATURES_WINDOW` cannot change
+without retraining the model, regenerating the golden vectors, and re-deriving
+every gate constant -- the gate counts windows, not seconds.
 
-which moves the baseline a sixteenth of the way toward each new rest
-observation. Keeping the residue inside the accumulator rather than storing the
-shifted value is deliberate: written the other way, a drift smaller than one
-LSB per window dies in the truncation, and contact drift is exactly that size.
+Three details are load-bearing. The baseline keeps its residue inside the
+accumulator, because written as a plain shift-and-store a drift under one LSB
+per window dies in the truncation, and contact drift is that size. The absolute
+`floor` applies before any rest has been observed, which closes the cold-start
+gap a purely relative threshold leaves open. And the C multiplies before
+dividing, because the other order truncates every value below the reference to
+zero in integer arithmetic.
 
-**The threshold takes the larger of two rules.**
+**Host, once per message (20 Hz).** Inside the deadband, or on `HOLD`, the axis
+is asked to stop. A change of direction resets the filter, and a direction must
+survive two consecutive messages before it steers:
 
-    T = max(K * baseline, floor),    K = 3
+    a_k = 0.15 * a_raw + 0.85 * a_(k-1)      tau ~ hop/alpha ~ 333 ms
+    v_cmd = direction * nominal_speed * a_k
 
-The relative term tracks whatever contact noise this donning happens to have.
-The absolute floor is a physiological bound rather than a contact measurement,
-so it applies before any rest has been observed at all, which closes the
-cold-start gap a purely relative rule leaves open.
+The command becomes a goal at the band edge with `|v_cmd|` as a ceiling, so the
+trapezoid planner decelerates the axis to a stop *on* the edge. A command in
+the direction already travelled updates only the ceiling: the same goal at a
+new rate, not a second goal, which is what keeps a 20 Hz stream from tripping
+the serialized-preemption stop and crawling.
 
-**Normalization is what makes effort mean the same thing tomorrow.** Raw
-amplitude is not comparable across donnings: the same effort reads differently
-after re-gelling, after a day, after the band moves. So the firmware reports
-not an amplitude but a fraction of this donning's own full deflection:
+**Motion model, every 20 ms.**
 
-    a = clamp( (total_mav - T) / (reference - T) ),   sent as 0..65535
-
-`reference` is measured during calibration for **this donning and this
-direction**, then sent to the board over `SET_ACTIVATION`. Per direction rather
-than one shared number: a single capture measured 4.19x and 5.51x of the
-session threshold for the two steering gestures, and one number cannot stand
-for both. The C multiplies before dividing, because the other order truncates
-every value below the reference to zero in integer arithmetic.
-
-This is class-specific normalization, published by Scheme, Lock, Hargrove,
-Hill, Kuruganti and Englehart in *IEEE TNSRE* 22(1) in 2014. The variant here
-takes its references from a separate calibration capture rather than from the
-classifier's training data, and no part of it is new. See
-`docs/literature_ledger.md`.
-
-**The host filters, then maps effort to a rate.** Each arriving command is
-rejected outright if its activation is inside the deadband, a change of
-direction resets the filter, and a direction has to survive two consecutive
-messages before it steers anything. The surviving activation is low-passed:
-
-    a_k = alpha * a_raw + (1 - alpha) * a_(k-1),   alpha = 0.15
-
-whose time constant is about `hop / alpha`, roughly 333 ms. There is
-deliberately no minimum-change filter on top. One guarded the absolute-angle
-path, where every update preempted an in-flight goal and so had a real cost; a
-same-direction rate update costs nothing, and the filter was measured to eat
-every command below half effort.
-
-Then the mapping itself, which is one line:
-
-    v_cmd = direction * nominal_speed * a
-
-It replaced `center + relative_limit * activation`, which named an absolute
-angle and was measured doing the opposite of what the gesture said: parked at
-33 degrees, a 70% ulnar contraction asks for 25 degrees -- the angle 70% names
--- so the arm retreated while the wearer pushed it outward. Eight of 44 pushes
-in one 90 s session moved against their own gesture. A rate cannot do that.
-Light is slow in the direction asked for, hard is fast in the same direction,
-none is no motion, and nothing the wearer can do makes the axis run backwards.
-What it costs is that one effort level no longer names one angle; that session
-showed the property to be the source of the confusion rather than a feature.
-
-**The command is a goal at the band edge with a speed ceiling**, not a
-velocity written to a joint. Heading for the edge lets the existing trapezoid
-planner decelerate the axis to a stop *on* the edge instead of clamping it
-against one. A command in the direction already being travelled updates only
-the ceiling and leaves the goal alone -- the same goal at a new rate, not a
-second goal, so it must not trip the serialized-preemption stop. Tripping it is
-what made a 20 Hz stream crawl. A reversal is a different goal and does take
-the stop-first path, which is what a reversal should do anyway.
-
-**Integration is rate-limited, and braking is not accelerating.** Every 20 ms:
-
-    s_stop = v^2 / (2 * a_dec)
-    v_target = 0 when s_stop >= |remaining|
-    v_target = direction * min(nominal, ceiling) otherwise
+    s_stop   = v^2 / (2 * a_dec)
+    v_target = 0 when s_stop >= |remaining|,
+               else direction * min(nominal, ceiling)
     rate     = a_acc when speeding up, a_dec otherwise
     v       <- v + clamp(v_target - v, +- rate * dt)
 
-The braking-distance test is what stops the axis *on* the edge rather than
-against it. The asymmetric `rate` is why easing off feels like braking rather
-than a slow drift down to the new rate.
+`a_dec` exceeds `a_acc` in both profiles (0.75 against 0.5 for `target_search`,
+0.5 against 0.3 for `handoff_search`): easing off should feel like braking, not
+like drifting down to the new rate.
 
-This is also the answer to whether a jittery envelope produces jittery motion.
-On the shipped `target_search` profile a step changes velocity by at most
-`0.5 * 0.02` = 0.010 rad/s, and reaching full speed from rest takes
-`0.25 / 0.5` = 0.5 s, or ten windows. The acceleration limit is an order of
-magnitude slower than the ceiling can move, so window-to-window variation is
-absorbed by the ramp before it reaches the joint. The wearer has to hold an
-effort for roughly ten windows before the axis actually travels at the speed
-that effort asks for.
+**A jittery envelope does not produce jittery motion.** A step changes velocity
+by at most `0.5 * 0.02` = 0.010 rad/s, and reaching 0.25 rad/s from rest takes
+0.5 s, or ten windows. The acceleration limit is an order of magnitude slower
+than the ceiling can move, so window-to-window variation is absorbed by the
+ramp; an effort has to be held for about ten windows before the axis travels at
+the speed it asks for.
 
-**Two hard bounds, because one is not enough.** The goal at the edge bounds the
-axis while it has a goal. A reversal or a hold drops the goal and hands the
-axis to the deceleration integrator, which was bounded by nothing but the
-absolute stops: a wearer flicking direction at full speed near the edge coasted
-past it, measured at +0.098 degrees against a 2.39 degree stopping distance at
-nominal speed. `_clamp_into_band` is the second bound. Small, but the claim
-being made about this axis is that its reachable set is exactly the band
-whatever sequence of commands arrives, and that claim was false as written
-until it existed. An axis parked outside the band -- `configure()` can move the
-band out from under it -- is not yanked back in, only stopped from travelling
-further out.
+**Only `ABORT` can change velocity abruptly.** `emergency_stop()` zeroes it in
+one step, because an abort bound by the smoothing rule is not an abort.
+`request_hold()` is not an exception -- it drops the goal and lets the axis
+decelerate, and the watchdog, an arriving observation, and easing off all take
+that path. `_clamp_into_band` zeroing an outward velocity at the boundary is
+bound enforcement rather than a command: without it a reversal at full speed
+near the edge coasted 0.098 degrees past it.
 
-**What can change abruptly.** Nothing on the command path; every velocity
-change is bounded by `rate * dt`. Two exceptions, both deliberate.
-`emergency_stop()` zeroes velocity in one step and is called only by `ABORT`
-and fault handling, because an abort that has to obey the smoothing rule is not
-an abort. `_clamp_into_band` zeroes an outward velocity at the boundary, which
-is bound enforcement rather than a command. `request_hold()` is not an
-exception: it drops the goal and lets the axis decelerate, and the watchdog, an
-arriving observation, and easing off all take that path.
-
-**The shipped constants.**
-
-| Parameter | `target_search` | `handoff_search` |
-| --- | --- | --- |
-| `nominal_speed` | 0.25 rad/s | 0.12 rad/s |
-| `acceleration` | 0.5 rad/s^2 | 0.3 rad/s^2 |
-| `deceleration` | 0.75 rad/s^2 | 0.5 rad/s^2 |
-| `relative_limit` | pi/4 | pi/9 |
-
-Deceleration exceeds acceleration in both profiles. Host-side:
-`view_activation_deadband` 0.05, `view_activation_smoothing_alpha` 0.15,
-`view_stable_command_count` 2, `view_update_period_sec` 0.02,
-`view_watchdog_sec` 0.25.
-
-**What this chain does not fix.** Light contractions do not register at all,
-and the cause is upstream of everything above: of the direction-gesture windows
-below the activation threshold, none are recognised as the gesture, so lowering
-the threshold admits windows the classifier calls rest rather than recovering
-light effort. The minimum usable speed is set by `nominal_speed`, not by the
-threshold.
+Host-side constants: `view_activation_deadband` 0.05,
+`view_activation_smoothing_alpha` 0.15, `view_stable_command_count` 2,
+`view_update_period_sec` 0.02, `view_watchdog_sec` 0.25.
 
 ### Stereo Sensing Foundation
 
