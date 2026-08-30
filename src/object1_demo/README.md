@@ -40,5 +40,6 @@ ros2 launch object1_demo object1_demo.launch.py
 ```
 
 The launch file starts `fixed_pose_publisher` and `move_to_object`. For the
-ArUco-driven path, use the reproduction commands in
-[`docs/project_context.md`](../../docs/project_context.md) instead.
+ArUco-driven path -- the frozen fallback, not the path under development --
+the run sequence is in the module docstring of
+[`selector_node.py`](../target_selector/target_selector/selector_node.py).

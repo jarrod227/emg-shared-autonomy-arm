@@ -17,6 +17,21 @@ Also latches: once a target is published, later detections are ignored, so
 /target_object_pose behaves like the retained fixed_pose_publisher rather
 than continuously updating. move_to_object's one-shot reach expects exactly
 that.
+
+This is the frozen ArUco fallback, kept working but no longer the path under
+development; stereo perception replaced it. To run it, start Panda MoveIt and
+wait for it to report that planning can start, then, each in its own sourced
+terminal:
+
+    ros2 launch marker_pose_provider marker_demo.launch.py   # camera + detection
+    ros2 launch target_selector extrinsics.launch.py         # world->camera TF
+    ros2 run target_selector selector_node                   # this node
+    ros2 run object1_demo move_to_object                     # -p execute:=false to plan only
+
+Because of the latching above, the 51 mm marker (DICT_4X4_50, id 0) has to be
+in front of the camera before this node starts. A marker that appears later is
+not picked up, and the failure looks like a dead pipeline rather than a missed
+detection.
 """
 
 import math
