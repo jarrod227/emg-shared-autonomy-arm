@@ -287,7 +287,7 @@ Run the GUI as the normal desktop user, not with `sudo`. The active login must
 already have access to `/dev/ttyACM0` through the `dialout` group.
 
 ```bash
-cd /home/cold227/Documents/assistive_robot_ws
+cd <workspace root>
 python3 firmware/tools/emg_guided_capture.py \
   --port /dev/ttyACM0 \
   --repetitions 5

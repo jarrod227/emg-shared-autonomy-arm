@@ -78,6 +78,8 @@ weights/
 # calibration summaries.
 firmware/test/test_emg_rx
 
-# Claude Code local settings. The installed skills and skills-lock.json are a
-# separate decision; this file is machine-local by name.
-.claude/settings.local.json
+# Claude Code's own state. The installed skills are third-party files fetched
+# from elsewhere and the lock records where from, so neither belongs in this
+# project's history.
+.claude/
+skills-lock.json
