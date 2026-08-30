@@ -9,6 +9,39 @@ Everything claimed below was measured, and the recordings it was measured from
 are in `datasets/`. Where a result was withdrawn after measurement, the logs
 say so.
 
+## The band
+
+![The band worn on a forearm: a velcro strap carrying EMG sensor modules, each
+wired back to the STM32 carrier board](docs/images/band_worn.jpg)
+
+![Two-panel diagram. Left: the band sits about 5 cm below the elbow, over the
+muscle bellies rather than the tendons. Right: a cross-section of the forearm
+with three electrodes 120 degrees apart -- ch0 palmar over the flexors, ch1
+radial, ch2 ulnar](docs/images/electrode_placement.svg)
+
+Three gelled electrode modules on one strap, 120 degrees apart, about 5 cm
+below the elbow. Positions are given for a right forearm resting palm down:
+**ch0** palmar, over the flexors; **ch1** on the radial (thumb) side; **ch2**
+on the ulnar side.
+
+Two things about that placement were measured rather than chosen. It has to sit
+over the muscle bellies: one position closer to the wrist stayed weak through
+several re-applications, and swapping the two straps' positions showed the
+weakness stayed with the spot rather than the hardware -- it was over tendon.
+And ch1 is the weakest of the three on purpose. Two well-separated channels and
+a mediocre one were enough to start, and whether the third is worth more effort
+is a question classification accuracy can answer where further fiddling cannot.
+
+Each module reaches its column on the carrier board on four pins -- `DO`, `AI`,
+`VCC`, `GND` -- so the three share the board's circuit ground. Whether each
+module also carries its own skin-side reference electrode is not established
+here: the vendor schematic covers the carrier, not the sensor modules.
+
+Electrode placement is one of the donning variables the cross-donning numbers
+below are about. The others are contact quality, which decays on a timescale
+shorter than a working day and takes every calibrated constant with it, and gel
+condition. None of them is controlled by anything in software.
+
 ## What runs today
 
 | | |

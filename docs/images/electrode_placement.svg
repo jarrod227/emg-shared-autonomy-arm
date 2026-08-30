@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 430" width="920" height="430"
+     font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <rect width="920" height="430" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="919" height="429" fill="none" stroke="#d8dee4"/>
+
+  <!-- ============ Panel A: along the forearm ============ -->
+  <text x="34" y="38" font-size="15" font-weight="600" fill="#1f2328">A — where the band sits</text>
+
+  <!-- forearm, elbow at left tapering to wrist -->
+  <path d="M 60 130 C 150 118, 300 140, 392 158 L 392 232 C 300 250, 150 272, 60 260 Z"
+        fill="#f2f4f7" stroke="#4a5157" stroke-width="2"/>
+  <!-- hand: palm + fingers, palm-down -->
+  <path d="M 392 158 L 470 152 C 492 150, 500 158, 500 168 L 500 222
+           C 500 232, 492 240, 470 238 L 392 232 Z"
+        fill="#f2f4f7" stroke="#4a5157" stroke-width="2"/>
+  <g stroke="#4a5157" stroke-width="2" fill="#f2f4f7">
+    <path d="M 500 166 L 556 160 C 566 159, 566 171, 556 172 L 500 176 Z"/>
+    <path d="M 500 180 L 562 178 C 572 178, 572 190, 562 190 L 500 190 Z"/>
+    <path d="M 500 194 L 558 196 C 568 197, 567 208, 557 207 L 500 204 Z"/>
+    <path d="M 500 208 L 546 214 C 556 216, 554 226, 544 224 L 500 218 Z"/>
+    <!-- thumb -->
+    <path d="M 452 238 L 470 268 C 475 277, 464 283, 458 275 L 436 244 Z"/>
+  </g>
+
+  <!-- the band -->
+  <ellipse cx="128" cy="195" rx="15" ry="72" fill="#1f6feb" fill-opacity="0.16" stroke="#1f6feb" stroke-width="2.5"/>
+  <text x="128" y="98" font-size="13" font-weight="600" fill="#1f6feb" text-anchor="middle">band</text>
+
+  <!-- elbow / wrist anchors -->
+  <line x1="60" y1="286" x2="60" y2="306" stroke="#8b949e"/>
+  <line x1="392" y1="286" x2="392" y2="306" stroke="#8b949e"/>
+  <line x1="60" y1="298" x2="392" y2="298" stroke="#8b949e"/>
+  <line x1="128" y1="270" x2="128" y2="298" stroke="#1f6feb" stroke-dasharray="4 3"/>
+  <text x="60" y="322" font-size="12" fill="#57606a" text-anchor="middle">elbow</text>
+  <text x="392" y="322" font-size="12" fill="#57606a" text-anchor="middle">wrist</text>
+  <text x="128" y="322" font-size="12" font-weight="600" fill="#1f6feb" text-anchor="middle">~5 cm</text>
+
+  <text x="34" y="360" font-size="12.5" fill="#57606a">Over the muscle bellies, not the tendons. A placement measured too far</text>
+  <text x="34" y="379" font-size="12.5" fill="#57606a">toward the wrist sat over tendon and stayed weak through several</text>
+  <text x="34" y="398" font-size="12.5" fill="#57606a">re-applications — the position, not the electrode.</text>
+
+  <!-- ============ Panel B: cross-section ============ -->
+  <text x="580" y="38" font-size="15" font-weight="600" fill="#1f2328">B — cross-section, 120° apart</text>
+  <text x="580" y="57" font-size="11.5" fill="#8b949e">right forearm, palm down, looking from the elbow toward the hand</text>
+
+  <circle cx="726" cy="196" r="96" fill="#f2f4f7" stroke="#4a5157" stroke-width="2"/>
+  <circle cx="726" cy="196" r="96" fill="none" stroke="#1f6feb" stroke-width="2.5" stroke-opacity="0.5"/>
+
+  <!-- 120 deg markers: 270 (bottom), 30 (upper right), 150 (upper left) -->
+  <g stroke="#8b949e" stroke-width="1" stroke-dasharray="3 4">
+    <line x1="726" y1="196" x2="726" y2="292"/>
+    <line x1="726" y1="196" x2="809" y2="148"/>
+    <line x1="726" y1="196" x2="643" y2="148"/>
+  </g>
+  <path d="M 726 246 A 50 50 0 0 1 767 172" fill="none" stroke="#8b949e" stroke-width="1"/>
+  <text x="775" y="232" font-size="12" fill="#57606a">120°</text>
+
+  <g stroke="#1f2328" stroke-width="2">
+    <circle cx="726" cy="292" r="15" fill="#1f6feb"/>
+    <circle cx="809" cy="148" r="15" fill="#1f6feb"/>
+    <circle cx="643" cy="148" r="15" fill="#8b949e"/>
+  </g>
+  <g font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">
+    <text x="726" y="297">0</text>
+    <text x="809" y="153">2</text>
+    <text x="643" y="153">1</text>
+  </g>
+
+  <text x="726" y="332" font-size="12.5" fill="#57606a" text-anchor="middle">ch0 — palmar, over the flexors</text>
+  <text x="854" y="130" font-size="12.5" fill="#57606a" text-anchor="middle">ch2 — ulnar</text>
+  <text x="598" y="130" font-size="12.5" fill="#57606a" text-anchor="middle">ch1 — radial</text>
+  <text x="726" y="88" font-size="12.5" fill="#57606a" text-anchor="middle">dorsal / extensor side</text>
+
+  <text x="580" y="360" font-size="12.5" fill="#57606a">ch0 is loudest on a fist, ch2 on an open hand. ch1, on the radial</text>
+  <text x="580" y="379" font-size="12.5" fill="#57606a">side, is the weakest of the three and was left that way on purpose:</text>
+  <text x="580" y="398" font-size="12.5" fill="#57606a">two good channels and a mediocre one were enough to start.</text>
+</svg>
