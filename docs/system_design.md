@@ -393,7 +393,7 @@ subscribes to. The MoveIt goals are state transitions carrying a static
 ```math
 T = \max(K B,\; F),
 \qquad
-a = \operatorname{clamp}_{[0,1]}\!\left(\frac{A - T}{R - T}\right)
+a = \mathrm{clamp}_{[0,1]}\left(\frac{A - T}{R - T}\right)
 ```
 
 - The classifier reads the same window, so `EMG_FEATURES_WINDOW` is not free:
@@ -426,7 +426,7 @@ tripping the preemption stop and crawling.
 **Motion model, every $\delta t$.**
 
 ```math
-v \leftarrow v + \operatorname{clamp}\big(v^{\ast} - v,\; \pm r\,\delta t\big),
+v \leftarrow v + \mathrm{clamp}\big(v^{\ast} - v,\; \pm r\,\delta t\big),
 \qquad
 v^{\ast} = \begin{cases}
 0 & \dfrac{v^{2}}{2 a_{\downarrow}} \ge |\Delta| \\
