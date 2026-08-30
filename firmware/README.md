@@ -366,8 +366,8 @@ class order, float/Q18 parameters, folds, and confusion matrices. `main.c` now
 runs this classifier in the complete live path; host replay and MCU output
 matched event for event on the same recording.
 
-The classifier order is deliberate: the Hudgins
-feature set with an LDA/SVM baseline first, and a quantized MLP only if it
+The classifier order is deliberate: a
+Hudgins-style time-domain feature set with an LDA/SVM baseline first, and a quantized MLP only if it
 measurably beats that. The part can carry either — a 12-feature, 16-hidden,
 4-class int8 MLP is 256 weights — so the constraint is not the silicon, it is
 that a model with no baseline to beat cannot be judged.

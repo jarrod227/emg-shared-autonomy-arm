@@ -304,15 +304,21 @@ effort always names one angle and buys back the property that a push in a
 direction moves in that direction, at a speed the push chooses.
 
 This was written while the proportional branch was unimplemented and the
-2026-08-14 sessions carried no `LEFT`/`RIGHT` labels. Both are settled:
-wrist extension and ulnar deviation are the two direction actions, neither
-reusing wrist flexion's `ABORT`, and five donning-labelled five-class sessions
-were collected on 2026-08-27/28. Direction comes from the classifier class and
+2026-08-14 sessions carried no `LEFT`/`RIGHT` labels. Both are settled: wrist
+extension and ulnar deviation are the two direction actions, neither reusing
+wrist flexion's `ABORT`, and five donning-labelled five-class sessions were
+collected on 2026-08-27/28. Direction comes from the classifier class and
 activation from the normalized envelope, against a full-deflection reference
 measured per donning *and per direction* -- one number cannot serve both, since
 the same capture measured 4.19x and 5.51x of the session threshold for the two
-gestures. Target-angle labels are unnecessary, as expected. `HOLD` initially means the activation is
-inside the deadband or no fresh direction command exists, not another mandatory
+gestures. Measuring a full-deflection reference per gesture and normalizing
+that gesture's activation against its own reference is class-specific
+normalization, published by Scheme, Lock, Hargrove, Hill, Kuruganti and
+Englehart in *IEEE TNSRE* 22(1) in 2014; the variant here takes the references
+from a separate per-donning calibration capture rather than from the
+classifier's training data, and no part of it is new. Target-angle labels are
+unnecessary, as expected. `HOLD` initially means the activation is inside the
+deadband or no fresh direction command exists, not another mandatory
 contraction class.
 
 Activation therefore chooses speed: full effort is the profile's nominal
@@ -726,7 +732,12 @@ carries no information and only stepping is real evidence. The mechanism the
 session does not use cannot open a search episode at all, so an episode's
 mode never depends on message arrival order.
 
-Activation selects angle, not speed; configured relative travel is capped at 45 degrees and by
+Activation selects rate, not angle: the direction class sets the sign and
+contraction strength sets how fast the axis travels toward the band edge. The
+absolute map this replaced, `center + relative_limit * activation`, was
+measured moving the arm against its own gesture on 8 of 44 pushes in one 90 s
+session, because a strong contraction at a far-out parked angle asks for a
+nearer angle. Configured relative travel is capped at 45 degrees and by
 absolute joint/collision limits. Two search goals may never execute
 concurrently. A newer command smoothly preempts the old goal, stale command
 holds position, and search timeout follows the defined hold/return/failure

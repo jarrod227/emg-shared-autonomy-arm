@@ -90,6 +90,65 @@ All entries in this section are `FORMAL` and have matching entries in
 - Use: Objective 4.2; `docs/system_design.md`
   hand-observation design.
 
+### `hudgins1993strategy`
+
+- Type: research paper
+- Primary source: [PubMed record](https://pubmed.ncbi.nlm.nih.gov/8468080/)
+  and [IEEE Xplore](https://ieeexplore.ieee.org/document/204774)
+- DOI: [10.1109/10.204774](https://doi.org/10.1109/10.204774)
+- Metadata: Hudgins, Parker, Scott, *IEEE Transactions on Biomedical
+  Engineering* 40(1):82-94, 1993. Confirmed against Crossref and PubMed. Given
+  names appear as initials in both records and are not expanded here.
+- Verified claim: from the abstract -- myoelectric control of a multifunction
+  prosthesis by classifying myoelectric patterns, using features extracted from
+  several **time segments** of the signal to preserve pattern structure, then
+  classified with a neural network, increasing the number of functions
+  controllable from a single channel without increasing amputee effort.
+- Read: abstract and bibliographic record only. The full text is paywalled and
+  has not been read here.
+- Claim boundary: **the abstract does not enumerate the feature set.** This
+  project computes MAV, RMS, waveform length and zero crossings; whether that
+  is this paper's own set, a subset of it, or a substitution cannot be settled
+  from what has been read, so project prose says "in the line of" and
+  "Hudgins-style" rather than naming it as the Hudgins set. Nothing about
+  neural-network classification transfers: the classifier here is an LDA.
+- Use: Objective 3.5; `firmware/tools/emg_features_ref.py` module docstring and
+  `firmware/README.md` classifier-order rationale, both of which name this
+  paper as the origin of the time-domain baseline. Entered on 2026-08-29 after
+  an audit found the name used in published prose with no ledger entry at all.
+
+### `scheme2014motionnormalized`
+
+- Type: research paper
+- Primary source: [PubMed record](https://pubmed.ncbi.nlm.nih.gov/23475378/)
+  and [IEEE Xplore](https://ieeexplore.ieee.org/abstract/document/6473893)
+- DOI: [10.1109/TNSRE.2013.2247421](https://doi.org/10.1109/TNSRE.2013.2247421)
+- Metadata: Scheme, Lock, Hargrove, Hill, Kuruganti, Englehart, *IEEE
+  Transactions on Neural Systems and Rehabilitation Engineering*, 2014
+  Jan;22(1):149-57.
+- Verified claim: two proportional-control algorithms for pattern
+  recognition-based myoelectric control that automatically configure
+  **motion-specific gains** and normalize the control space to the user's
+  usable dynamic range, with **class-specific normalization parameters
+  computed from the data collected during classifier training**, requiring no
+  additional user action. Reported improvements over the incumbent method of
+  21% for amputee and 40% for able-bodied subjects.
+- Read: abstract and bibliographic record only. The full text has not been
+  read, so no experimental condition, metric definition, or number from it may
+  enter project prose beyond what is written above.
+- Claim boundary: the improvement figures come from the abstract and their
+  experimental conditions have not been checked here.
+- Use: Objective 3.5; `docs/system_design.md` "Embedded EMG Intent", where the
+  per-direction reference is described. **This is the prior art for what this
+  project measures per direction.** Measuring a full-deflection reference for
+  each steering gesture and normalizing that gesture's activation against its
+  own reference is class-specific normalization, published in 2014. This
+  project derives its references from a separate per-donning calibration
+  capture rather than from the classifier training data, which is a variant of
+  the procedure and not a new idea. Promoted to FORMAL on 2026-08-29 because
+  the published design document describes the mechanism, and leaving the
+  attribution in this ledger alone let a reader take it as novel.
+
 ### `lopez2009robustemg`
 
 - Type: research paper
@@ -296,36 +355,6 @@ entry. Promote it on first use.
   no-feedback repeatability, computed from the three per-gesture trials in
   `datasets/emg_calibration/calibration_20260815_155306.json`, is consistent
   with the paper's no-feedback figure and is not yet written up in a log.
-
-### `scheme2014motionnormalized`
-
-- Type: research paper
-- Primary source: [PubMed record](https://pubmed.ncbi.nlm.nih.gov/23475378/)
-  and [IEEE Xplore](https://ieeexplore.ieee.org/abstract/document/6473893)
-- DOI: [10.1109/TNSRE.2013.2247421](https://doi.org/10.1109/TNSRE.2013.2247421)
-- Metadata: Scheme, Lock, Hargrove, Hill, Kuruganti, Englehart, *IEEE
-  Transactions on Neural Systems and Rehabilitation Engineering*, 2014
-  Jan;22(1):149-57.
-- Verified claim: two proportional-control algorithms for pattern
-  recognition-based myoelectric control that automatically configure
-  **motion-specific gains** and normalize the control space to the user's
-  usable dynamic range, with **class-specific normalization parameters
-  computed from the data collected during classifier training**, requiring no
-  additional user action. Reported improvements over the incumbent method of
-  21% for amputee and 40% for able-bodied subjects.
-- Read: abstract and bibliographic record only. The full text has not been
-  read, so no experimental condition, metric definition, or number from it may
-  enter project prose beyond what is written above.
-- Claim boundary: the improvement figures come from the abstract and their
-  experimental conditions have not been checked here.
-- Use: Objective 3.5 -- **this is the prior art for what this project measures
-  per direction.** Measuring a full-deflection reference for each steering
-  gesture and normalizing that gesture's activation against its own reference
-  is class-specific normalization, published in 2014. This project derives its
-  references from a separate per-donning calibration capture rather than from
-  the classifier training data, which is a variant of the procedure and not a
-  new idea. Recorded so no part of the reference-level work is described as
-  novel.
 
 ### `hwang2017robustness`
 

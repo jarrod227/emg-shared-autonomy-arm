@@ -8,9 +8,12 @@ a definition change before committing it to C, and computing features over a
 recorded dataset for training, with the guarantee that the numbers the model
 learns from are the ones the MCU will produce at run time.
 
-The four features are the classical Hudgins time-domain set, which is the
-established sEMG baseline the Objective 3.5 classifier is measured against
-before anything heavier is considered.
+The four features -- MAV, RMS, waveform length, zero crossings -- are a
+time-domain set in the line of Hudgins, Parker and Scott (IEEE TBME 40(1),
+1993), the established sEMG baseline the Objective 3.5 classifier is measured
+against before anything heavier is considered. Only that paper's metadata has
+been checked here, not its full text, so this is not claimed to be its exact
+set.
 """
 
 import math
