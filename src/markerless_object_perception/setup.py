@@ -52,6 +52,9 @@ setup(
                 'live_candidate_publisher = '
                 'markerless_object_perception.live_candidate_publisher:main'
             ),
+            # Abandoned custom-training path, kept as historical
+            # implementation and never run against real data. Objective 3.2
+            # ships COCO-pretrained weights; see the module docstrings.
             (
                 'prepare_yolo_dataset = '
                 'markerless_object_perception.prepare_yolo_dataset:main'

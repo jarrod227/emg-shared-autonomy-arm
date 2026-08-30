@@ -1,4 +1,15 @@
-"""Validated, leakage-safe dataset contract for Objective 3.2."""
+"""Validated, leakage-safe dataset contract for Objective 3.2.
+
+Nothing here is on the path that ships, and none of it ever ran against
+real data.
+Objective 3.2 uses official COCO-pretrained instance-segmentation weights for
+`bottle`, `cup` and `apple`; the four-class collection, polygon annotation,
+frozen-bundle and fine-tuning plan this module belongs to was abandoned in
+favour of them, and reopening it is a deliberate scope decision rather than a
+next step. Kept as historical implementation: the logic is unit-tested with
+fakes, but no training run, no dataset bundle and no weights were ever
+produced from it.
+"""
 
 from __future__ import annotations
 
