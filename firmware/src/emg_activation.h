@@ -85,9 +85,18 @@
  * marginal window splits a run in half, so it measures threshold proximity
  * rather than robustness.
  *
- * Shift 4 gives the EMA most of a step change in ~16 hops = 0.8 s. No
- * recording so far discriminates between shifts, so it remains the middle of
- * the swept range rather than a measured value — weaker evidence than K has.
+ * Shift 4 gives the EMA most of a step change in ~16 hops = 0.8 s. It was
+ * picked as the middle of the swept range rather than measured; a sweep has
+ * since checked that and agreed it cannot be told from its neighbours.
+ * `tools/emg_baseline_shift_sweep.py` replays shifts 1..8 offline. LOSO over
+ * datasets/emg makes shift 6 look clearly better — threshold spread 15.6
+ * against 21.8, and 7% more gesture windows admitted. Replaying the
+ * independent event-gate sessions against a fixed model does not reproduce
+ * it: shifts 4, 5 and 6 give spreads of 22.0, 21.3, 21.8 and admit 438, 439,
+ * 436 gesture windows, and the six rest windows that pass do so at every
+ * shift alike. LOSO here groups by session, so that is within-donning
+ * repeatability — the error this project has already been caught by once.
+ * The shift stays 4, now for a measured reason rather than for want of one.
  *
  * The margin is thin and should be re-measured. Three counts separated the
  * tightest episode from its threshold; that is not yet enough to tell a
