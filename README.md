@@ -9,6 +9,24 @@ Everything claimed below was measured, and the recordings it was measured from
 are in `datasets/`. Where a result was withdrawn after measurement, the logs
 say so.
 
+For the package boundaries, ROS interfaces, state machine, and safety gates,
+start with the [system design](docs/system_design.md).
+
+## What runs today
+
+| | |
+| --- | --- |
+| Discrete intent on the MCU | `REST` / `NEXT_TARGET` / `CONFIRM` / `ABORT` at 20 Hz, filter → features → Q18 LDA → activation threshold → event gate, entirely on an STM32F103C8T6 (40% flash, 58% RAM) |
+| Proportional view control | wrist extension and ulnar deviation steer one bounded axis; contraction strength selects **rate** |
+| Perception | ArUco baseline, and markerless instance segmentation with passive-stereo metric localization |
+| Handoff | state machine with bounded active-view search, stale-input gating, and global `ABORT` |
+| Arm motion | MoveIt on a simulated Panda, or a timer backend for tests; goal construction shared with the Objective 1 reaching path |
+
+The hardware-free integration launch uses synthetic object and hand inputs and
+the timer motion backend. The same handoff controller's MoveIt backend has been
+runtime-verified separately on the simulated Panda. Real-arm validation on an
+SO-ARM101 is the next objective and has not started.
+
 ## The band
 
 ![The band worn on a forearm: a velcro strap carrying EMG sensor modules, each
@@ -42,24 +60,10 @@ below are about. The others are contact quality, which decays on a timescale
 shorter than a working day and takes every calibrated constant with it, and gel
 condition. None of them is controlled by anything in software.
 
-## What runs today
-
-| | |
-| --- | --- |
-| Discrete intent on the MCU | `REST` / `NEXT_TARGET` / `CONFIRM` / `ABORT` at 20 Hz, filter → features → Q18 LDA → activation threshold → event gate, entirely on an STM32F103C8T6 (40% flash, 58% RAM) |
-| Proportional view control | wrist extension and ulnar deviation steer one bounded axis; contraction strength selects **rate** |
-| Perception | ArUco baseline, and markerless instance segmentation with passive-stereo metric localization |
-| Handoff | state machine with bounded active-view search, stale-input gating, and global `ABORT` |
-| Arm motion | MoveIt on a simulated Panda, or a timer backend for tests; goal construction shared with the Objective 1 reaching path |
-
-The whole chain runs end to end from one launch: EMG intent and steering →
-candidate segmentation and stereo localization → target lock → handoff state
-machine → MoveIt. Real-arm validation on an SO-ARM101 is the next objective
-and has not started.
-
 ## Measured, on a wearer
 
-From the closed-loop session of 2026-08-28 (`docs/objective35_classifier_log.md`):
+From the
+[closed-loop session of 2026-08-28](docs/objective35_classifier_log.md):
 
 - Contraction strength selects speed to within **1% of ideal** in four of five
   activation bands.
@@ -100,9 +104,17 @@ Add `appears_after_sec:=8.0` to hold the object back and exercise the search
 path: the controller sweeps, stops itself when the observation arrives, locks
 on a second one after the stop, and one CONFIRM takes it to APPROACH.
 
-Add `-p motion_backend:=moveit` to the controller to plan and execute on a
-Panda instead of simulating the motion with timers, with the MoveIt stack
-running separately.
+This launch intentionally uses the timer backend and does not start MoveIt.
+The verified Panda path is separate: with the MoveIt stack and a target source
+already running, start one handoff controller with:
+
+```bash
+ros2 run assistive_handoff handoff_controller --ros-args \
+  -p motion_backend:=moveit
+```
+
+Do not start this controller beside `integrated_simulation.launch.py`, because
+that launch already starts its own timer-backed controller.
 
 ## Layout
 
@@ -115,16 +127,16 @@ docs/         design, the citation ledger, the evaluations, and the logs of
               how each result was reached
 ```
 
-Start with `docs/system_design.md` for the architecture, and
-`docs/objective35_classifier_log.md` for how the EMG side actually behaves —
-it is written as a record of what failed and why, which is more useful than
-the summary.
+Start with the [system design](docs/system_design.md) for the architecture, and
+the [Objective 3.5 classifier log](docs/objective35_classifier_log.md) for how
+the EMG side actually behaves. The log records what failed and why, which is
+more useful than the summary alone.
 
 ## Build and test
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-colcon build
+colcon build --symlink-install
 source install/setup.bash
 
 python3 -m pytest src/                  # ROS packages
@@ -138,7 +150,8 @@ pass against bytes some earlier C produced.
 
 ## Running a session
 
-The board must be flashed first (`firmware/README.md` covers the hardware).
+The board must be flashed first; the
+[firmware README](firmware/README.md) covers the hardware.
 Then, in order:
 
 ```bash
@@ -175,11 +188,12 @@ windows on one held-out donning.
 
 ## Status and plans
 
-`docs/system_design.md` carries the architecture and the current per-component
-status. Citations are tracked in `docs/literature_ledger.md`, which records for
-each source the smallest claim it actually supports and what it does *not*
-establish for this project -- including, for the one paper closest to this
-work, that none of its method is used here.
+The [system design](docs/system_design.md) carries the architecture and current
+per-component status. Citations are tracked in the
+[literature ledger](docs/literature_ledger.md), which records for each source
+the smallest claim it supports and what it does *not* establish for this
+project -- including, for the one paper closest to this work, that none of its
+method is used here.
 
 The roadmap and schedule are not published; they are a personal plan rather
 than part of the system.
