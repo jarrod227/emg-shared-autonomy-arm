@@ -119,6 +119,35 @@ ADC/DMA samples
   → USB INTENT packets at 20 Hz
 ```
 
+### Rest baseline adaptation
+
+The baseline is the summed MAV measured while the current electrode
+application is at rest. The first valid window that the classifier calls
+`REST` seeds it. Later classifier-`REST` windows update it approximately as:
+
+```text
+new_baseline = old_baseline
+             + (rest_MAV - old_baseline) / 2^baseline_shift
+```
+
+With `baseline_shift=4`, each update moves about 1/16 of the remaining
+difference. This lets the baseline follow gradual changes in skin condition,
+electrode contact, and resting noise without reacting strongly to one unusual
+window. Gesture windows do not update it.
+
+The baseline then contributes to the amplitude gate:
+
+```text
+activation_threshold = max(factor × baseline, threshold_floor)
+```
+
+Higher resting noise therefore raises the threshold; lower resting noise lets
+it fall only as far as the configured floor. `baseline_shift` controls this
+within-session adaptation speed. It is not speed smoothing, a time shift of the
+EMG signal, or cross-session normalization. Per-donning calibration handles the
+threshold settings and direction reference levels that differ between
+electrode applications.
+
 Filtering and classification run on the MCU; raw samples can continue
 streaming for diagnosis. The classifier distinguishes `REST`, `NEXT_TARGET`,
 `CONFIRM`, `ABORT`, and direction-only `ULNAR`. LDA suits the small feature
