@@ -152,6 +152,11 @@ speed = direction_sign × nominal_speed × activation
 This is **proportional rate control**: more effort means faster movement in the
 same direction; less effort slows it; releasing enters `HOLD`.
 
+Normalizing each gesture against a reference measured for that gesture is
+class-specific normalization, published by Scheme et al. in *IEEE TNSRE* 22(1),
+2014. Here the references come from a separate per-donning calibration rather
+than from the classifier's training data; none of the idea is new.
+
 An earlier absolute-position mapping was rejected after a real session showed
 that 8 of 44 pushes could move against their own gesture. A rate does not name
 an angle, so the controller owns the safe angle band and clamps every update.
@@ -358,12 +363,12 @@ from the current scope.
 ## 13. Related documents
 
 - [`README.md`](../README.md): build and run commands.
-- [`TODO.md`](../TODO.md) and [`proposal.md`](proposal.md): milestone scope and
-  completion criteria.
-- [`project_context.md`](project_context.md): current project state.
+- [`firmware/README.md`](../firmware/README.md): hardware, pin mapping, and the
+  wire protocol.
+- [`firmware/PROTOCOL.md`](../firmware/PROTOCOL.md): packet layouts.
 - [`literature_ledger.md`](literature_ledger.md): claim-to-source limits.
 - Objective logs: measurements, failures, and evidence behind design changes.
 
 This document describes the current architecture and next implementation
-boundary. It intentionally omits the full development history and weekly
-schedule.
+boundary. The roadmap, schedule, and milestone criteria are a personal plan
+and are not published with the code.
