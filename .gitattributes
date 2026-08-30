@@ -1,0 +1,11 @@
+# GitHub's language statistics otherwise report this as a C project. The C is
+# almost entirely STMicroelectronics' HAL and USB stack: 104k lines of vendored
+# driver code against roughly 1.9k lines of firmware written here. Marking the
+# vendored trees keeps the language bar describing the work rather than the
+# vendor drop.
+firmware/cheez_emg/Drivers/**       linguist-vendored
+firmware/cheez_emg/Middlewares/**   linguist-vendored
+firmware/cheez_emg/USB_DEVICE/**    linguist-vendored
+firmware/cheez_emg/startup_stm32f103xb.s linguist-vendored
+
+# Core/ stays counted: CubeMX generated it, but main.c carries real changes.

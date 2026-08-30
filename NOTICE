@@ -1,0 +1,24 @@
+Biosignal-Driven Shared-Autonomy Assistive Manipulation
+Copyright 2026 Jiayu Yang
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+This product includes third-party software that is redistributed under its own
+terms, which the Apache License above does not replace:
+
+  firmware/cheez_emg/Drivers/STM32F1xx_HAL_Driver/
+    STM32F1xx HAL driver. Copyright (c) STMicroelectronics.
+    BSD-3-Clause, per Drivers/STM32F1xx_HAL_Driver/LICENSE.txt.
+
+  firmware/cheez_emg/Drivers/CMSIS/
+    ARM CMSIS. Apache-2.0, per Drivers/CMSIS/LICENSE.txt.
+
+  firmware/cheez_emg/Middlewares/, firmware/cheez_emg/USB_DEVICE/,
+  firmware/cheez_emg/startup_stm32f103xb.s
+    STM32CubeMX-generated USB device stack and startup code.
+    Copyright (c) STMicroelectronics, under the terms carried in each file.
+
+The recordings under datasets/ are released under the same Apache-2.0 terms as
+the code. They are surface-EMG traces and derived JSON records from a single
+subject, the author, and contain no images, no video, and no third-party
+personal data.

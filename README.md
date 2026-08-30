@@ -78,7 +78,8 @@ src/          ROS 2 packages: perception, handoff state machine, EMG bridge,
               and the MoveIt goal construction they share
 firmware/     STM32 firmware, host tools, and the wire protocol
 datasets/     every recording the numbers above come from
-docs/         design, proposal, and the logs of how each result was reached
+docs/         design, the citation ledger, the evaluations, and the logs of
+              how each result was reached
 ```
 
 Start with `docs/system_design.md` for the architecture, and
@@ -149,3 +150,11 @@ work, that none of its method is used here.
 
 The roadmap and schedule are not published; they are a personal plan rather
 than part of the system.
+
+## License
+
+Apache-2.0; see `LICENSE`. The recordings under `datasets/` are covered by the
+same terms -- they are from one subject, the author, and are published so the
+numbers above can be checked rather than taken on trust. `NOTICE` lists the
+vendored STMicroelectronics driver and USB code, which stays under its own
+BSD-3-Clause and Apache-2.0 terms.
