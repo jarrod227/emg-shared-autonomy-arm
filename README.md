@@ -22,6 +22,28 @@ start with the [system design](docs/system_design.md).
 | Handoff | state machine with bounded active-view search, stale-input gating, and global `ABORT` |
 | Arm motion | MoveIt on a simulated Panda, or a timer backend for tests; goal construction shared with the Objective 1 reaching path |
 
+### Architecture
+
+```mermaid
+flowchart LR
+    EMG[3-channel sEMG] --> MCU[STM32<br/>filter · features · LDA]
+    MCU --> BRIDGE[ROS bridge]
+    BRIDGE -->|intent + activation| CTRL[Handoff controller]
+
+    CAM[Stereo camera] --> OBJ[Object perception]
+    OBJ --> SEL[Target selector]
+    SEL -->|target pose| CTRL
+    CAM --> HAND[3D hand observer]
+    HAND --> CTRL
+
+    CTRL --> BACKEND[Timer or MoveIt backend]
+    BACKEND --> PANDA[Simulated Panda]
+    CTRL -. Objective 5 .-> SOARM[SO-ARM101 + gripper]
+```
+
+See the [system design](docs/system_design.md) for topic contracts, gates,
+formulas, and the full state machine.
+
 The hardware-free integration launch uses synthetic object and hand inputs and
 the timer motion backend. The same handoff controller's MoveIt backend has been
 runtime-verified separately on the simulated Panda. Real-arm validation on an

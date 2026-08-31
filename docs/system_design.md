@@ -229,7 +229,7 @@ flowchart LR
     G --> L[selected-track lock<br/>+ watchdog]
     L --> TF[exact-source-time TF]
     TF --> GRASP[class/default grasp template]
-    GRASP --> POSE[/target_object_pose]
+    GRASP --> POSE["/target_object_pose"]
 ```
 
 The gate decides whether a track is stable; the lock decides which stable track
@@ -246,7 +246,7 @@ flowchart LR
     M --> T[pair palm landmarks<br/>+ triangulate]
     T --> Q[epipolar/reprojection/outlier<br/>+ delivery-volume checks]
     Q --> N[N-frame stability]
-    N --> H[/hand_observation]
+    N --> H["/hand_observation"]
 ```
 
 For a rectified stereo pair:
